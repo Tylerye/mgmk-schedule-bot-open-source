@@ -1,0 +1,36 @@
+name: Parse schedule PDF
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: Cloudflare parse job identifier
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: schedule-parser-${{ inputs.job_id }}
+  cancel-in-progress: false
+
+jobs:
+  parse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Parse and return schedule
+        env:
+          JOB_ID: ${{ inputs.job_id }}
+          WORKER_BASE_URL: ${{ secrets.WORKER_BASE_URL }}
+          PARSER_SHARED_SECRET: ${{ secrets.PARSER_SHARED_SECRET }}
+          GROUP_NAME: 8Са
+          DISPLAY_GROUP_NAME: 8-Сба
+        run: node scripts/run-parser-job.js

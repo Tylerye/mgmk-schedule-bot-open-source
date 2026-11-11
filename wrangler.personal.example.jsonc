@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "your-personal-pilot",
+  "main": "personal/worker.js",
+  "compatibility_date": "2026-09-14",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "minify": true,
+  "triggers": { "crons": ["* * * * *"] },
+  "vars": { "ADMIN_USER_ID": "REPLACE_WITH_OWNER_ID", "PERSONAL_PUBLIC": "false", "PERSONAL_PILOT_IDS": "", "PERSONAL_DELIVERY_ENABLED": "true" },
+  "services": [{ "binding": "SELF", "service": "your-personal-pilot" }, { "binding": "LEGACY", "service": "your-schedule-bot" }],
+  "d1_databases": [{ "binding": "DB", "database_name": "your-personal-pilot", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "personal/migrations" }]
+}

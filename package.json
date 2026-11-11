@@ -1,0 +1,32 @@
+{
+  "name": "mgmk-schedule-bot",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Telegram timetable bot: group, teacher and personal schedules; Cloudflare D1 and PDF parsing.",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "start": "node --env-file=.env src/index.js",
+    "dry-run": "node src/index.js --dry-run --once",
+    "test": "node --test \"tests/*.test.js\"",
+    "check:privacy": "node scripts/check-repository-privacy.js",
+    "inspect:pdf": "node scripts/inspect-pdf.js",
+    "cf:dev": "wrangler dev",
+    "cf:deploy": "wrangler deploy",
+    "cf:tail": "node scripts/tail-worker.js",
+    "cf:migrate": "wrangler d1 migrations apply mgmk-schedule-bot --remote"
+  },
+  "dependencies": {
+    "pdfjs-dist": "5.4.149"
+  },
+  "devDependencies": {
+    "wrangler": "4.146.0"
+  },
+  "overrides": {
+    "sharp": "0.35.5",
+    "undici": "7.30.1"
+  }
+}

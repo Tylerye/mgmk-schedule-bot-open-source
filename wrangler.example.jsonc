@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "your-schedule-bot",
+  "main": "cloudflare/worker.js",
+  "compatibility_date": "2026-09-14",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "workers_dev": true,
+  "minify": true,
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
+  "triggers": { "crons": ["* * * * *"] },
+  "vars": {
+    "TEACHERS_ENABLED": "false",
+    "PERSONAL_ENABLED": "false",
+    "PERSONAL_PUBLIC": "false", "PERSONAL_PILOT_IDS": "",
+    "ADMIN_USER_ID": "REPLACE_WITH_YOUR_TELEGRAM_ID",
+    "DRIVE_FOLDER_ID": "REPLACE_WITH_YOUR_PUBLIC_FOLDER_ID",
+    "GROUP_NAME": "8Са",
+    "DISPLAY_GROUP_NAME": "8-Сба",
+    "TIMEZONE": "Europe/Minsk",
+    "PIN_SWITCH_TIME": "16:00",
+    "LOOKAHEAD_DAYS": "5",
+    "GITHUB_REPOSITORY": "YOUR_OWNER/YOUR_REPOSITORY",
+    "GITHUB_REF": "main",
+    "LOG_LEVEL": "info"
+  },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "your-schedule-bot",
+    "database_id": "00000000-0000-0000-0000-000000000000",
+    "migrations_dir": "migrations"
+  }]
+}

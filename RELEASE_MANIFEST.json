@@ -1,0 +1,14 @@
+{
+  "sourceCommit": "a921d79477af2ca7547062356bd5198fd3ccca21",
+  "excluded": [
+    "tests/parser-font-size.test.js",
+    "tests/parser-real.test.js",
+    "tests/personal-parser.test.js",
+    "tests/teachers-parse.test.js",
+    "tests/teachers.test.js",
+    "scripts/check-personal-source.js",
+    "tests/fixtures/*"
+  ],
+  "syntheticAccounts": true,
+  "productionCatalogIncluded": false
+}

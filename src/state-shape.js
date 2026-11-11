@@ -1,0 +1,22 @@
+export const EMPTY_STATE = Object.freeze({
+  version: 3,
+  chatId: null,
+  updateOffset: 0,
+  documents: {},
+  schedules: {},
+  pinnedSchedule: null,
+  pinCapability: null,
+  pendingUnpinMessageIds: [],
+  health: {
+    startedAt: null,
+    lastTelegramSuccessAt: null,
+    lastReconcileSuccessAt: null,
+    lastCronCompletedAt: null,
+    lastSourcePollAt: null,
+    lastSourcePollSuccessAt: null,
+    lastSourceChangeAt: null,
+    lastParserSuccessAt: null,
+    nextSourcePollAt: null,
+    lastError: null,
+  },
+});
