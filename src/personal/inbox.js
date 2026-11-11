@@ -1,5 +1,5 @@
 import { findGroups } from "./catalog.js";
-import { t, menu, button, supportKeyboard, settingsKeyboard, groupsKeyboard, initialDates, selectedDate, renderPersonal } from "./view.js";
+import { t, menu, button, supportKeyboard, settingsKeyboard, groupsKeyboard, initialDates, selectedDate, renderPersonal, informationText, informationKeyboard } from "./view.js";
 
 export { collectPersonalUpdate } from "./update.js";
 
@@ -61,6 +61,7 @@ export async function processPersonalInbox(store, row, now = new Date()) {
       reply(t(user).settings, settingsKeyboard(user));
     } else if (action === "settings") reply(t(user).settings, settingsKeyboard(user));
     else if (action === "help") reply(t(user).helpText);
+    else if (action === "feedback" || action === "privacy") reply(informationText(user, action), informationKeyboard(user));
     else if (action === "support") reply(t(user).supportText, supportKeyboard(user));
     else if (action === "donate") reply(t(user).details, supportKeyboard(user), update.messageId);
     else if (action === "later") reply(t(user).closed, menu(user), update.messageId);

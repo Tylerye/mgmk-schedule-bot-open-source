@@ -7,7 +7,7 @@ export function collectPersonalUpdate(update) {
   const command = String(message.text ?? "").trim().split(/\s/u)[0].split("@")[0].toLowerCase();
   let action;
   if (callback) {
-    if (typeof data !== "string" || !/^personal:(?:menu|schedule|today|tomorrow|next|settings|help|support|donate|later|language|lang:(?:ru|en)|groups:\d{1,3}|group:\d{1,3}[\p{L}]{1,6}|toggle:(?:sound|changes|pin|paused|auto_pin)|(?:view|preview):\d{4}-\d{2}-\d{2}:(?:full|compact)|diagnostics)$/u.test(data)) return null;
+    if (typeof data !== "string" || !/^personal:(?:menu|schedule|today|tomorrow|next|settings|help|feedback|privacy|support|donate|later|language|lang:(?:ru|en)|groups:\d{1,3}|group:\d{1,3}[\p{L}]{1,6}|toggle:(?:sound|changes|pin|paused|auto_pin)|(?:view|preview):\d{4}-\d{2}-\d{2}:(?:full|compact)|diagnostics)$/u.test(data)) return null;
     action = data.slice("personal:".length);
   } else {
     action = ({ "/student": "start", "/start": "start", "/today": "today", "/day": "today", "/tomorrow": "tomorrow", "/next": "next", "/latest": "schedule", "/stop": "pause", "/status": "diagnostics" })[command];

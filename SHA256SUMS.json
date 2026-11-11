@@ -121,7 +121,7 @@
   },
   {
     "path": "OPEN_SOURCE.md",
-    "sha256": "fee42d5f536fdee66633a41a88cb4ea36a3758a70c1ce2820e9af2042bdfd34d"
+    "sha256": "c0fe2299c42d56b42c4f269da74ea7d56437c46d4dbf58395c386d2075086bc9"
   },
   {
     "path": "package-lock.json",
@@ -145,7 +145,7 @@
   },
   {
     "path": "README.md",
-    "sha256": "33f362d3ac5489779ad2021fc92815bfc4a27a10f76e47901b527d06dc836e75"
+    "sha256": "5777fb7785696d22f95ab457d6aa4ad38b3c7e36c6905e0c76b01d20ec4a7918"
   },
   {
     "path": "RELEASE_MANIFEST.json",
@@ -261,7 +261,7 @@
   },
   {
     "path": "src/personal/inbox.js",
-    "sha256": "ff885b0a0c8252d6a28b607615f907f2dedd7dc3ce989d3b92063112de41a3da"
+    "sha256": "73427603cf91a81c0769c8ce9675ab10a0550af9a77470a3653ebc5fc4c14036"
   },
   {
     "path": "src/personal/ingest.js",
@@ -277,11 +277,11 @@
   },
   {
     "path": "src/personal/update.js",
-    "sha256": "9ce75030a94c3ea49b34acf2d364d9057f720a62a875a91d46b642d72bad6869"
+    "sha256": "d3322bbe7b5e340b9fed31dcf2239505b2164b467c23ff7e3a7e36ae61ad5a25"
   },
   {
     "path": "src/personal/view.js",
-    "sha256": "21f78036deb808fcb7b404b1e68623ee4f70578580248c6782dc8aa0f232c1ff"
+    "sha256": "7373de4ce7a4db8aa6ab4afc93c6ee20c788ea514eaa3cb188b5197429734608"
   },
   {
     "path": "src/private-pages.js",
@@ -449,7 +449,7 @@
   },
   {
     "path": "tests/personal-navigation.test.js",
-    "sha256": "df33f9cb39c744a70f7fdaeeec37a1e3443599257f4b5b0d85f5e0912b47b9bf"
+    "sha256": "2d3605b9bb4ed4fee0defc8f85301992ee9a019d45df153ca7b17e6a19051550"
   },
   {
     "path": "tests/personal-parser-synthetic.test.js",

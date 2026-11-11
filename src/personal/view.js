@@ -3,9 +3,15 @@ import { dateInTimezone, timeInTimezone, addDays } from "../dates.js";
 import { escapeHtml, dateTitle } from "../schedule/format.js";
 import { scheduleViewTimeline } from "../schedule/view-timeline.js";
 
+// Public contact only, never used to grant access to the bot
+export const AUTHOR_USERNAME = "your_username";
+
 export const words = {
   ru: { menu: "🏠 Твоё расписание МГМК\n\nВыбирай нужный день кнопками ниже\nНовые расписания и замены придут автоматически\n\n📌 Расписание закрепляется само\nЕсли закреп не нужен, отключи его в настройках", schedule: "Расписание", today: "Сегодня", tomorrow: "Завтра", next: "Ближайший день",
     settings: "Настройки", help: "Как пользоваться", support: "Поддержать автора", group: "Группа", language: "Язык",
+    feedback: "Обратная связь", privacy: "О боте и данных", contact: "Написать автору",
+    feedbackText: "💬 Есть идея или что-то работает не так?\n\nНапиши автору - @{contact}\nМожно предложить улучшение, сообщить об ошибке или просто задать вопрос\n\nЕсли проблема с расписанием, укажи группу и дату и по возможности приложи скриншот\nТак будет проще разобраться 👇",
+    privacyText: "ℹ️ Откуда берётся расписание\n\nБот читает PDF из Google Диска колледжа и обновляет карточки при изменениях источника\nПо времени Минска прошедшие уроки скрываются в актуальном виде, а закреп переключается автоматически\n\n⚠️ Расписание может измениться\n\nПравки от куратора или преподавателя могут появиться в чате раньше, чем в PDF, или вообще не попасть в него\nВозможны задержки обновления и ошибки разбора\n\nСверяй важные изменения с сообщениями куратора и преподавателей\nНе полагайся только на бота - запись в нём не подтверждает отмену или перенос занятия\n\n🔐 Что сохраняется\n\nДля работы нужны твой Telegram ID, выбранная группа, язык, настройки и технические записи доставки\nПереписка и юзернейм в личном кабинете не сохраняются\nБот использует Telegram и Cloudflare, публичные PDF обрабатываются через GitHub Actions\n\nВопросы или просьба удалить данные - @{contact}",
     sound: "Звук новых карточек", changes: "Уведомления о заменах", auto_pin: "Автоматический закреп", pin: "Сообщение о закрепе", pause: "Пауза автообновлений",
     resume: "Возобновить автообновления", back: "Назад", more: "Далее", choose: "👥 Какая у тебя группа?\n\nВыбери её ниже или отправь обозначение сообщением",
     missing: "Расписание пока не опубликовано или ещё не прочитано. Это не означает, что занятий нет.",
@@ -19,6 +25,9 @@ export const words = {
     part: "часть", emptyPart: "Расписание теперь помещается в предыдущих частях.", pinned: "Закреплено расписание", pilot: "Пилот пока доступен ограниченной аудитории." },
   en: { settingsText: "⚙️ Make it yours\n\nChange your group and language below\nSound applies to new cards, change alerts report lesson replacements\nAutomatic pinning is on by default - turn it off below if you do not need it\nPause stops automatic updates, manual viewing remains available", menu: "Personal timetable", schedule: "Timetable", today: "Today", tomorrow: "Tomorrow", next: "Next school day",
     settings: "Settings", help: "How to use", support: "Support the author", group: "Group", language: "Language",
+    feedback: "Feedback", privacy: "About and privacy", contact: "Message the author",
+    feedbackText: "💬 Have an idea or noticed something wrong?\n\nMessage the author - @{contact}\nSuggest an improvement, report a bug or ask a question\n\nFor timetable issues, include your group, date and a screenshot if possible\nThis helps us look into it 👇",
+    privacyText: "ℹ️ Where the timetable comes from\n\nThe bot reads PDFs from the college Google Drive and updates cards when the source changes\nCompleted lessons are hidden in the current view using Minsk time and pins switch automatically\n\n⚠️ Timetables can change\n\nYour tutor or teacher may post changes before the PDF is updated, or those changes may never reach the PDF\nUpdates can be delayed and parsing errors are possible\n\nCheck important changes with your tutor and teachers\nDo not rely only on the bot - its timetable does not confirm that a lesson was cancelled or moved\n\n🔐 Stored data\n\nThe bot stores your Telegram ID, selected group, language, preferences and technical delivery records\nPrivate chat history and usernames are not stored in the personal service\nThe bot uses Telegram and Cloudflare, public PDFs are processed through GitHub Actions\n\nQuestions or data deletion requests - @{contact}",
     sound: "Sound for new timetables", changes: "Lesson change alerts", auto_pin: "Automatic pin", pin: "Pin announcement", pause: "Pause automatic updates",
     resume: "Resume automatic updates", back: "Back", more: "Next", choose: "Choose a group or enter its name:",
     missing: "The timetable has not been published or read yet. This does not mean there are no lessons.",
@@ -35,11 +44,17 @@ export const t = user => words[user?.language === "en" ? "en" : "ru"];
 // Cohorts share immutable rendering in a warm isolate. This bounded cache is
 // optional: correctness never depends on which isolate serves the next user.
 const cohortRenders = new Map();
-const icons = {schedule:'📚',today:'📅',tomorrow:'🗓',next:'⏭',settings:'⚙️',help:'💡',support:'💛',group:'👥',groups:'👥',language:'🌐',lang:'🌐',back:'◀️',menu:'🏠',sound:'🔊',changes:'🔔',auto_pin:'📌',pin:'📌',paused:'⏸',donate:'💛',later:'👌'};
+const icons = {feedback:'💬',privacy:'ℹ️',schedule:'📚',today:'📅',tomorrow:'🗓',next:'⏭',settings:'⚙️',help:'💡',support:'💛',group:'👥',groups:'👥',language:'🌐',lang:'🌐',back:'◀️',menu:'🏠',sound:'🔊',changes:'🔔',auto_pin:'📌',pin:'📌',paused:'⏸',donate:'💛',later:'👌'};
 export const button = (text, action) => ({ text: (icons[action.split(':')[0]] ? icons[action.split(':')[0]]+' ' : action.startsWith('toggle:') ? (icons[action.split(':')[1]]??'')+' ' : '')+text, callback_data: `personal:${action}` });
 export const menu = user => ({ inline_keyboard: [
   [button(t(user).schedule, "schedule")], [button(t(user).today, "today"), button(t(user).tomorrow, "tomorrow")],
   [button(t(user).next, "next"), button(t(user).settings, "settings")], [button(t(user).help, "help"), button(t(user).support, "support")],
+  [button(t(user).feedback, "feedback"), button(t(user).privacy, "privacy")],
+] });
+export const informationText = (user, action) => t(user)[`${action}Text`].replaceAll('{contact}', escapeHtml(AUTHOR_USERNAME));
+export const informationKeyboard = user => ({ inline_keyboard: [
+  [{ text: `✉️ ${t(user).contact}`, url: `https://t.me/${AUTHOR_USERNAME}` }],
+  [button(t(user).back, "menu")],
 ] });
 export const supportKeyboard = user => ({ inline_keyboard: [
   [{ text: t(user).channel, url: "https://example.com" }], [button(t(user).donate, "donate"), button(t(user).later, "later")],
