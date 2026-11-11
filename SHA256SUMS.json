@@ -5,7 +5,7 @@
   },
   {
     "path": ".env.example",
-    "sha256": "fd0b2a3a62fcbf507d02e9d231b820aef73afe1d1b03d5dd6d4df968c4b6eb10"
+    "sha256": "ca492c1c972c53a81b643a33e0c47619a86127d7fe670ee4b16d544c19d6ff31"
   },
   {
     "path": ".github/workflows/parse-schedule.yml",
