@@ -19,6 +19,7 @@ export async function processPersonalInbox(store, row, now = new Date()) {
     if (fresh?.status !== "pending") return;
     await store.run("INSERT OR IGNORE INTO users(user_id) VALUES(?)", row.user_id);
     const user = await store.user(row.user_id);
+    const original = { ...user };
     const groups = (await store.groups()).sort((a, b) => Number.parseInt(a.id, 10) - Number.parseInt(b.id, 10) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     const jobs = [], replies = [];
     const reply = (text, keyboard = menu(user), editId = update.messageId ?? null) => replies.push({ text, keyboard, editId });
@@ -29,7 +30,9 @@ export async function processPersonalInbox(store, row, now = new Date()) {
     if (action === "language") {
       reply("Русский / English", { inline_keyboard: [[button("Русский", "lang:ru"), button("English", "lang:en")]] });
     } else if (action.startsWith("lang:")) {
-      user.language = action.split(":")[1]; user.epoch++; user.screen = user.group_id ? "menu" : "groups";
+      user.language = action.split(":")[1];
+      if (user.language !== original.language) user.epoch++;
+      user.screen = user.group_id ? "menu" : "groups";
       reply(user.group_id ? t(user).menu : t(user).choose, user.group_id ? menu(user) : groupsKeyboard(groups, user));
       if (user.group_id) for (const s of initialDates(await store.schedules(user.group_id), now)) jobs.push(job(user, "card", s.date, { priority: 0, payload: { manual: true } }));
     } else if (action.startsWith("groups:") || action.startsWith("search:")) {
@@ -97,15 +100,21 @@ export async function processPersonalInbox(store, row, now = new Date()) {
     // Returning from a block re-enables delivery, but pause remains a choice.
     user.blocked = 0;
     if (update.action.startsWith("lang:")) {
-      for (const languageCode of ["", "ru", "en"]) jobs.push(job(user, "commands", languageCode, { priority: 5, payload: { manual: true } }));
+      for (const languageCode of ["", "ru", "en"]) {
+        if (await store.setting(`commands-v1:${user.user_id}:${languageCode}`) !== user.language)
+          jobs.push(job(user, "commands", languageCode, { priority: 5, payload: { manual: true } }));
+      }
     }
     if (update.action === "start" && user.group_id) {
       for (const s of initialDates(await store.schedules(user.group_id), now)) jobs.push(job(user, "card", s.date, { priority: 0, payload: { manual: true } }));
     }
     for (const [index, payload] of replies.entries()) jobs.push(job(user, "reply", payload.editId ? "screen" : `${row.update_id}:${index}`, { priority: -2, payload: { ...payload, manual: true } }));
-    if (update.callbackId && !update.acknowledged) jobs.unshift(job(user, "callback", String(row.update_id), { priority: -3, payload: { callbackId: update.callbackId, manual: true } }));
+    // Insert after superseding older navigation jobs. Keep the visible reply
+    // first; the transient acknowledgement must not delay the screen edit.
+    if (update.callbackId && !update.acknowledged) jobs.push(job(user, "callback", String(row.update_id), { priority: -1, payload: { callbackId: update.callbackId, manual: true } }));
     const keys = ["language", "group_id", "epoch", "screen", "sound", "changes", "pin", "paused", "blocked", "support_seen", "pin_date", "next_due"];
-    await store.batch([[`UPDATE users SET ${keys.map(k => `${k}=?`).join(",")} WHERE user_id=?`, ...keys.map(k => user[k]), user.user_id], ...jobs,
+    const changed = keys.filter(key => user[key] !== original[key]);
+    await store.batch([...(changed.length ? [[`UPDATE users SET ${changed.map(k => `${k}=?`).join(",")} WHERE user_id=?`, ...changed.map(k => user[k]), user.user_id]] : []), ...jobs,
       ["UPDATE inbox SET status='done',payload='{}' WHERE update_id=?", row.update_id]]);
   });
 }

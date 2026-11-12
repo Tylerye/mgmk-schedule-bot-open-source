@@ -20,7 +20,7 @@ test('workerd keeps independent HTTP lanes and skips empty inbox waves while dra
     plugins:baseline?[{name:'baseline-worker',setup(b){b.onLoad({filter:/[\\/]personal[\\/]worker\.js$/},()=>({contents:execFileSync('git',['show',`${baseline}:personal/worker.js`],{encoding:'utf8'}),loader:'js'}));}}]:[]})).outputFiles[0].text;
   const lanes=[],telegram=[];
   const mf=new Miniflare(convertV4MiniflareOptions({name:'personal',modules:true,script,compatibilityDate:'2026-09-14',compatibilityFlags:['nodejs_compat'],
-    d1Databases:{DB:'lanes-db'}, bindings:{PERSONAL_SHARED_SECRET:'local-test',ADMIN_USER_ID:'100',BOT_TOKEN:'fake',PERSONAL_DELIVERY_ENABLED:'true'},
+    d1Databases:{DB:'lanes-db'}, bindings:{PERSONAL_SHARED_SECRET:'local-test',ADMIN_USER_ID:'100',BOT_TOKEN:'fake',PERSONAL_DELIVERY_ENABLED:'true',PERSONAL_PUBLIC:'true'},
     serviceBindings:{SELF:async(request,runtime)=>{lanes.push(new URL(request.url).pathname);return (await runtime.getWorker('personal')).fetch(request);}},
     outboundService:async request=>{
       assert.equal(new URL(request.url).hostname,'api.telegram.org');telegram.push(new URL(request.url).pathname.split('/').at(-1));
@@ -44,5 +44,18 @@ test('workerd keeps independent HTTP lanes and skips empty inbox waves while dra
     lanes.length=0;
     assert.equal((await mf.dispatchFetch('http://localhost/test-cron')).status,200);
     assert.deepEqual(lanes,['/tick']);
+    if(!baseline) {
+      // Four independent user invocations should obtain distinct Telegram
+      // slots in this wave instead of three immediately retrying the same slot.
+      await db.prepare("UPDATE rate_gate SET next_at=0 WHERE key='telegram'").run();
+      for(const id of [201,202,203,204]) {
+        await db.prepare('INSERT INTO users(user_id) VALUES(?)').bind(id).run();
+        await db.prepare("INSERT INTO jobs(id,user_id,epoch,kind,date,priority,due,payload) VALUES(?,?,1,'reply','burst',0,0,?)").bind('burst'+id,id,JSON.stringify({text:'burst'})).run();
+      }
+      telegram.length=0;
+      const response=await mf.dispatchFetch('http://localhost/tick/delivery',{method:'POST',headers:{authorization:'Bearer local-test'}});
+      assert.equal(response.status,200);assert.equal((await response.json()).pending,false);
+      assert.deepEqual(telegram,['sendMessage','sendMessage','sendMessage','sendMessage']);
+    }
   } finally {await mf.dispose();}
 });

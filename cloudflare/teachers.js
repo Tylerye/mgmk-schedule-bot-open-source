@@ -1,6 +1,7 @@
 import { TEACHERS, escapeHtml } from "../src/teachers.js";
 import { addDays, dateInTimezone, timeInTimezone } from "../src/dates.js";
 import { withStateLock } from "./d1-store.js";
+import { createHash } from "node:crypto";
 import { TelegramClient, isMessageNotModified, isMessageUneditable } from "../src/telegram.js";
 
 // The owner's preview has its own seat and delivery state. It reads the real
@@ -264,11 +265,56 @@ async function drainTeacherNotices({ database, client, teacher, user, now }) {
   }
 }
 
+export async function writeTeacherStatus(database, key, value, now = new Date()) {
+  await database.prepare("INSERT INTO teacher_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value "
+    + "WHERE COALESCE(json_extract(teacher_settings.value,'$.at'),'')<=? OR json_remove(teacher_settings.value,'$.at') IS NOT json_remove(excluded.value,'$.at')")
+    .bind(key, JSON.stringify({ ...value, at: now.toISOString() }), new Date(now.getTime() - 180000).toISOString()).run();
+}
+
+async function teacherCheck(env, config, teacher, now) {
+  const user = await env.DB.prepare("SELECT * FROM teacher_users WHERE teacher_id=?").bind(teacher.id).first();
+  const inbox = await env.DB.prepare("SELECT MIN(retry_at) due FROM teacher_inbox WHERE teacher_id=? AND status='pending'").bind(teacher.id).first();
+  const schedules = await rowsFor(env.DB, teacher.id);
+  const signature = createHash("sha256").update(JSON.stringify([user, schedules.map(s => [s.date,s.hash]), config.timezone, config.pinSwitchTime,
+    env.CF_VERSION_METADATA?.id, env.PERSONAL_ENABLED, env.OWNER_PREVIEW_ENABLED, env.ADMIN_USER_ID])).digest("hex");
+  return { user, inboxDue: inbox?.due ?? null, schedules, signature };
+}
+async function saveTeacherCheck(env, config, teacher, now, processedSchedules) {
+  const state = await teacherCheck(env, config, teacher, now);
+  const today = dateInTimezone(now, config.timezone);
+  const dates = [Date.parse(`${addDays(today,1)}T00:00:00+03:00`), Date.parse(`${today}T${config.pinSwitchTime}:00+03:00`)];
+  for (const row of state.schedules) for (const lesson of JSON.parse(row.payload).lessons)
+    for (const time of [lesson.start, lesson.end]) dates.push(Date.parse(`${row.date}T${time}:00+03:00`));
+  let next = Math.min(...dates.filter(ms => ms > now.getTime()));
+  if (processedSchedules && JSON.stringify(processedSchedules.map(s=>[s.date,s.hash])) !== JSON.stringify(state.schedules.map(s=>[s.date,s.hash]))) next = now.getTime();
+  if (state.inboxDue !== null) next = Math.min(next, state.inboxDue);
+  if (state.user?.notifications && !(teacher.sourceTeacherId && env.PERSONAL_ENABLED === "true")) {
+    const rows = state.schedules.filter(s=>s.date>=today).slice(0,3);
+    for (const row of rows) {
+      const p = await env.DB.prepare("SELECT message_id,status,retry_at FROM teacher_publications WHERE teacher_id=? AND date=?").bind(teacher.id,row.date).first();
+      if (!p || (!p.message_id && !["sending","uncertain","failed"].includes(p.status))) next = Math.min(next, p?.retry_at ?? now.getTime());
+    }
+    const notice = await env.DB.prepare("SELECT MIN(n.retry_at) due FROM teacher_notices n JOIN teacher_publications p ON p.teacher_id=n.teacher_id AND p.date=n.date WHERE n.teacher_id=? AND n.status='pending' AND p.hash=n.hash AND p.revision=n.revision").bind(teacher.id).first();
+    if (notice?.due !== null && notice?.due !== undefined) next = Math.min(next, notice.due);
+  }
+  await env.DB.prepare("INSERT INTO teacher_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE teacher_settings.value IS NOT excluded.value")
+    .bind(`maintenance:${teacher.id}`,JSON.stringify({signature:state.signature,next})).run();
+}
+
 export async function teacherMaintenance(env, config, logger, teacherId, now = new Date(), suppliedClient = null) {
   const teacher = TEACHER_ACCOUNTS.find(t => t.id === teacherId);
   if (!teacher) throw new Error("Unknown teacher lane");
   if (teacher.sourceTeacherId && env.OWNER_PREVIEW_ENABLED !== "true") return { acquired: false };
-  return withStateLock(env.DB, async () => {
+  // Read-only probe before the write lease. Every minute still detects commands
+  // and source revisions; the durable deadline includes starts, ends and pins.
+  const probe = await teacherCheck(env, config, teacher, now);
+  if (!probe.user && probe.inboxDue === null) return { checked: true, idle: true };
+  const cached = await env.DB.prepare("SELECT value FROM teacher_settings WHERE key=?").bind(`maintenance:${teacher.id}`).first();
+  if (config.timezone === "Europe/Minsk" && probe.inboxDue !== 0 && (probe.inboxDue === null || probe.inboxDue > now.getTime()) && cached) {
+    const saved = JSON.parse(cached.value);
+    if (saved.signature === probe.signature && saved.next > now.getTime()) return { checked: true, idle: true };
+  }
+  const result = await withStateLock(env.DB, async () => {
     const user = await env.DB.prepare("SELECT * FROM teacher_users WHERE teacher_id=?").bind(teacher.id).first();
     if (!user) return;
     if (teacher.sourceTeacherId && String(user.user_id) !== String(env.ADMIN_USER_ID)) throw new Error("Preview account identity mismatch");
@@ -277,7 +323,7 @@ export async function teacherMaintenance(env, config, logger, teacherId, now = n
     const client = suppliedClient ?? clientFor(env, logger);
     const context = { database: env.DB, client, teacher, user, config, now };
     await drainTeacherInbox(context);
-    if (!user.notifications || user.previewManual) return;
+    if (!user.notifications || user.previewManual) { await saveTeacherCheck(env,config,teacher,now); return; }
     const today = dateInTimezone(now, config.timezone);
     const schedules = await rowsFor(env.DB, teacher.id);
     const rows = schedules.filter(r => r.date >= today);
@@ -295,5 +341,7 @@ export async function teacherMaintenance(env, config, logger, teacherId, now = n
       }
       await env.DB.prepare("UPDATE teacher_users SET pinned_message_id=? WHERE teacher_id=? AND user_id=?").bind(desired.message_id, teacher.id, user.user_id).run();
     }
+    await saveTeacherCheck(env,config,teacher,now,schedules);
   }, { name: `teacher:${teacherId}`, leaseMs: 60000 });
+  return result;
 }

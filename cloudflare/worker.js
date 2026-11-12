@@ -13,7 +13,7 @@ import { drainParserResults, queueParserResult } from "./parser-results.js";
 import { AttentionStore, collectAttentionUpdate } from "../src/attention.js";
 import { attentionMaintenance, configuredChat, drainAttentionInbox } from "./attention-runtime.js";
 import { readJson, InputError } from "./request-json.js";
-import { collectTeacherUpdate, enqueueTeacherUpdate, teacherMaintenance, storeTeacherResult, TEACHER_ACCOUNTS } from "./teachers.js";
+import { collectTeacherUpdate, enqueueTeacherUpdate, teacherMaintenance, storeTeacherResult, TEACHER_ACCOUNTS, writeTeacherStatus } from "./teachers.js";
 import { discoverTeacherFiles } from "../src/source/teacher-drive.js";
 import { relayPersonalUpdate, relayPersonalSource } from "./personal-relay.js";
 
@@ -423,20 +423,18 @@ async function handleMaintenance(request, env, pathname, context) {
     : lane.startsWith("teacher-") ? teacherMaintenance(env, configFromEnv(env), createLogger(env.LOG_LEVEL || "info"), lane.slice(8))
     : lane === "attention"
     ? attentionMaintenance(env, configFromEnv(env), createLogger(env.LOG_LEVEL || "info")).then(() =>
-      patchHealth(env.DB, { lastAttentionSuccessAt: new Date().toISOString(), attentionError: null }))
+      patchHealth(env.DB, { lastAttentionSuccessAt: new Date().toISOString(), attentionError: null }, { heartbeatKey: "lastAttentionSuccessAt" }))
     : scheduled(env, lane);
   // Keep the claimed work alive if the caller disconnects. Never retry an
   // ambiguous dispatch inside the same tick; durable queues resume next minute.
   context.waitUntil(task.catch(() => {}));
   try {
     const result = await task;
-    if (lane.startsWith("teacher-") && result?.acquired) await env.DB.prepare("INSERT INTO teacher_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
-      .bind(`health:${lane}`, JSON.stringify({ at: new Date().toISOString(), error: false })).run();
+    if (lane.startsWith("teacher-") && (result?.acquired || result?.checked)) await writeTeacherStatus(env.DB, `health:${lane}`, { error: false });
     return json({ ok: true });
   }
   catch (error) {
-    if (lane.startsWith("teacher-")) await env.DB.prepare("INSERT INTO teacher_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
-      .bind(`health:${lane}`, JSON.stringify({ at: new Date().toISOString(), error: true })).run();
+    if (lane.startsWith("teacher-")) await writeTeacherStatus(env.DB, `health:${lane}`, { error: true });
     if (lane === "attention") await patchHealth(env.DB, { attentionError: { at: new Date().toISOString(), event: "attention" } });
     createLogger(env.LOG_LEVEL || "info").error("maintenance_failed", { lane, error: error.message });
     return json({ ok: false }, 503);
@@ -457,8 +455,7 @@ async function pollTeacherSource(env, config, logger) {
         dispatched++;
       }
     }
-    await env.DB.prepare("INSERT INTO teacher_settings(key,value) VALUES('source-health',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
-      .bind(JSON.stringify({ at: new Date().toISOString(), files: files.length, dispatched })).run();
+    await writeTeacherStatus(env.DB, "source-health", { files: files.length, dispatched });
     logger.info("teacher_source_complete", { files: files.length, dispatched });
   }, { name: "teacher-source", leaseMs: 180000 });
 }
@@ -472,7 +469,7 @@ async function scheduled(env, lane = "all") {
     const state = row?.json ? JSON.parse(row.json) : null;
     if (state?.chatId && state.health?.liveCacheKey === cacheKey && state.health?.nextLiveReconcileAt > now.getTime()
       && !state.health?.liveError) {
-      await patchHealth(env.DB, { lastReconcileSuccessAt: now.toISOString(), lastCronCompletedAt: now.toISOString(), liveError: null });
+      await patchHealth(env.DB, { lastReconcileSuccessAt: now.toISOString(), lastCronCompletedAt: now.toISOString(), liveError: null }, { heartbeatKey: "lastReconcileSuccessAt", now });
       return;
     }
   }
@@ -546,7 +543,7 @@ async function scheduled(env, lane = "all") {
     ...(lane === "queues" && !failure ? { lastQueuesSuccessAt: new Date().toISOString() } : {}),
     // One successful lane must not erase another lane's unresolved failure.
     ...(lane === "all" ? { lastError: failure } : { [`${lane}Error`]: failure }),
-  });
+  }, { heartbeatKey: lane === "source" ? "lastSourcePollSuccessAt" : lane === "queues" ? "lastQueuesSuccessAt" : undefined });
   logger.info("cron_cycle_complete", { lane, ok: errors.length === 0 });
   if (errors.length > 0) throw errors[0].error;
 }

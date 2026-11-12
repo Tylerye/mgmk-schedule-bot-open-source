@@ -64,13 +64,26 @@ export class D1StateStore {
 
 // Source discovery uses its own lease and only patches health. A concurrent
 // Telegram snapshot must neither block discovery nor overwrite these fields.
-export async function patchHealth(database, patch) {
+export async function patchHealth(database, patch, { heartbeatKey, now = new Date() } = {}) {
   const serialized = JSON.stringify(patch);
+  const args = [JSON.stringify(EMPTY_STATE), serialized, now.toISOString(), serialized];
+  let condition = "";
+  if (heartbeatKey) {
+    if (!/^[A-Za-z]+$/u.test(heartbeatKey)) throw new Error("Invalid heartbeat key");
+    const clocks = new Set(["lastCronCompletedAt", "lastReconcileSuccessAt", "lastSourcePollAt", "lastSourcePollSuccessAt", "nextSourcePollAt", "lastQueuesSuccessAt", "lastAttentionSuccessAt"]);
+    condition = " WHERE (COALESCE(json_extract(app_state.json,?), '')<=?";
+    args.push(`$.health.${heartbeatKey}`, new Date(now.getTime() - 180000).toISOString());
+    for (const key of Object.keys(patch).filter(key => !clocks.has(key))) {
+      condition += " OR json_extract(app_state.json,?) IS NOT json_extract(?,?)";
+      args.push(`$.health.${key}`, serialized, `$.${key}`);
+    }
+    condition += ")";
+  }
   await database.prepare(
     "INSERT INTO app_state (id, json, updated_at) VALUES (1, json_set(?, '$.health', json(?)), ?) "
     + "ON CONFLICT(id) DO UPDATE SET json = json_set(app_state.json, '$.health', "
-    + "json_patch(COALESCE(json_extract(app_state.json, '$.health'), '{}'), json(?))), updated_at = excluded.updated_at",
-  ).bind(JSON.stringify(EMPTY_STATE), serialized, new Date().toISOString(), serialized).run();
+    + "json_patch(COALESCE(json_extract(app_state.json, '$.health'), '{}'), json(?))), updated_at = excluded.updated_at" + condition,
+  ).bind(...args).run();
 }
 
 // Telegram work is bounded to 25 seconds. An interrupted invocation must not
@@ -87,10 +100,11 @@ export async function withStateLock(database, task, { name = "state", leaseMs = 
   try {
     return { acquired: true, value: await task() };
   } finally {
-    if (name !== "state") {
+    const persistent = name === "state" || name === "source" || name === "teacher-source" || name.startsWith("teacher:");
+    if (!persistent) {
       await database.prepare("DELETE FROM runtime_locks WHERE name = ? AND owner = ?").bind(name, owner).run();
     } else await database.prepare(
-      "UPDATE runtime_locks SET owner = '', locked_until = 0 WHERE name = 'state' AND owner = ?",
-    ).bind(owner).run();
+      "UPDATE runtime_locks SET owner = '', locked_until = 0 WHERE name = ? AND owner = ?",
+    ).bind(name, owner).run();
   }
 }

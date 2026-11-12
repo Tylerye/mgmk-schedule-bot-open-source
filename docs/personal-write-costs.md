@@ -51,3 +51,38 @@ probe deliberately keeps atomic budget accounting. These results do not prove
 a 50% daily reduction, real production CPU limits or full-day reliability.
 Confirm physical costs in provider metrics over comparable periods after
 release. A stopped day's budget is never reset to make a rollout appear healthy.
+
+## Maintenance and navigation follow-up
+
+The main Worker reuses fixed-name lease rows, checks durable teacher deadlines
+before acquiring write leases, and coalesces successful health timestamps into
+three-minute windows. Each minute still probes commands/source revisions and
+polls PDFs. Lesson starts/ends, midnight and pin switching invalidate deadlines;
+failure/recovery transitions are persisted immediately. All nine HTTP lanes
+retain separate CPU budgets. Freshness failure still uses the five-minute bound.
+
+Personal navigation updates only changed user columns. Completed command-menu
+scopes and unchanged standalone screens are reused; automatic timetable cards
+and the owner's teacher-preview messages are excluded from screen caching.
+Independent user lanes start 100 ms apart to reduce competition for Telegram's
+84 ms slot; the first lane starts immediately and the durable gate stays active.
+
+```sh
+node scripts/measure-maintenance-writes.js /tmp/maintenance.json
+node scripts/measure-navigation-writes.js /tmp/navigation.json
+```
+
+Both accept an optional third argument: an earlier local hexadecimal commit ID.
+The synthetic nine-minute quiet main-Worker comparison measured **369 → 189
+physical D1 writes (48.8% fewer)**, 549 → 468 SQL queries and 495 → 513 rows read.
+Both versions executed 81 HTTP maintenance lanes, 27 stubbed Drive requests and
+zero Telegram calls. This measures quiet background work, not overall daily use.
+
+The navigation probe exposed an existing callback job ordering bug: a newly
+created acknowledgement was immediately superseded. It now follows the visible
+reply, so the screen remains first and the acknowledgement actually executes.
+With this correction, six repeated settings clicks measured **348 → 354 writes**
+(1.7% more), replacing six redundant edits with six real acknowledgements.
+The warm-up screen is excluded. Do not present the missing old acknowledgements
+as an optimization or claim that every path became cheaper. Individual profile
+updates measured 3 → 1 writes (or zero for unchanged fields).

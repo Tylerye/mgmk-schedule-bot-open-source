@@ -111,7 +111,10 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
         { command: "next", description: w.next }, { command: "stop", description: w.pause },
         ...(String(id) === String(ownerId) ? [{ command: "teacher", description: user.language === "en" ? "Teacher timetable preview" : "Просмотр расписания преподавателя" }] : [])];
       const result = await op(`commands:${job.date}:${job.revision}:${user.language}`, "setMyCommands", { scope: { type: "chat", chat_id: id }, language_code: job.date, commands });
-      if (await applyOutcome(store, job, result)) await finishJob(store, job);
+      if (await applyOutcome(store, job, result)) {
+        await store.batch([["INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE settings.value IS NOT excluded.value", `commands-v1:${id}:${job.date}`, JSON.stringify(user.language)],
+          ["UPDATE jobs SET status='done' WHERE id=? AND revision=?", job.id, job.revision]]);
+      }
     } else if (job.kind === "callback") {
       const result = await op(`callback:${job.date}`, "answerCallbackQuery", { callback_query_id: payload.callbackId });
       if (await applyOutcome(store, job, result)) await finishJob(store, job);
@@ -129,13 +132,21 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       }
       const method = payload.editId ? "editMessageText" : "sendMessage";
       const body = { ...sendBody(text, payload.keyboard, job.kind !== "alert" || !user.sound), ...(payload.editId ? { message_id: payload.editId } : {}) };
-      const result = await op(`${job.kind}:${job.date}:${job.revision}:${partIndex}:${digest(body)}`, method, body);
+      // Only standalone screens are cached: automatic cards and the owner's
+      // teacher preview can be edited by other delivery paths.
+      const screenKey = `screen-v1:${id}:${payload.editId}`;
+      const standalone = job.kind === "reply" && payload.editId && String(id) !== String(ownerId)
+        && !await store.first("SELECT 1 FROM cards c,json_each(c.parts) p WHERE c.user_id=? AND json_extract(p.value,'$.id')=? LIMIT 1", id, payload.editId);
+      const screenHash = digest([text, payload.keyboard ?? { inline_keyboard: [] }]);
+      const unchanged = standalone && await store.setting(screenKey) === screenHash;
+      const result = unchanged ? { done: true } : await op(`${job.kind}:${job.date}:${job.revision}:${partIndex}:${digest(body)}`, method, body);
       if (result.failed && payload.editId) {
         // The user may have cleared the chat: create one replacement screen
         await store.run("UPDATE jobs SET payload=?,status='pending' WHERE id=? AND revision=?", JSON.stringify({...payload,editId:null}),job.id,job.revision);
         return;
       }
       if (await applyOutcome(store, job, result)) {
+        if (standalone && !unchanged) await store.setSetting(screenKey, screenHash);
         if (payload.texts && partIndex + 1 < payload.texts.length) await store.run("UPDATE jobs SET payload=? WHERE id=? AND revision=?", JSON.stringify({ ...payload, partIndex: partIndex + 1 }), job.id, job.revision);
         else await finishJob(store, job);
       }

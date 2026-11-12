@@ -110,7 +110,12 @@ export default {
       else if (path === "/tick/delivery") {
         const rows = await store.all("SELECT j.user_id FROM (SELECT user_id,priority,due FROM jobs WHERE status='pending' AND due<=? ORDER BY priority,due LIMIT 128) j JOIN users u ON u.user_id=j.user_id WHERE u.blocked=0 GROUP BY j.user_id ORDER BY MIN(u.last_api_at),MIN(j.priority),MIN(j.due) LIMIT 4", now.getTime());
         const users = [...new Set(rows.map(r => r.user_id))].slice(0, 4);
-        await Promise.all(users.map(id => internal(env, `/delivery/${id}`)));
+        await Promise.all(users.map(async (id, index) => {
+          // Keep independent CPU lanes, but avoid launching all four against
+          // the same 84ms Telegram slot. The first user still starts immediately.
+          if (index) await wait(index * 100);
+          return internal(env, `/delivery/${id}`);
+        }));
         const pending = await store.first("SELECT 1 FROM jobs WHERE status='pending' AND due<=? LIMIT 1", now.getTime() + 1200);
         return json({ ok: true, pending: Boolean(pending) });
       } else if (/^\/delivery\/\d+$/u.test(path)) {
