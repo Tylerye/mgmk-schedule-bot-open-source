@@ -14,8 +14,9 @@ export async function personalFixture() {
     const s = sqlite.prepare(sql); let params = [];
     return { bind(...args) { params = args; return this; },
       async all() { const results = s.all(...params); return { results, meta: { rows_read: results.length, rows_written: /^\s*(?:INSERT|UPDATE)/iu.test(sql) ? 1 : 0 } }; },
+      isRead: /^\s*(?:SELECT|PRAGMA|WITH)/iu.test(sql),
       async run() { const result = s.run(...params); return { meta: { ...result, rows_written: Number(result.changes), rows_read: 1 } }; } };
-  }, async batch(statements) { sqlite.exec("BEGIN"); try { const r = []; for (const s of statements) r.push(await s.run()); sqlite.exec("COMMIT"); return r; }
+  }, async batch(statements) { sqlite.exec("BEGIN"); try { const r = []; for (const s of statements) r.push(s.isRead ? await s.all() : await s.run()); sqlite.exec("COMMIT"); return r; }
     catch (e) { sqlite.exec("ROLLBACK"); throw e; } } };
   return { sqlite, db, store: new PersonalStore(db), close() { sqlite.close(); } };
 }

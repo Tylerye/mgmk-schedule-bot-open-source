@@ -1,17 +1,39 @@
+import { cached, invalidate, invalidateForWrite } from "./cache.js";
+
 const stoppedDays = new WeakMap();
+// Published schedules change once a day, cards at most a few times a day: a
+// short in-isolate memo removes most D1 round trips from the tap path.
+const SCHEDULE_TTL = 300_000;
+const CATALOG_TTL = 300_000;
+const CARDS_TTL = 20_000;
+const SETTING_TTL = 60_000;
+// Only read-mostly settings are memoised; screen hashes and budget state are
+// compared for exactness and stay uncached.
+const memoisedSetting = key => /^(auto-pin|commands-v1):/u.test(String(key));
 // D1 and the future SQLite runtime share this small async SQL interface.
 // All mutable data below belongs to the separate personal database.
 export class PersonalStore {
-  constructor(db) { this.db = db; this.read = 0; this.written = 0; }
+  constructor(db) { this.db = db; this.read = 0; this.written = 0; this.queries = 0; this.queryMs = 0; }
   measure(result) {
     this.read += result?.meta?.rows_read ?? 0;
     this.written += result?.meta?.rows_written ?? 0;
     return result;
   }
   statement(sql, args = []) { return this.db.prepare(sql).bind(...args); }
-  async all(sql, ...args) { return this.measure(await this.statement(sql, args).all()).results; }
+  async all(sql, ...args) {
+    const started = Date.now();
+    const result = this.measure(await this.statement(sql, args).all());
+    this.queries++; this.queryMs += Date.now() - started;
+    return result.results;
+  }
   async first(sql, ...args) { return (await this.all(sql, ...args))[0] ?? null; }
-  async run(sql, ...args) { return this.measure(await this.statement(sql, args).run()); }
+  async run(sql, ...args) {
+    const started = Date.now();
+    const result = this.measure(await this.statement(sql, args).run());
+    this.queries++; this.queryMs += Date.now() - started;
+    invalidateForWrite(this.db, sql, args);
+    return result;
+  }
   async batch(statements) {
     if (!statements.length) return [];
     const expanded = [];
@@ -25,24 +47,45 @@ export class PersonalStore {
       }
       expanded.push(this.statement(sql, args));
     }
+    const started = Date.now();
     const results = await this.db.batch(expanded);
+    this.queries++; this.queryMs += Date.now() - started;
     results.forEach(r => this.measure(r));
+    for (const [sql, ...args] of statements) invalidateForWrite(this.db, sql, args);
     return results;
   }
   async setting(key, fallback = null) {
-    const row = await this.first("SELECT value FROM settings WHERE key=?", key);
-    return row ? JSON.parse(row.value) : fallback;
+    const load = async () => {
+      const row = await this.first("SELECT value FROM settings WHERE key=?", key);
+      return row ? JSON.parse(row.value) : fallback;
+    };
+    return memoisedSetting(key) ? cached(this.db, `setting:${key}`, SETTING_TTL, load) : load();
   }
   setSetting(key, value) {
+    invalidate(this.db, `setting:${key}`);
     return this.run("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE settings.value IS NOT excluded.value", key, JSON.stringify(value));
   }
   async user(id) { const user=await this.first("SELECT * FROM users WHERE user_id=?", id); return user ? {...user, auto_pin: await this.setting(`auto-pin:${id}`,true)} : null; }
-  async groups() { return (await this.all("SELECT payload FROM catalog")).map(r => JSON.parse(r.payload)); }
+  async groups() {
+    return cached(this.db, "catalog", CATALOG_TTL, async () => (await this.all("SELECT payload FROM catalog")).map(r => JSON.parse(r.payload)));
+  }
   async schedules(group) {
-    return (await this.all("SELECT s.payload FROM snapshots s JOIN active_versions a ON a.dataset_id=s.dataset_id WHERE s.group_id=? ORDER BY a.date", group)).map(r => JSON.parse(r.payload));
+    return cached(this.db, `sched:${group}`, SCHEDULE_TTL,
+      async () => (await this.all("SELECT s.payload FROM snapshots s JOIN active_versions a ON a.dataset_id=s.dataset_id WHERE s.group_id=? ORDER BY a.date", group)).map(r => JSON.parse(r.payload)));
+  }
+  // Raw card rows for one user and group: the schedule-shaped half of delivery.
+  // `userCards` is the per-user view used to tell an automatic card's message
+  // from a standalone screen, which must not be scoped to the current group.
+  async userCards(userId) {
+    return cached(this.db, `usercards:${userId}`, CARDS_TTL,
+      () => this.all("SELECT * FROM cards WHERE user_id=?", userId));
+  }
+  async cards(userId, groupId) {
+    return cached(this.db, `cards:${userId}:${groupId}`, CARDS_TTL,
+      () => this.all("SELECT * FROM cards WHERE user_id=? AND group_id=? ORDER BY date", userId, groupId));
   }
   async card(user, date) {
-    const row = await this.first("SELECT * FROM cards WHERE user_id=? AND group_id=? AND date=?", user.user_id, user.group_id, date);
+    const row = (await this.cards(user.user_id, user.group_id)).find(c => c.date === date);
     return row ? { ...row, parts: JSON.parse(row.parts), schedule: row.schedule_payload ? JSON.parse(row.schedule_payload) : null } : null;
   }
   jobStatement(user, kind, date = "", { priority = 2, due = Date.now(), payload = {} } = {}) {
@@ -81,9 +124,16 @@ export class PersonalStore {
   async flushBudget(now = new Date()) {
     // Measured D1 meta includes index writes. Reserve 2 additional writes/reads
     // for this accounting query and boundary races rather than undercount it.
-    if (!this.reserved) return;
-    await this.run("UPDATE budgets SET rows_read=rows_read+?,rows_written=rows_written+? WHERE day=?",
-      this.read + 2 - this.reserved.read, this.written + 2 - this.reserved.written, now.toISOString().slice(0, 10));
+    // Callable again after background work: only the delta is written, so a
+    // final call after `waitUntil` work is not lost.
+    const reservedRead = this.reserved?.read ?? 0;
+    const reservedWritten = this.reserved?.written ?? 0;
+    const readDelta = this.read + 2 - reservedRead;
+    const writtenDelta = this.written + 2 - reservedWritten;
     this.reserved = null;
+    if (readDelta <= 0 && writtenDelta <= 0) return;
+    this.read = 0; this.written = 0;
+    await this.run("UPDATE budgets SET rows_read=rows_read+?,rows_written=rows_written+? WHERE day=?",
+      readDelta, writtenDelta, now.toISOString().slice(0, 10));
   }
 }

@@ -4,9 +4,10 @@ import { t, menu, button, supportKeyboard, settingsKeyboard, groupsKeyboard, ini
 export { collectPersonalUpdate } from "./update.js";
 
 export async function enqueuePersonalUpdate(store, update, now = Date.now()) {
-  if (await store.first("SELECT 1 FROM inbox WHERE update_id=?", update.update_id)) return false;
-  const count=await store.first("SELECT (SELECT COUNT(*) FROM (SELECT 1 FROM inbox WHERE status='pending' LIMIT 500)) total,(SELECT COUNT(*) FROM (SELECT 1 FROM inbox WHERE status='pending' AND user_id=? LIMIT 5)) own,(SELECT rows FROM security_storage_counts WHERE name='inbox') records",update.userId);
-  if(count.total>=500 || count.own>=5 || count.records>=100000) return false;
+  // Admission decision in one round trip: duplicate, per-user queue, global queue.
+  const count=await store.first("SELECT (SELECT COUNT(*) FROM inbox WHERE update_id=?) seen,(SELECT COUNT(*) FROM (SELECT 1 FROM inbox WHERE status='pending' LIMIT 500)) total,(SELECT COUNT(*) FROM (SELECT 1 FROM inbox WHERE status='pending' AND user_id=? LIMIT 20)) own,(SELECT rows FROM security_storage_counts WHERE name='inbox') records",update.update_id,update.userId);
+  if (count.seen) return false;
+  if(count.total>=500 || count.own>=20 || count.records>=100000) return false;
   const inserted = await store.run("INSERT OR IGNORE INTO inbox(update_id,user_id,payload,received_at) VALUES(?,?,?,?)", update.update_id, update.userId, JSON.stringify(update), now);
   return Number(inserted.meta?.changes ?? 0) === 1;
 }
@@ -15,10 +16,18 @@ export async function processPersonalInbox(store, row, now = new Date()) {
   const update = JSON.parse(row.payload);
   const job = (user, kind, date, options = {}) => store.jobStatement(user, kind, date, { due: now.getTime(), ...options });
   return store.lock(row.user_id, now.getTime(), async () => {
-    const fresh = await store.first("SELECT status FROM inbox WHERE update_id=?", row.update_id);
-    if (fresh?.status !== "pending") return;
-    await store.run("INSERT OR IGNORE INTO users(user_id) VALUES(?)", row.user_id);
-    const user = await store.user(row.user_id);
+    // One round trip for the guard, the user row and its creation.
+    const [freshRows, , userRows] = await store.batch([
+      ["SELECT status FROM inbox WHERE update_id=?", row.update_id],
+      ["INSERT OR IGNORE INTO users(user_id) VALUES(?)", row.user_id],
+      ["SELECT * FROM users WHERE user_id=?", row.user_id],
+    ]);
+    if (freshRows.results?.[0]?.status !== "pending") return;
+    const userRow = userRows.results?.[0] ?? null;
+    if (!userRow) return;
+    // `store.user()` would re-read the row we just batched; only the pin setting is extra,
+    // and it is memoised per isolate.
+    const user = { ...userRow, auto_pin: await store.setting(`auto-pin:${row.user_id}`, true) };
     const original = { ...user };
     const groups = (await store.groups()).sort((a, b) => Number.parseInt(a.id, 10) - Number.parseInt(b.id, 10) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     const jobs = [], replies = [];
