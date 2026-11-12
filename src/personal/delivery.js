@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { renderPersonal, t, subjectChanges, choosePersonalPin, nextRenderAt, noticeParts } from "./view.js";
+import { renderPersonal, t, subjectChanges, choosePersonalPin, nextRenderAt, nextPersonalPinAt, noticeParts } from "./view.js";
 
 const digest = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
@@ -67,6 +67,29 @@ async function applyOutcome(store, job, outcome) {
   return false;
 }
 
+const pinCards = cards => cards.map(c => ({ date: c.date, messageId: c.parts[0]?.id, hasLessons: Boolean(c.schedule?.lessons.length) }));
+const currentPin = user => ({ messageId: user.pin_message_id, date: user.pin_date });
+async function loadCards(store, user) {
+  return (await store.all("SELECT * FROM cards WHERE user_id=? AND group_id=? ORDER BY date", user.user_id, user.group_id))
+    .map(c => ({ ...c, parts: JSON.parse(c.parts), schedule: c.schedule_payload ? JSON.parse(c.schedule_payload) : null }));
+}
+function nextDue(user, schedules, cards, now) {
+  const deadlines = schedules.filter(s => cards.some(c => c.date === s.date))
+    .map(s => nextRenderAt(s, now, { mode: cards.find(c => c.date === s.date).mode ?? "compact" }));
+  if (user.auto_pin) deadlines.push(nextPersonalPinAt(pinCards(cards), currentPin(user), now));
+  const values = deadlines.filter(n => n !== null);
+  return values.length ? Math.min(...values) : null;
+}
+function dueStatement(user, value) {
+  return ["UPDATE users SET next_due=? WHERE user_id=? AND next_due IS NOT ?", value, user.user_id, value];
+}
+async function pinStatement(store, user, cards, now) {
+  if (!user.auto_pin || user.paused || !choosePersonalPin(pinCards(cards), currentPin(user), now)) return [];
+  // A pending check reads current cards; replacing it would only bump revisions.
+  const pending = await store.first("SELECT 1 FROM jobs WHERE user_id=? AND kind='pin' AND status='pending' AND epoch=? LIMIT 1", user.user_id, user.epoch);
+  return pending ? [] : [store.jobStatement(user, "pin", "", { priority: 1, due: now.getTime() })];
+}
+
 export async function deliverUser(store, client, id, { now = new Date(), mode = "normal", ownerId } = {}) {
   return store.lock(id, now.getTime(), async () => {
     const user = await store.user(id);
@@ -121,16 +144,20 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       if (await applyOutcome(store, job, result)) await finishJob(store, job);
     } else if (job.kind === "pin") {
       if (user.paused || user.auto_pin === false || user.auto_pin === 0) { await finishJob(store, job, "cancelled"); return; }
-      const cards = await store.all("SELECT date,parts,schedule_payload FROM cards WHERE user_id=? AND group_id=? ORDER BY date", id, user.group_id);
+      const cards = await store.all("SELECT date,parts,mode,schedule_payload FROM cards WHERE user_id=? AND group_id=? ORDER BY date", id, user.group_id);
       const eligible = cards.map(c => ({ date: c.date, messageId: JSON.parse(c.parts)[0]?.id, hasLessons: Boolean(c.schedule_payload && JSON.parse(c.schedule_payload).lessons.length) }));
       const desired = choosePersonalPin(eligible, { messageId: user.pin_message_id, date: user.pin_date }, now);
       if (!desired) { await finishJob(store, job); return; }
       const result = await op(`pin:${user.epoch}:${job.revision}:${desired.messageId}`, "pinChatMessage", { chat_id: id, message_id: desired.messageId, disable_notification: true });
       if (await applyOutcome(store, job, result)) {
         const statements = [["UPDATE users SET pin_message_id=?,pin_date=? WHERE user_id=?", desired.messageId, desired.date, id]];
-        if (user.pin_message_id && user.pin_message_id !== desired.messageId) statements.push(store.jobStatement(user, "unpin", String(user.pin_message_id), { priority: 1, payload: { messageId: user.pin_message_id } }));
+        if (user.pin_message_id && user.pin_message_id !== desired.messageId) statements.push(store.jobStatement(user, "unpin", String(user.pin_message_id), { priority: 1, due: now.getTime(), payload: { messageId: user.pin_message_id } }));
         // Pin announcements removed: the automatic pin itself is sufficient
-        await store.batch(statements); await finishJob(store, job);
+        const decoded = cards.map(c => ({ ...c, parts: JSON.parse(c.parts), schedule: c.schedule_payload ? JSON.parse(c.schedule_payload) : null }));
+        const next = nextDue({ ...user, pin_message_id: desired.messageId, pin_date: desired.date }, await store.schedules(user.group_id), decoded, now);
+        if (user.next_due !== next) statements.push(dueStatement(user, next));
+        statements.push(["UPDATE jobs SET status='done' WHERE id=? AND revision=?", job.id, job.revision]);
+        await store.batch(statements);
       }
     } else if (job.kind === "card") {
       const schedules = await store.schedules(user.group_id);
@@ -140,11 +167,18 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       const rendered = renderPersonal(schedule, user, { mode: card.mode, now });
       const parts = [...card.parts];
       const count = Math.max(parts.length, rendered.parts.length);
+      let changed = false;
       for (let index = 0; index < count; index++) {
         const text = rendered.parts[index] ?? t(user).emptyPart;
         const keyboard = index === 0 ? rendered.keyboard : { inline_keyboard: [] };
         const hash = digest([text, keyboard]);
         if (parts[index]?.hash === hash) continue;
+        if (changed) {
+          // One API operation per lane; persist progress before continuing.
+          await store.run("INSERT INTO cards(user_id,group_id,date,parts) VALUES(?,?,?,?) ON CONFLICT(user_id,group_id,date) DO UPDATE SET parts=excluded.parts WHERE cards.parts IS NOT excluded.parts",
+            id, user.group_id, job.date, JSON.stringify(parts));
+          return;
+        }
         const method = parts[index]?.id ? "editMessageText" : "sendMessage";
         const body = { ...sendBody(text, keyboard, !user.sound), ...(parts[index]?.id ? { message_id: parts[index].id } : {}) };
         const key = method === "sendMessage" ? `send-card:${user.group_id}:${job.date}:${index}${parts[index]?.replacementFor ? ":replace:"+parts[index].replacementFor : ""}`
@@ -157,23 +191,38 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
         }
         if (await applyOutcome(store, job, result)) {
           parts[index] = { id: parts[index]?.id ?? result.result.message_id, hash: method === "sendMessage" ? result.result.content_hash : hash };
-          await store.run("INSERT INTO cards(user_id,group_id,date,parts) VALUES(?,?,?,?) ON CONFLICT(user_id,group_id,date) DO UPDATE SET parts=excluded.parts",
-            id, user.group_id, job.date, JSON.stringify(parts));
-        }
-        return; // Resume the next part in a fresh invocation.
+          if (parts[index].hash !== hash) {
+            // A recovered receipt may contain an older render. Keep its ID and
+            // let the next lane edit it before completing schedule metadata.
+            await store.run("INSERT INTO cards(user_id,group_id,date,parts) VALUES(?,?,?,?) ON CONFLICT(user_id,group_id,date) DO UPDATE SET parts=excluded.parts WHERE cards.parts IS NOT excluded.parts",
+              id, user.group_id, job.date, JSON.stringify(parts));
+            return;
+          }
+          changed = true;
+        } else return;
       }
       const changes = subjectChanges(card.schedule, schedule, user.language);
-      const statements = [["UPDATE cards SET schedule_hash=?,schedule_payload=? WHERE user_id=? AND group_id=? AND date=?", schedule.hash, JSON.stringify(schedule), id, user.group_id, job.date]];
+      const statements = [];
+      const serialized = JSON.stringify(schedule);
+      if (changed || card.schedule_hash !== schedule.hash || card.schedule_payload !== serialized) {
+        statements.push(["INSERT INTO cards(user_id,group_id,date,parts,schedule_hash,schedule_payload) VALUES(?,?,?,?,?,?) ON CONFLICT(user_id,group_id,date) DO UPDATE SET parts=excluded.parts,schedule_hash=excluded.schedule_hash,schedule_payload=excluded.schedule_payload WHERE cards.parts IS NOT excluded.parts OR cards.schedule_hash IS NOT excluded.schedule_hash OR cards.schedule_payload IS NOT excluded.schedule_payload",
+          id, user.group_id, job.date, JSON.stringify(parts), schedule.hash, serialized]);
+      }
       if (card.schedule && card.schedule.hash !== schedule.hash && changes.length && user.changes && !user.paused) {
         // An alert is coalesced by date. A restart never replays intermediate
         // versions; the latest text replaces a still-pending alert.
-        statements.push(store.jobStatement(user, "alert", `change:${job.date}`, { priority: 1,
+        statements.push(store.jobStatement(user, "alert", `change:${job.date}`, { priority: 1, due: now.getTime(),
           payload: { texts: noticeParts(`${t(user).changed} · ${job.date}`, changes), scheduleHash: schedule.hash, date: job.date } }));
       }
-      if (!payload.history && !user.paused) statements.push(store.jobStatement(user, "pin", "", { priority: 1 }));
-      const next = schedules.map(s => nextRenderAt(s, now)).filter(n => n !== null);
-      if (!user.paused && !payload.history) statements.push(["UPDATE users SET next_due=? WHERE user_id=?", next.length ? Math.min(...next) : null, id]);
-      await store.batch(statements); await finishJob(store, job);
+      if (!user.paused && !payload.history) {
+        const cards = (await loadCards(store, user)).filter(c => c.date !== job.date);
+        cards.push({ ...card, date: job.date, parts, schedule });
+        statements.push(...await pinStatement(store, user, cards, now));
+        const next = nextDue(user, schedules, cards, now);
+        if (user.next_due !== next) statements.push(dueStatement(user, next));
+      }
+      statements.push(["UPDATE jobs SET status='done' WHERE id=? AND revision=?", job.id, job.revision]);
+      await store.batch(statements);
     } else await finishJob(store, job, "cancelled");
   });
 }
@@ -181,9 +230,27 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
 export async function enqueueDue(store, now = Date.now()) {
   const users = await store.all("SELECT * FROM users WHERE paused=0 AND blocked=0 AND next_due IS NOT NULL AND next_due<=? ORDER BY next_due LIMIT 4", now);
   for (const user of users) {
-    const schedules = await store.schedules(user.group_id);
-    await store.batch([...schedules.filter(s => Date.parse(`${s.date}T23:59:00+03:00`) >= now).slice(0, 6).map(s => store.jobStatement(user, "card", s.date, { priority: 3, due: now })),
-      store.jobStatement(user, "pin", "", { priority: 1, due: now }), ["UPDATE users SET next_due=NULL WHERE user_id=?", user.user_id]]);
+    await store.lock(user.user_id, now, async () => {
+      const fresh = await store.user(user.user_id);
+      if (!fresh || fresh.paused || fresh.blocked || fresh.next_due === null || fresh.next_due > now) return;
+      const date = new Date(now), schedules = await store.schedules(fresh.group_id), cards = await loadCards(store, fresh);
+      const statements = [];
+      for (const schedule of schedules) {
+        const card = cards.find(c => c.date === schedule.date);
+        // New publications are queued by durable fanout, never by a clock tick.
+        if (!card) continue;
+        const rendered = renderPersonal(schedule, fresh, { mode: card.mode, now: date });
+        const count = Math.max(card.parts.length, rendered.parts.length);
+        if (!Array.from({ length: count }, (_, i) => card.parts[i]?.hash === digest([rendered.parts[i] ?? t(fresh).emptyPart, i ? { inline_keyboard: [] } : rendered.keyboard])).every(Boolean)) {
+          const pending = await store.first("SELECT 1 FROM jobs WHERE id=? AND status='pending' AND epoch=?", `${fresh.user_id}:card:${schedule.date}`, fresh.epoch);
+          if (!pending) statements.push(store.jobStatement(fresh, "card", schedule.date, { priority: 3, due: now }));
+        }
+      }
+      statements.push(...await pinStatement(store, fresh, cards, date));
+      const next = nextDue(fresh, schedules, cards, date);
+      if (fresh.next_due !== next) statements.push(dueStatement(fresh, next));
+      await store.batch(statements);
+    });
   }
 }
 export async function diagnosticText(store, now = new Date()) {

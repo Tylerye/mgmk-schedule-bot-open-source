@@ -177,12 +177,22 @@ export function renderPersonal(schedule, user, { mode = "compact", now = new Dat
   return result;
 }
 
-export function nextRenderAt(schedule, now = new Date()) {
-  const today = dateInTimezone(now, "Europe/Minsk");
-  const boundaries = schedule.timeline.flatMap(e => [e.start, e.end]).filter(Boolean)
-    .map(time => Date.parse(`${schedule.date}T${time}:00+03:00`)).filter(ms => ms > now.getTime());
-  const pin = Date.parse(`${today}T16:30:00+03:00`);
-  if (pin > now.getTime()) boundaries.push(pin);
+export function nextRenderAt(schedule, now = new Date(), { mode = "compact" } = {}) {
+  // Only completion changes this view. Full mode marks completed lessons but
+  // leaves non-lesson rows unchanged. Starts and pin deadlines are independent.
+  const timeline = scheduleViewTimeline(schedule);
+  const boundaries = timeline.filter(e => e.end && (mode !== "full" || e.type === "lesson"))
+    .map(e => Date.parse(`${schedule.date}T${e.end}:00+03:00`)).filter(ms => ms > now.getTime());
+  const midnight = Date.parse(`${addDays(schedule.date, 1)}T00:00:00+03:00`);
+  if (midnight > now.getTime() && timeline.some(e => !e.end && (mode !== "full" || e.type === "lesson"))) boundaries.push(midnight);
   // Coalesce deadlines into three-minute windows.
   return boundaries.length ? Math.ceil(Math.min(...boundaries) / 180000) * 180000 : null;
+}
+
+export function nextPersonalPinAt(cards, current, now = new Date()) {
+  // Evaluate actual candidates with the same monotonic rule as delivery.
+  const boundaries = cards.filter(c => c.hasLessons && c.messageId).flatMap(c => [
+    Date.parse(`${c.date}T00:00:00+03:00`), Date.parse(`${c.date}T16:30:00+03:00`),
+  ]).filter(ms => ms > now.getTime()).sort((a,b) => a-b);
+  return boundaries.find(ms => choosePersonalPin(cards, current, new Date(ms))) ?? null;
 }

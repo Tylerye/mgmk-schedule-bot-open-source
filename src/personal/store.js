@@ -13,6 +13,7 @@ export class PersonalStore {
   async first(sql, ...args) { return (await this.all(sql, ...args))[0] ?? null; }
   async run(sql, ...args) { return this.measure(await this.statement(sql, args).run()); }
   async batch(statements) {
+    if (!statements.length) return [];
     const expanded = [];
     for (let [sql, ...args] of statements) {
       if (sql.startsWith("INSERT INTO jobs(id,user_id,epoch,kind,date,priority,due,payload)")) {
@@ -33,7 +34,7 @@ export class PersonalStore {
     return row ? JSON.parse(row.value) : fallback;
   }
   setSetting(key, value) {
-    return this.run("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, JSON.stringify(value));
+    return this.run("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE settings.value IS NOT excluded.value", key, JSON.stringify(value));
   }
   async user(id) { const user=await this.first("SELECT * FROM users WHERE user_id=?", id); return user ? {...user, auto_pin: await this.setting(`auto-pin:${id}`,true)} : null; }
   async groups() { return (await this.all("SELECT payload FROM catalog")).map(r => JSON.parse(r.payload)); }

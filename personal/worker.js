@@ -16,13 +16,15 @@ async function internal(env, path) {
   if (!r.ok) throw new Error(`Personal lane failed: ${r.status}`);
   return r.json();
 }
-async function kick(env) {
+async function kick(env, { inbox = true, delivery = true } = {}) {
   // Bounded orchestration: each inbox/user runs in a separate HTTP invocation
   // with its own CPU budget. A minute Cron resumes after isolate termination.
   for (let wave = 0; wave < 5; wave++) {
-    await internal(env, "/tick/inbox");
-    const result = await internal(env, "/tick/delivery");
-    if (!result.pending) break;
+    if (inbox) inbox = Boolean((await internal(env, "/tick/inbox")).pending);
+    if (delivery) delivery = Boolean((await internal(env, "/tick/delivery")).pending);
+    if (!inbox && !delivery) break;
+    // Inbox commands may have created delivery work in this wave.
+    delivery = true;
     await wait(1100);
   }
 }
@@ -99,6 +101,7 @@ export default {
       } else if (path === "/tick/inbox") {
         const row = await store.first("SELECT * FROM inbox WHERE status='pending' ORDER BY update_id LIMIT 1");
         if (row) await internal(env, `/inbox/${row.update_id}`);
+        return json({ ok: true, pending: Boolean(row && await store.first("SELECT 1 FROM inbox WHERE status='pending' LIMIT 1")) });
       } else if (/^\/inbox\/\d+$/u.test(path)) {
         const row = await store.first("SELECT * FROM inbox WHERE update_id=? AND status='pending'", Number(path.split("/")[2]));
         if (row && pilotAllowed(env, row.user_id)) await processPersonalInbox(store, row, now);
@@ -125,7 +128,7 @@ export default {
       if (work.recover) await internal(env, "/tick/recover");
       if (work.fanout) await internal(env, "/tick/fanout");
       if (work.due) await internal(env, "/tick/due");
-      if (work.inbox || work.delivery || work.due || work.fanout) await kick(env);
+      if (work.inbox || work.delivery || work.due || work.fanout) await kick(env, { inbox: Boolean(work.inbox), delivery: true });
     }).catch(() => {}));
   },
 };
