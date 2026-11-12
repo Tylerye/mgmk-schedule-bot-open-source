@@ -12,12 +12,13 @@
     "start": "node --env-file=.env src/index.js",
     "dry-run": "node src/index.js --dry-run --once",
     "test": "node --test \"tests/*.test.js\"",
-    "check:privacy": "node scripts/check-repository-privacy.js",
+    "check:privacy": "node scripts/check-repository-privacy.js --public",
     "inspect:pdf": "node scripts/inspect-pdf.js",
     "cf:dev": "wrangler dev",
     "cf:deploy": "wrangler deploy",
     "cf:tail": "node scripts/tail-worker.js",
-    "cf:migrate": "wrangler d1 migrations apply mgmk-schedule-bot --remote"
+    "cf:migrate": "wrangler d1 migrations apply mgmk-schedule-bot --remote",
+    "check:deployment": "node scripts/check-deployment-security.js"
   },
   "dependencies": {
     "pdfjs-dist": "5.4.149"

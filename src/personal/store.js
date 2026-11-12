@@ -13,7 +13,18 @@ export class PersonalStore {
   async first(sql, ...args) { return (await this.all(sql, ...args))[0] ?? null; }
   async run(sql, ...args) { return this.measure(await this.statement(sql, args).run()); }
   async batch(statements) {
-    const results = await this.db.batch(statements.map(([sql, ...args]) => this.statement(sql, args)));
+    const expanded = [];
+    for (let [sql, ...args] of statements) {
+      if (sql.startsWith("INSERT INTO jobs(id,user_id,epoch,kind,date,priority,due,payload)")) {
+        // Allocate under the same D1 transaction as the job, including after retention.
+        expanded.push(this.statement("UPDATE job_revision_sequence SET value=value+1 WHERE id=1"));
+        sql = sql.replace("priority,due,payload)", "priority,due,payload,revision)")
+          .replace("VALUES(?,?,?,?,?,?,?,?)", "VALUES(?,?,?,?,?,?,?,?,(SELECT value FROM job_revision_sequence WHERE id=1))")
+          .replace("revision=jobs.revision+1", "revision=excluded.revision");
+      }
+      expanded.push(this.statement(sql, args));
+    }
+    const results = await this.db.batch(expanded);
     results.forEach(r => this.measure(r));
     return results;
   }

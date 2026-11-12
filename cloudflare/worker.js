@@ -591,9 +591,23 @@ export default {
         const lanes = maintenanceLanes(env).filter(l => l.startsWith("teacher-"));
         teachers = { enabled: true, stale: lanes.some(l => !health[l]?.at || health[l]?.error || Date.now() - Date.parse(health[l].at) > 300000) };
       }
+      let personal;
+      if (env.PERSONAL_ENABLED === "true") {
+        personal = { enabled: true, ok: false };
+        try {
+          if (env.PERSONAL && env.PERSONAL_SHARED_SECRET) {
+            const response = await env.PERSONAL.fetch("https://personal.internal/health", {
+              method: "POST", headers: { authorization: `Bearer ${env.PERSONAL_SHARED_SECRET}` },
+            });
+            const health = await response.json();
+            personal.ok = response.ok && health.ok === true && !health.stopped && !health.paused && !health.sourceError;
+          }
+        } catch { /* Readiness fails without exposing credentials or service errors. */ }
+      }
       return json({
-        ok: !failure && !stale && !teachers?.stale,
+        ok: !failure && !stale && !teachers?.stale && personal?.ok !== false,
         ...(teachers ? { teachers } : {}),
+        ...(personal ? { personal } : {}),
         stale,
         configured: Boolean(state.chatId),
         lastCronCompletedAt: state.health.lastCronCompletedAt,
@@ -604,7 +618,7 @@ export default {
         lastParserSuccessAt: state.health.lastParserSuccessAt,
         lastTelegramSuccessAt: state.health.lastTelegramSuccessAt,
         lastError: failure ? { at: failure.at, event: failure.event } : null,
-      }, failure || stale || teachers?.stale ? 503 : 200);
+      }, failure || stale || teachers?.stale || personal?.ok === false ? 503 : 200);
     }
     if (request.method === "POST" && url.pathname === "/telegram/webhook") return await handleWebhook(request, env, config, logger, context);
     if (url.pathname.startsWith("/internal/personal/")) return await relayPersonalSource(request, env, url.pathname);

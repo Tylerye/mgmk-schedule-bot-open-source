@@ -8,12 +8,12 @@ export async function relayPersonalUpdate(env, update, teacherAccounts = []) {
   if (env.PERSONAL_ENABLED !== "true" || !env.PERSONAL || !env.PERSONAL_SHARED_SECRET) return null;
   const collected = collectPersonalUpdate(update);
   if (!collected || !pilotAllowed(env, collected.userId)) return null;
+  if (collected.action === "diagnostics" && String(collected.userId) !== String(env.ADMIN_USER_ID)) return null;
   const from = update.callback_query?.from ?? update.message?.from;
   // The owner's existing teacher-preview /start is routed before this relay.
   // Explicit /student and personal: buttons provide an independent owner entry.
   if (String(collected.userId) !== String(env.ADMIN_USER_ID)) {
-    const reserved = teacherAccounts.some(t => String(t.userId ?? "") === String(from.id)
-      || (t.username && t.username.toLowerCase() === String(from.username ?? "").toLowerCase()));
+    const reserved = teacherAccounts.some(t => String(t.userId ?? "") === String(from.id));
     if (reserved || (env.TEACHERS_ENABLED === "true" && await env.DB.prepare("SELECT 1 FROM teacher_users WHERE user_id=?").bind(from.id).first())) return null;
   }
   const response = await env.PERSONAL.fetch("https://personal.internal/inbox", {

@@ -57,7 +57,7 @@ export default {
       }
       if (path === "/health") {
         const counts = await store.first("SELECT (SELECT COUNT(*) FROM catalog) groups,(SELECT COUNT(*) FROM active_versions) days,(SELECT COUNT(*) FROM users) users");
-        return json({ ok: true, ...counts, budget, diagnostics: await diagnosticText(store, now) });
+        return json({ ok: !paused, paused, sourceError: Boolean(await store.setting("source-error")), ...counts, budget, diagnostics: await diagnosticText(store, now) });
       }
       if (path === "/inbox") {
         if (budget.mode === "stopped") return json({ ok: true, limited: true });
@@ -66,7 +66,8 @@ export default {
           || !pilotAllowed(env, update.userId) || typeof update.action !== "string" || update.action.length > 100) return json({ ok: false }, 400);
         // Revalidate the sanitized schema; this endpoint is private and also
         // authenticated independently from the main webhook/parser secret.
-        await enqueuePersonalUpdate(store, update);
+        const admitted = await enqueuePersonalUpdate(store, update);
+        if (!admitted) return json({ ok: true, queued: false });
         if (!paused) context.waitUntil(internal(env, `/inbox/${update.update_id}`).then(() => kick(env)).catch(() => {}));
       } else if (path === "/source-status") {
         const body = await readJson(request, 4096);
@@ -99,7 +100,7 @@ export default {
       } else if (path === "/tick/fanout") { if (budget.mode !== "stopped") await fanoutBatch(store); }
       else if (path === "/tick/due") { if (budget.mode === "normal") await enqueueDue(store); }
       else if (path === "/tick/delivery") {
-        const rows = await store.all("SELECT j.user_id FROM jobs j JOIN users u ON u.user_id=j.user_id WHERE j.status='pending' AND j.due<=? AND u.blocked=0 GROUP BY j.user_id ORDER BY MIN(u.last_api_at),MIN(j.priority),MIN(j.due) LIMIT 4", now.getTime());
+        const rows = await store.all("SELECT j.user_id FROM (SELECT user_id,priority,due FROM jobs WHERE status='pending' AND due<=? ORDER BY priority,due LIMIT 128) j JOIN users u ON u.user_id=j.user_id WHERE u.blocked=0 GROUP BY j.user_id ORDER BY MIN(u.last_api_at),MIN(j.priority),MIN(j.due) LIMIT 4", now.getTime());
         const users = [...new Set(rows.map(r => r.user_id))].slice(0, 4);
         await Promise.all(users.map(id => internal(env, `/delivery/${id}`)));
         const pending = await store.first("SELECT 1 FROM jobs WHERE status='pending' AND due<=? LIMIT 1", now.getTime() + 1200);

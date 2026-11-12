@@ -16,16 +16,19 @@ const actions = new Set(["today", "tomorrow", "next", "previous", "full", "compa
 function clientFor(env, logger) { return new TelegramClient({ token: env.BOT_TOKEN, logger, timeoutMs: 8000, abortSignal: AbortSignal.timeout(25000) }); }
 
 export async function collectTeacherUpdate(database, update, config = {}) {
-  let bindings; try { bindings = JSON.parse(config.TEACHER_USER_IDS || "{}"); } catch { return null; }
-  const accounts = TEACHER_ACCOUNTS.map(t => ({...t, userId: t.sourceTeacherId ? (config.OWNER_PREVIEW_ENABLED === "true" ? Number(config.ADMIN_USER_ID) : null) : Number(bindings[t.id]) || null}));
+  let bindings; try { bindings = JSON.parse(config.TEACHER_USER_IDS || "{}"); } catch { bindings = {}; }
+  if (!bindings || typeof bindings !== "object" || Array.isArray(bindings)) bindings = {};
+  const numeric = value => /^[1-9]\d*$/.test(String(value ?? "")) && Number.isSafeInteger(Number(value)) ? Number(value) : null;
+  const ids = Object.values(bindings).map(numeric);
+  if (ids.some(id => id === null) || new Set(ids).size !== ids.length) bindings = {};
+  const accounts = TEACHER_ACCOUNTS.map(t => ({...t, userId: t.sourceTeacherId ? (config.OWNER_PREVIEW_ENABLED === "true" ? numeric(config.ADMIN_USER_ID) : null) : numeric(bindings[t.id])}));
   const callback = update.callback_query, message = update.message ?? callback?.message;
   const from = callback?.from ?? message?.from;
   if (message?.chat?.type !== "private" || from?.is_bot || !Number.isSafeInteger(from?.id) || from.id <= 0 || message.chat.id !== from.id) return null;
   const action = callback ? String(callback.data ?? "").split(":")[1] : commands.get(String(message.text ?? "").trim().split(/\s/u)[0].split("@")[0].toLowerCase());
   if (!actions.has(action) || (callback && !/^teacher:(today|tomorrow|next|previous|full|compact|pause|resume)(?::\d{4}-\d{2}-\d{2})?$/.test(callback.data ?? ""))) return null;
 
-  // Unknown accounts without a pilot username are looked up only after tables
-  // are installed (the feature flag gates this collector at the webhook).
+  // Persisted numeric enrollment survives username changes and absent optional configuration.
   const enrolled = await database.prepare("SELECT * FROM teacher_users WHERE user_id=?").bind(from.id).first();
   let teacher = enrolled && accounts.find(t => t.id === enrolled.teacher_id);
   if (!teacher) {

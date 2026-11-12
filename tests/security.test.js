@@ -74,6 +74,15 @@ test('detailed health rejects unauthorized requests before database access', asy
  for(const headers of [{},{authorization:'Bearer wrong'}]) assert.equal((await w.fetch(new Request('https://worker.test/internal/health',{headers}),{DB,HEALTH_READ_SECRET:'right'},context)).status,403);
 });
 
+test('readiness detects a stopped personal service without exposing its diagnostics', async () => {
+ const w=await worker(); const state=structuredClone(EMPTY_STATE);
+ const DB={prepare(){return {async first(){return {json:JSON.stringify(state)};}};}};
+ let calls=0;
+ const env={DB,HEALTH_READ_SECRET:'right',PERSONAL_ENABLED:'true',PERSONAL_SHARED_SECRET:'private-test',PERSONAL:{async fetch(url,options){calls++;assert.equal(options.method,'POST');return new Response(JSON.stringify({ok:true,stopped:true,diagnostics:'INTERNAL TEST DETAIL'}));}}};
+ const response=await w.fetch(new Request('https://worker.test/internal/health',{headers:{authorization:'Bearer right'}}),env,context);
+ assert.equal(response.status,503);const result=await response.json();assert.deepEqual(result.personal,{enabled:true,ok:false});assert.equal(JSON.stringify(result).includes('INTERNAL TEST DETAIL'),false);assert.equal(calls,1);
+});
+
 test('parser rejects malformed and oversized schedules without writing poisoned inbox entries', async () => {
   const db = new DatabaseSync(':memory:'); db.exec(await readFile('migrations/0003_parser_results.sql', 'utf8'));
   const DB = sqliteAdapter(db); const job = { id: 'job', schedule_date: '2026-10-05', source_id: 'source' };

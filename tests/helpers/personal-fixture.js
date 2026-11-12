@@ -7,6 +7,9 @@ import { parseAllGroupSchedules } from "../../src/personal/parse.js";
 export async function personalFixture() {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec(await readFile(new URL("../../personal/migrations/0001_personal.sql", import.meta.url), "utf8"));
+  for (const file of ["0002_security_limits.sql", "0003_security_accounting.sql"]) {
+    sqlite.exec(await readFile(new URL("../../personal/migrations/" + file, import.meta.url), "utf8"));
+  }
   const db = { prepare(sql) {
     const s = sqlite.prepare(sql); let params = [];
     return { bind(...args) { params = args; return this; },

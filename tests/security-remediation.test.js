@@ -37,6 +37,51 @@ test('group parser rejects malformed hashes, times, oversized strings and invali
  for(const value of [{...s,hash:'bad'},{...s,lessons:[{number:0}]},{...s,notes:['x'.repeat(3001)]},{...s,timeline:[{start:'99:00',end:'99:30'}]}])assert.equal(validGroupResult(value),false);
 });
 
+test('strict group result schema accepts the actual legacy parser output',async()=>{
+ const {parseGroupSchedule}=await import('../src/schedule/parse.js');
+ const bells=JSON.parse(await readFile('config/bells.json','utf8'));
+ const schedule=parseGroupSchedule({source:{id:'fixture',name:'12.11.26.pdf',scheduleDate:'2026-11-12'},text:'12.11.2026',pages:[{pageNumber:1,rows:[{line:'¦8Са¦1¦МАТЕМАТИКА¦101¦Пример А А¦'}]}]}, {targetGroup:'8Са',expectedDate:'2026-11-12',bells});
+ assert.equal(validGroupResult(schedule),true);
+});
+
+test('bounded source reads cancel stalled bodies instead of waiting indefinitely',async()=>{
+ let cancelled=false;
+ const response=new Response(new ReadableStream({cancel(){cancelled=true;}}));
+ await assert.rejects(boundedBytes(response,16,5),/timeout/);
+ assert.equal(cancelled,true);
+});
+
+test('retention is opt-in, bounded and never removes receipts or uncertain work; job revisions never repeat',async()=>{
+ const {personalFixture}=await import('./helpers/personal-fixture.js');
+ const {maintainPersonalRecords}=await import('../src/personal/retention.js');
+ const f=await personalFixture();try{
+  const now=Date.now();await f.store.run('INSERT INTO users(user_id) VALUES(101)');
+  const user=await f.store.user(101);
+  await f.store.enqueue(user,'commands','ru');
+  const first=await f.store.first('SELECT revision FROM jobs');
+  await f.store.run("UPDATE jobs SET status='done',completed_at=?",now-40*86400000);
+  await f.store.run("INSERT INTO operations(id,user_id,method,status,result,started_at) VALUES('receipt',101,'sendMessage','succeeded',?,0)",JSON.stringify({message_id:7}));
+  await f.store.run("INSERT INTO operations(id,user_id,method,status,started_at) VALUES('uncertain',101,'sendMessage','uncertain',0)");
+  const before=await maintainPersonalRecords(f.store,{now});assert.equal(before.applied,false);
+  assert.equal((await f.store.first('SELECT COUNT(*) n FROM jobs')).n,1);
+  await maintainPersonalRecords(f.store,{now,enabled:true,dryRun:false});
+  assert.equal((await f.store.first('SELECT COUNT(*) n FROM jobs')).n,0);
+  assert.equal((await f.store.first('SELECT COUNT(*) n FROM operations')).n,2);
+  await f.store.enqueue(user,'commands','ru');
+  assert.ok((await f.store.first('SELECT revision FROM jobs')).revision>first.revision);
+ }finally{f.close();}
+});
+
+test('queue limits also apply when an existing completed job is reopened',async()=>{
+ const {personalFixture}=await import('./helpers/personal-fixture.js');const f=await personalFixture();try{
+  await f.store.run('INSERT INTO users(user_id) VALUES(101)');const user=await f.store.user(101);
+  await f.store.enqueue(user,'commands','old');await f.store.run("UPDATE jobs SET status='done'");
+  for(let i=0;i<5;i++)await f.store.enqueue(user,'commands',String(i));
+  await assert.rejects(f.store.enqueue(user,'commands','old'),/queue limit/);
+  assert.equal((await f.store.first("SELECT COUNT(*) n FROM jobs WHERE status='pending'")).n,5);
+ }finally{f.close();}
+});
+
 test('concurrent budget reservations cannot both cross the write ceiling',async()=>{
  const {personalFixture}=await import('./helpers/personal-fixture.js');const {PersonalStore}=await import('../src/personal/store.js');const f=await personalFixture();try{const now=new Date('2026-11-12T12:00:00Z');await f.store.run('INSERT INTO budgets(day,requests,rows_read,rows_written) VALUES(?,0,0,26700)','2026-11-12');const a=new PersonalStore(f.db),b=new PersonalStore(f.db);const results=await Promise.all([a.budget(now),b.budget(now)]);assert.equal(results.filter(r=>r.mode==='stopped').length,1);assert.equal((await f.store.first('SELECT rows_written FROM budgets')).rows_written,26900);}finally{f.close();}
 });

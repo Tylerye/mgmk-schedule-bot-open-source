@@ -61,7 +61,7 @@ After a restart the current card state is rendered and obsolete alerts are dropp
 
 The daily budget uses D1 `meta.rows_read`/`rows_written`, including index costs,
 plus a conservative accounting allowance. Saving mode defers background edits;
-stopped mode reserves room for manual operations. Targets are 30k personal Worker
+stopped mode also suspends manual operations; public traffic cannot consume the service reserve. Targets are 30k personal Worker
 invocations, 1M D1 reads and 30k D1 writes/day. They do not increase account quotas.
 Cloudflare's account metrics, not local test timing, establish actual capacity.
 The owner-only `/status` displays aggregate errors, lag, uncertain sends, `429`

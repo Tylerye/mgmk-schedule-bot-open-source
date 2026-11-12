@@ -5,7 +5,7 @@
   },
   {
     "path": ".env.example",
-    "sha256": "ca492c1c972c53a81b643a33e0c47619a86127d7fe670ee4b16d544c19d6ff31"
+    "sha256": "7b60a8ea86dedc795cad6a1b05e0d5e9f823c48f26b377fa26a7cb2992d58799"
   },
   {
     "path": ".github/workflows/parse-schedule.yml",
@@ -24,32 +24,88 @@
     "sha256": "77794e86392d5b833208650fd7ec6eade704ff2416bbebad203a34a99f0e37c1"
   },
   {
+    "path": "CONTRIBUTING.md",
+    "sha256": "2aa65b29c94ab5a6eecfb6f8130abca1a271e67eb8d6c04a7e22c9452399ec39"
+  },
+  {
+    "path": "DEPENDENCY_LICENSES.json",
+    "sha256": "80ed047dbf771df6eafa594fa3c4dc4c3fa17a5303063523ab11bbefa0e95ce1"
+  },
+  {
+    "path": "DEPLOYMENT.md",
+    "sha256": "0837efecdcbe803811a5fb45254666021e313bd8159960b6b1859e3d98818007"
+  },
+  {
+    "path": "Dockerfile",
+    "sha256": "c0e226309c4a358dbe5395782acdd80b1527b3cf232397dae14473785444cdd1"
+  },
+  {
+    "path": "LICENSE",
+    "sha256": "b2296dd135faee3ad9ce79e325d3184a0f165b229c5fd221453322bd673babf5"
+  },
+  {
+    "path": "OPEN_SOURCE.md",
+    "sha256": "c0fe2299c42d56b42c4f269da74ea7d56437c46d4dbf58395c386d2075086bc9"
+  },
+  {
+    "path": "PERSONAL.md",
+    "sha256": "de5c6119e96894b41502f519e6363244cd034c87e13240c3e61a56050c096e88"
+  },
+  {
+    "path": "README.md",
+    "sha256": "5777fb7785696d22f95ab457d6aa4ad38b3c7e36c6905e0c76b01d20ec4a7918"
+  },
+  {
+    "path": "RELEASE_MANIFEST.json",
+    "sha256": "5ce6f94ffa81543d2fde4d31d58158904084499f07294b9f6f83647d68640c0d"
+  },
+  {
+    "path": "SECURITY.md",
+    "sha256": "811e93f81ee35e9317db522c5cda931499c5d94ca04cffe273cfcc3ccad68299"
+  },
+  {
+    "path": "THIRD_PARTY_NOTICES.md",
+    "sha256": "d35c1e5c5cf57820dee8b2dcbdfdc7b583a7752bdb76469cbf1f0d1888dcdb03"
+  },
+  {
     "path": "cloudflare/attention-runtime.js",
-    "sha256": "9b1f6ced5ef1da39172669c1bd219e28f8f135b36270879093b3338433f4c8cb"
+    "sha256": "363ef7ebf8ee6f28c0a5b455a573de0c8336a09df0f7853065b0b1062ede66f9"
   },
   {
     "path": "cloudflare/d1-store.js",
     "sha256": "94bd419b3ccc5a33b1568d25a2025466b2a8cd975ef2883c177f4d29a82c3c42"
   },
   {
+    "path": "cloudflare/ingress-admission.js",
+    "sha256": "456096ccca5360f7e68e037486ff5fc3bce1cdf0df33e02d42a30def7ed6ba8f"
+  },
+  {
+    "path": "cloudflare/maintenance-auth.js",
+    "sha256": "a699f6c6c44bc69b2c9ed7d1afb362cf79a80c318d3583f10c8856868b398976"
+  },
+  {
     "path": "cloudflare/parser-results.js",
-    "sha256": "7e35031db570924531dc06c23bdde4211e317350b043c062ad16de600f8dcc1b"
+    "sha256": "9774406a0f811e936c8012fd2ed6a5057ea9a584ac856678219b83ce1a3ae598"
   },
   {
     "path": "cloudflare/personal-relay.js",
-    "sha256": "ec005240a0750175624f84abad684bbf056e3d44d85ce78b05f24d9d997324c6"
+    "sha256": "ef3ec7dbfc3aca7abf399a325bc8ac9a8758f8bbf486eb047d72bca98dac994f"
   },
   {
     "path": "cloudflare/request-json.js",
     "sha256": "6a5b28250d5de514834318a1082798761da5d4e704f3c233e19b6cf5fc419b3c"
   },
   {
+    "path": "cloudflare/result-schema.js",
+    "sha256": "ad1a03b782be5211fe2177557d241ac7dd8648424eb8580024a9fea8bf97fa5c"
+  },
+  {
     "path": "cloudflare/teachers.js",
-    "sha256": "a8e2f4e7d08db26046bd24f4018bbc000b32f564868f91eca81d323b89ef6c2f"
+    "sha256": "d74345c9b5b94437c58dfe83866c49dd9958f0a9eb89b46c738d521141763371"
   },
   {
     "path": "cloudflare/worker.js",
-    "sha256": "b10d44855e9192466271008189e8009623a2ecaeb807f825198f35e28d4fd7b9"
+    "sha256": "d7330b1ef60874a305c5703f544fbb2d3241a88f0513853ab27040cf80fb8167"
   },
   {
     "path": "compose.yaml",
@@ -64,28 +120,8 @@
     "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570"
   },
   {
-    "path": "CONTRIBUTING.md",
-    "sha256": "2aa65b29c94ab5a6eecfb6f8130abca1a271e67eb8d6c04a7e22c9452399ec39"
-  },
-  {
-    "path": "DEPENDENCY_LICENSES.json",
-    "sha256": "80ed047dbf771df6eafa594fa3c4dc4c3fa17a5303063523ab11bbefa0e95ce1"
-  },
-  {
     "path": "deploy/mgmk-schedule-bot.service",
     "sha256": "b74ec4cde491569ac78ae82c3fa43d63e4f5727454bdf8cf7ed141274b85e925"
-  },
-  {
-    "path": "DEPLOYMENT.md",
-    "sha256": "8b581a79a114b675d721be8b002a5338b92a4e80d533fcb4c4b614109a06ed59"
-  },
-  {
-    "path": "Dockerfile",
-    "sha256": "c0e226309c4a358dbe5395782acdd80b1527b3cf232397dae14473785444cdd1"
-  },
-  {
-    "path": "LICENSE",
-    "sha256": "b2296dd135faee3ad9ce79e325d3184a0f165b229c5fd221453322bd673babf5"
   },
   {
     "path": "migrations/0001_initial.sql",
@@ -120,8 +156,12 @@
     "sha256": "f4f5f7886e6989437bb47eceb63b6e81beae44f587cbe43782c47b084e51df16"
   },
   {
-    "path": "OPEN_SOURCE.md",
-    "sha256": "c0fe2299c42d56b42c4f269da74ea7d56437c46d4dbf58395c386d2075086bc9"
+    "path": "migrations/0009_security_limits.sql",
+    "sha256": "13dd2b2c2ca6301f44b95a94801e777059e7f3e4fd33e660bfb87cdd0a0e964a"
+  },
+  {
+    "path": "migrations/0010_security_accounting.sql",
+    "sha256": "364fb95726934568a63761623438f7dcab9f90dba9e4a818057a0bbee7849682"
   },
   {
     "path": "package-lock.json",
@@ -129,31 +169,31 @@
   },
   {
     "path": "package.json",
-    "sha256": "a8f56c10da4a2345a28d088ab45f02842ff365839dfc7017ed4b7c566095bc1b"
+    "sha256": "f22fdc772531414f6965d59c60228b435ed71391e074b002a526ec333c7ac4b6"
   },
   {
     "path": "personal/migrations/0001_personal.sql",
     "sha256": "12f8a88766d88043e095409b010978e3d64f391a5fa3ef0054de5212a617d821"
   },
   {
+    "path": "personal/migrations/0002_security_limits.sql",
+    "sha256": "79c8b17dade7a3674768cd04d1e9d9c2ed85d3583234bbcb5dace6aaa8816caf"
+  },
+  {
+    "path": "personal/migrations/0003_security_accounting.sql",
+    "sha256": "b7c9d658426b6288e1fbb68819656f0d0e81f24acde4506a4abc7ac9cb0c2a2b"
+  },
+  {
     "path": "personal/worker.js",
-    "sha256": "383c4e593064ff05da02aabfcbec60f252be5988aa502fb11a3096277ff1b177"
+    "sha256": "be59e86d52ebf9226faeb9c3390e5e4bf5fc743cc2f31e084e83e10a7ad21dc4"
   },
   {
-    "path": "PERSONAL.md",
-    "sha256": "6d9c77b180d9e22fc1d3b8db9f6a8519a12726858d00445932b1843290f2c0b4"
-  },
-  {
-    "path": "README.md",
-    "sha256": "5777fb7785696d22f95ab457d6aa4ad38b3c7e36c6905e0c76b01d20ec4a7918"
-  },
-  {
-    "path": "RELEASE_MANIFEST.json",
-    "sha256": "5ce6f94ffa81543d2fde4d31d58158904084499f07294b9f6f83647d68640c0d"
+    "path": "scripts/check-deployment-security.js",
+    "sha256": "2af62473117a5e16ee00e6aef5f03ea42bd749df42a170e5dc713910b90f00ea"
   },
   {
     "path": "scripts/check-repository-privacy.js",
-    "sha256": "4a19c7b5b5ec85adc1aaea56762ab621f78c7f11a65b11562188208b29af4fa7"
+    "sha256": "68c038b76d3be8e0836eb25445ef5d4bd2144e309eadfa6f49096e2830db03a5"
   },
   {
     "path": "scripts/configure-bot-commands.js",
@@ -161,11 +201,11 @@
   },
   {
     "path": "scripts/configure-telegram-webhook.js",
-    "sha256": "f5e59a08e7cfac2d8ca7164c3c107dfa83e6eaed257601ec9279428fcf9c4de7"
+    "sha256": "acfe8fabbfe0d687c356f936879ff4108a8f3e0e276ed6d44cf871b31f4468bd"
   },
   {
     "path": "scripts/import-cloudflare-state.js",
-    "sha256": "526690011c672718523adb783e639eac025c640800868543b8b106c86695d03c"
+    "sha256": "c6ee2210996e8712d49b4b38887a181c4f9176f2a8eaffca4ba4e0eb5ff9df86"
   },
   {
     "path": "scripts/inspect-pdf.js",
@@ -189,11 +229,7 @@
   },
   {
     "path": "scripts/worker-request.js",
-    "sha256": "e96870885b9a0149130b7c116162963c8363f92358b3b77a489061ea513f57e3"
-  },
-  {
-    "path": "SECURITY.md",
-    "sha256": "811e93f81ee35e9317db522c5cda931499c5d94ca04cffe273cfcc3ccad68299"
+    "sha256": "f45758657c1e9430c1c2bf0f49642fce24fa6bb03e8d7a02b689aa7e13824bab"
   },
   {
     "path": "src/acknowledgements.js",
@@ -205,7 +241,7 @@
   },
   {
     "path": "src/attention.js",
-    "sha256": "671b2720cefa900de5c5e22a8f72f0e5f51acb6eab13d95aabb26abe63394e62"
+    "sha256": "24be4508223047b9c3e429383368120516c294495b721257fe4b1245e97df9c4"
   },
   {
     "path": "src/bot-commands.js",
@@ -213,7 +249,11 @@
   },
   {
     "path": "src/config.js",
-    "sha256": "d3c6b22cb073ee471277cd25be8388c839948c46c85a2026ac1d7a2b737fcf84"
+    "sha256": "8009bf830d0523fb4fe2dfabd98b663e9d4fc6209ee511548e2e6f158cf39897"
+  },
+  {
+    "path": "src/credential-origin.js",
+    "sha256": "b297587c96ba42aeb5c2176f3ebf6bd9a48d51d9d3f2325628598bad2fad957b"
   },
   {
     "path": "src/dates.js",
@@ -248,8 +288,16 @@
     "sha256": "bf5ed732d088914b913457a8830c4402d08769cd3d2c0d17ae06ecab09e37859"
   },
   {
+    "path": "src/pdf/extract-child.js",
+    "sha256": "279be7428ca015828e7f10f991adec21f1a44cf9f2fe0067cee342e86934070c"
+  },
+  {
+    "path": "src/pdf/extract-inprocess.js",
+    "sha256": "21602890c01926f4a53e9b0af1dd840eb64f07ebe21723d38134a97412fb0e48"
+  },
+  {
     "path": "src/pdf/extract.js",
-    "sha256": "dcda4afd93a1ee7ad4e7945c2726061c20e3051b70783a35cbf3eadd1a2fe617"
+    "sha256": "97947d6b95c632248f8870c4ace191bfd5e4df7f66de1bffed05a4513bb7af3e"
   },
   {
     "path": "src/personal/catalog.js",
@@ -257,11 +305,11 @@
   },
   {
     "path": "src/personal/delivery.js",
-    "sha256": "29bf4c33a311f8e91fab84764b59e1149f329a6ed12541ba849cc54db925a3ce"
+    "sha256": "ecda0edab06d819d33ec3fb2706fcc07de8258bcc43bd13f5a5849515ec393f3"
   },
   {
     "path": "src/personal/inbox.js",
-    "sha256": "73427603cf91a81c0769c8ce9675ab10a0550af9a77470a3653ebc5fc4c14036"
+    "sha256": "63932fe5227d5b6371436e07230a405801ac4b59a54d19eed42100d57d47e5be"
   },
   {
     "path": "src/personal/ingest.js",
@@ -272,8 +320,12 @@
     "sha256": "4e15c7d0da0bf973cd8dbe5b7956db903e69bb6a31e79b77e9b7cb840dc0fe01"
   },
   {
+    "path": "src/personal/retention.js",
+    "sha256": "bd41ac6e4bb4018060f8209e6858f63e54f33b53631a7de1c5544f88b3075adb"
+  },
+  {
     "path": "src/personal/store.js",
-    "sha256": "6ac0b1bce9ce38ce5c4e22c8de0e7bab4261a6e5e60b94f596b6e861a81e4f76"
+    "sha256": "49a06c184589f44a7b456f40311b36375293f8b6f76ddbf64c92236dc940f1d6"
   },
   {
     "path": "src/personal/update.js",
@@ -340,12 +392,16 @@
     "sha256": "491ba95e28a2b2838f23d7b690244e3d1f0d6e71372e1a27a7ecce77f2788dfc"
   },
   {
+    "path": "src/source/bounded.js",
+    "sha256": "17a40a0718786a1cb0af0b3a81ee244fa1106385bf2008aa1641d3eb54d4129b"
+  },
+  {
     "path": "src/source/drive.js",
-    "sha256": "12bdff34195aa7a775e3d8fe3a75eee9a65eaff7369e01392d11fdeaab82637e"
+    "sha256": "373b6047d6dfabe89debd921083252b6895164d3f070f93367170aac1c657890"
   },
   {
     "path": "src/source/teacher-drive.js",
-    "sha256": "14748419ac3f213770ee838177f02b85fffc897f511eba08ed6489b6fe5c511f"
+    "sha256": "ecd773feb2eec73380b2f517d99577af6eb23f823b94552ab474a40fa7aa8bbd"
   },
   {
     "path": "src/state-shape.js",
@@ -361,19 +417,19 @@
   },
   {
     "path": "src/telegram.js",
-    "sha256": "46e9e89b4ac1af30c8501800bd85eaff68983910f498a331e1a4b7a7af3c2606"
+    "sha256": "f80fa5d6888ff2db7fa515569e6356ac4ee9afde17724de088734fe316b78298"
   },
   {
     "path": "tests/acknowledgements.test.js",
-    "sha256": "da42a4b9f6143a5b138f71c3c9201f5c33641b741e5a5e58c46373aaf30eb22f"
+    "sha256": "157d59bd225216ceb591ae2eb8bc00ffa3f2d767c6b0bf4bef1931c379b5081b"
   },
   {
     "path": "tests/attention-worker.test.js",
-    "sha256": "db5e495a2eff358d3c460af2bd3db1ed79b606856d6a7482a403a5e378ecc338"
+    "sha256": "98203841d6b6742076a0d3975d48c093601627f70bc0024b7c0e2cabbbbb283d"
   },
   {
     "path": "tests/attention.test.js",
-    "sha256": "4ab563b51bd8c62d51164431ddd766b6afa0980e2bc3eeeafb35f1f23facc9d1"
+    "sha256": "210d8157a05e094f8b58d3a1b85946549947a9e8c9705986fcf27432e2b133b9"
   },
   {
     "path": "tests/bot-commands.test.js",
@@ -385,11 +441,11 @@
   },
   {
     "path": "tests/cloudflare-inbox.test.js",
-    "sha256": "1c72b7b24661c38bdee4fdc017304c70f960ba915382ba1c179c5676cd889494"
+    "sha256": "b66b03b8884b443d837a5277131aecf20b5ea467e4623c9d8c996397737eccad"
   },
   {
     "path": "tests/cloudflare-maintenance-runtime.test.js",
-    "sha256": "16677eb04e8f6f627b86babec7cc83e00c3e52a7f244709923d0d85a3cf9eb7e"
+    "sha256": "06dc89e3de935c0672fa7facfc423ef3f306e8066e0a5f379607403c5f1361eb"
   },
   {
     "path": "tests/dates.test.js",
@@ -405,7 +461,7 @@
   },
   {
     "path": "tests/event-reminders.test.js",
-    "sha256": "4f93edbd080a5910c6e7bf3dd91e4b50b0e5511e755164873221b4df82685804"
+    "sha256": "6ee1ae3a00b47e1a2187e931994f1afb4612f04e672d391ca1bb64830f452816"
   },
   {
     "path": "tests/format.test.js",
@@ -421,7 +477,7 @@
   },
   {
     "path": "tests/helpers/personal-fixture.js",
-    "sha256": "18f45d10aa6a33a517117f6f522b7970eb0dc677b66b00c1d98efd9d119f3e35"
+    "sha256": "dbf37439a7cf913261dc08247c6e5b3b949b2f50fc6edb63b0de2abea7b758b7"
   },
   {
     "path": "tests/live-format.test.js",
@@ -433,7 +489,7 @@
   },
   {
     "path": "tests/monitor.test.js",
-    "sha256": "960032e976113e98d339e033060fbf9879a16073d630229814acd01c18643676"
+    "sha256": "d205b42e403e825b0f68d116421e6c24aa1d9cc69c9bf136359fdf4573a7a462"
   },
   {
     "path": "tests/next.test.js",
@@ -445,7 +501,7 @@
   },
   {
     "path": "tests/parser-results.test.js",
-    "sha256": "56c55c696079e0bd589809a1604c456c80feb58dacd94c0667001c6737717ace"
+    "sha256": "7fef7c5efd0e7dfbee204958db4c97bf3c3622d56be1dba0287006a4969f26ac"
   },
   {
     "path": "tests/personal-navigation.test.js",
@@ -461,7 +517,7 @@
   },
   {
     "path": "tests/personal-runtime.test.js",
-    "sha256": "3395a1f71605475cd1a38adc6274b32869ff07db761249b33f300b7ceaab7c63"
+    "sha256": "228395639d80d30a71c626559cd4439e57ab0cf3e10f68584ebac7917f6c1422"
   },
   {
     "path": "tests/personal-upload.test.js",
@@ -473,11 +529,11 @@
   },
   {
     "path": "tests/personal-workerd.test.js",
-    "sha256": "62e39c79e2b1f25c5ca2c93cf27d7e85226dbdeffda816e6d0a8b9cd2013c776"
+    "sha256": "6bcd95e5925a65947d9caffcd0709dfff5fb8dace683b6744bbef5b2789c7e92"
   },
   {
     "path": "tests/private-pages.test.js",
-    "sha256": "a9c4c53c543a25d55dd5a980531bfb0503374f73ef322dee15fc42c00ad30660"
+    "sha256": "e8343bfc4ae6ced2ea4754b2ef399580e79952adcf18f5c15d2e83fcac5ff040"
   },
   {
     "path": "tests/reapply-bells.test.js",
@@ -485,19 +541,23 @@
   },
   {
     "path": "tests/reconcile.test.js",
-    "sha256": "f7b6c827b64eafceb42c350397821ccbd19044dee2b252798af0f494ee2d8307"
+    "sha256": "db8275e9f2c45cc1abfa83b66223b636cc625cf8ab4241f4f6c3809c672a210d"
   },
   {
     "path": "tests/recruitments.test.js",
-    "sha256": "63d500083b223174879855633422980ae34f805c87981cb28a6ede4ab06c4453"
+    "sha256": "40417f542ef61d4d958b4467040e11fb5ec6bcbb6d12dfe66f3bf042d6674325"
   },
   {
     "path": "tests/runtime.test.js",
     "sha256": "2a7c07a49d1c246e312a83ac6ed89c350d0203b2df4ecae3d743d9086ace96b9"
   },
   {
+    "path": "tests/security-remediation.test.js",
+    "sha256": "a7fa3919b88613e67420d89f96a71317b7993dd7b4f794c2df03109079968004"
+  },
+  {
     "path": "tests/security.test.js",
-    "sha256": "771e61fc0b55c86e8fcbc3373e37cc85e28e438e229a084c6f9d84d8b74be7f5"
+    "sha256": "a5acec515fe3223555ec4aabad85e8e7d25a034731be379ac20658d55f52fb5f"
   },
   {
     "path": "tests/state.test.js",
@@ -505,11 +565,11 @@
   },
   {
     "path": "tests/teachers-runtime.test.js",
-    "sha256": "f3e7d6c218e81e6efdf3460ef9a14fdd17dcf51d0d5a9e341568f7c9df44ae77"
+    "sha256": "5c522cf6dfd0dff435333c3408c7cc9a5a5d0c15f87312d8b29c878ef3c30c02"
   },
   {
     "path": "tests/telegram.test.js",
-    "sha256": "fc82f339aeb66543d9ac4abd4e2adb9133574001be97dad94e382d6eb4e2f3a8"
+    "sha256": "ae7082157cf37403097c8359bf510c249c1c2927390bc7ba69486264e29ccf5e"
   },
   {
     "path": "tests/timeline.test.js",
@@ -517,19 +577,15 @@
   },
   {
     "path": "tests/worker-request.test.js",
-    "sha256": "91f23d4d7607f26af255ea75c3a4c3239b5a9f77a14e1b3573407dc496ca15ec"
+    "sha256": "8c5adb9a13e7f07f8f5fcec7c71d32f1bed6bc60795193b4c6478e26cd388d56"
   },
   {
     "path": "tests/worker-resilience.test.js",
-    "sha256": "367383f3e9ae22b1e3c6e46b70d51884520afcc0fc47ea892b78f71d7cdb2ce4"
-  },
-  {
-    "path": "THIRD_PARTY_NOTICES.md",
-    "sha256": "d35c1e5c5cf57820dee8b2dcbdfdc7b583a7752bdb76469cbf1f0d1888dcdb03"
+    "sha256": "f3f5035a1c9e097ac3e42c95710b2767837c82c7a63a38ba2e54a67a6e72e77e"
   },
   {
     "path": "wrangler.example.jsonc",
-    "sha256": "5dce1ae6dbcfc24a0cb5f4b41a93c923781f583f8f5878d28d0c3b0392ac4c48"
+    "sha256": "0979bee81b8eda24b6003d7bf75b284c6f130fd5864832e4ba2d16b9b7bf331a"
   },
   {
     "path": "wrangler.personal.example.jsonc",

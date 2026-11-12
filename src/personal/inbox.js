@@ -4,13 +4,16 @@ import { t, menu, button, supportKeyboard, settingsKeyboard, groupsKeyboard, ini
 export { collectPersonalUpdate } from "./update.js";
 
 export async function enqueuePersonalUpdate(store, update, now = Date.now()) {
-  const count=await store.first("SELECT (SELECT COUNT(*) FROM inbox WHERE status='pending') total,(SELECT COUNT(*) FROM inbox WHERE status='pending' AND user_id=?) own,(SELECT COUNT(*) FROM inbox) records",update.userId);
+  if (await store.first("SELECT 1 FROM inbox WHERE update_id=?", update.update_id)) return false;
+  const count=await store.first("SELECT (SELECT COUNT(*) FROM (SELECT 1 FROM inbox WHERE status='pending' LIMIT 500)) total,(SELECT COUNT(*) FROM (SELECT 1 FROM inbox WHERE status='pending' AND user_id=? LIMIT 5)) own,(SELECT rows FROM security_storage_counts WHERE name='inbox') records",update.userId);
   if(count.total>=500 || count.own>=5 || count.records>=100000) return false;
-  await store.run("INSERT OR IGNORE INTO inbox(update_id,user_id,payload,received_at) VALUES(?,?,?,?)", update.update_id, update.userId, JSON.stringify(update), now);
+  const inserted = await store.run("INSERT OR IGNORE INTO inbox(update_id,user_id,payload,received_at) VALUES(?,?,?,?)", update.update_id, update.userId, JSON.stringify(update), now);
+  return Number(inserted.meta?.changes ?? 0) === 1;
 }
 
 export async function processPersonalInbox(store, row, now = new Date()) {
   const update = JSON.parse(row.payload);
+  const job = (user, kind, date, options = {}) => store.jobStatement(user, kind, date, { due: now.getTime(), ...options });
   return store.lock(row.user_id, now.getTime(), async () => {
     const fresh = await store.first("SELECT status FROM inbox WHERE update_id=?", row.update_id);
     if (fresh?.status !== "pending") return;
@@ -28,7 +31,7 @@ export async function processPersonalInbox(store, row, now = new Date()) {
     } else if (action.startsWith("lang:")) {
       user.language = action.split(":")[1]; user.epoch++; user.screen = user.group_id ? "menu" : "groups";
       reply(user.group_id ? t(user).menu : t(user).choose, user.group_id ? menu(user) : groupsKeyboard(groups, user));
-      if (user.group_id) for (const s of initialDates(await store.schedules(user.group_id), now)) jobs.push(store.jobStatement(user, "card", s.date, { priority: 0, payload: { manual: true } }));
+      if (user.group_id) for (const s of initialDates(await store.schedules(user.group_id), now)) jobs.push(job(user, "card", s.date, { priority: 0, payload: { manual: true } }));
     } else if (action.startsWith("groups:") || action.startsWith("search:")) {
       user.screen = "groups";
       const matches = action.startsWith("search:") ? findGroups(groups, action.slice(7)) : groups;
@@ -43,7 +46,7 @@ export async function processPersonalInbox(store, row, now = new Date()) {
         if (!user.support_seen) { reply(t(user).supportText, supportKeyboard(user)); user.support_seen = 1; }
         const schedules = initialDates(await store.schedules(user.group_id), now);
         if (!schedules.length) reply(t(user).missing);
-        for (const s of schedules) jobs.push(store.jobStatement(user, "card", s.date, { priority: 0, payload: { manual: true } }));
+        for (const s of schedules) jobs.push(job(user, "card", s.date, { priority: 0, payload: { manual: true } }));
       }
     } else if (action === "pause") { user.paused = 1; user.next_due = null; reply(t(user).settingsText, settingsKeyboard(user));
     } else if (action.startsWith("toggle:")) {
@@ -51,14 +54,14 @@ export async function processPersonalInbox(store, row, now = new Date()) {
       if (key === 'auto_pin') {
         jobs.push(["INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", 'auto-pin:'+user.user_id, JSON.stringify(Boolean(user.auto_pin))]);
         if (!user.auto_pin && user.pin_message_id) {
-          jobs.push(store.jobStatement(user,'unpin',String(user.pin_message_id),{priority:0,payload:{messageId:user.pin_message_id,manual:true}}));
+          jobs.push(job(user,'unpin',String(user.pin_message_id),{priority:0,payload:{messageId:user.pin_message_id,manual:true}}));
           jobs.push(["UPDATE users SET pin_message_id=NULL,pin_date=NULL WHERE user_id=?",user.user_id]);
           user.pin_date=null;
-        } else if(user.auto_pin) { jobs.push(["UPDATE jobs SET status='superseded' WHERE user_id=? AND kind='unpin' AND status='pending'",user.user_id]); jobs.push(store.jobStatement(user,'pin','',{priority:1})); }
+        } else if(user.auto_pin) { jobs.push(["UPDATE jobs SET status='superseded' WHERE user_id=? AND kind='unpin' AND status='pending'",user.user_id]); jobs.push(job(user,'pin','',{priority:1})); }
       }
       if (key === "paused") {
         user.epoch++; user.next_due = null;
-        if (!user.paused && user.group_id) for (const s of initialDates(await store.schedules(user.group_id), now)) jobs.push(store.jobStatement(user, "card", s.date));
+        if (!user.paused && user.group_id) for (const s of initialDates(await store.schedules(user.group_id), now)) jobs.push(job(user, "card", s.date));
       }
       reply(t(user).settings, settingsKeyboard(user));
     } else if (action === "settings") reply(t(user).settings, settingsKeyboard(user));
@@ -69,13 +72,13 @@ export async function processPersonalInbox(store, row, now = new Date()) {
     else if (action === "later") reply(t(user).closed, menu(user), update.messageId);
     else if (action === "diagnostics") {
       // Owner-only route is also checked by the Worker. Aggregates, no users.
-      jobs.push(store.jobStatement(user, "diagnostics", String(row.update_id), { priority: 0, payload: { manual: true } }));
+      jobs.push(job(user, "diagnostics", String(row.update_id), { priority: 0, payload: { manual: true } }));
     } else if (action.startsWith("view:")) {
       const [, date, mode] = action.split(":");
       const card = user.group_id && await store.card(user, date);
       if (card?.parts[0]?.id === update.messageId) {
         jobs.push(["UPDATE cards SET mode=? WHERE user_id=? AND group_id=? AND date=?", mode, user.user_id, user.group_id, date]);
-        jobs.push(store.jobStatement(user, "card", date, { priority: 0, payload: { manual: true, history: true } }));
+        jobs.push(job(user, "card", date, { priority: 0, payload: { manual: true, history: true } }));
       }
     } else if (["today", "tomorrow", "next", "schedule"].includes(action) || action.startsWith("preview:")) {
       if (!user.group_id) reply(t(user).choose, groupsKeyboard(groups, user));
@@ -94,13 +97,13 @@ export async function processPersonalInbox(store, row, now = new Date()) {
     // Returning from a block re-enables delivery, but pause remains a choice.
     user.blocked = 0;
     if (update.action.startsWith("lang:")) {
-      for (const languageCode of ["", "ru", "en"]) jobs.push(store.jobStatement(user, "commands", languageCode, { priority: 5, payload: { manual: true } }));
+      for (const languageCode of ["", "ru", "en"]) jobs.push(job(user, "commands", languageCode, { priority: 5, payload: { manual: true } }));
     }
     if (update.action === "start" && user.group_id) {
-      for (const s of initialDates(await store.schedules(user.group_id), now)) jobs.push(store.jobStatement(user, "card", s.date, { priority: 0, payload: { manual: true } }));
+      for (const s of initialDates(await store.schedules(user.group_id), now)) jobs.push(job(user, "card", s.date, { priority: 0, payload: { manual: true } }));
     }
-    for (const [index, payload] of replies.entries()) jobs.push(store.jobStatement(user, "reply", payload.editId ? "screen" : `${row.update_id}:${index}`, { priority: -2, payload: { ...payload, manual: true } }));
-    if (update.callbackId && !update.acknowledged) jobs.unshift(store.jobStatement(user, "callback", String(row.update_id), { priority: -1, payload: { callbackId: update.callbackId, manual: true } }));
+    for (const [index, payload] of replies.entries()) jobs.push(job(user, "reply", payload.editId ? "screen" : `${row.update_id}:${index}`, { priority: -2, payload: { ...payload, manual: true } }));
+    if (update.callbackId && !update.acknowledged) jobs.unshift(job(user, "callback", String(row.update_id), { priority: -3, payload: { callbackId: update.callbackId, manual: true } }));
     const keys = ["language", "group_id", "epoch", "screen", "sound", "changes", "pin", "paused", "blocked", "support_seen", "pin_date", "next_due"];
     await store.batch([[`UPDATE users SET ${keys.map(k => `${k}=?`).join(",")} WHERE user_id=?`, ...keys.map(k => user[k]), user.user_id], ...jobs,
       ["UPDATE inbox SET status='done',payload='{}' WHERE update_id=?", row.update_id]]);
