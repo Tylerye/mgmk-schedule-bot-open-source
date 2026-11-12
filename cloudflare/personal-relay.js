@@ -28,7 +28,7 @@ export async function relayPersonalSource(request, env, pathname) {
     if (request.method !== "POST" || env.PERSONAL_ENABLED !== "true" || !env.PERSONAL_SHARED_SECRET
       || request.headers.get("authorization") !== `Bearer ${env.PERSONAL_SHARED_SECRET}`) return new Response(null, { status: 403 });
     const response = await fetch(`https://api.github.com/repos/${env.GITHUB_REPOSITORY}/actions/workflows/sync-personal.yml/dispatches`, {
-      method: "POST", headers: { authorization: `Bearer ${env.GITHUB_ACTIONS_TOKEN}`, accept: "application/vnd.github+json", "content-type": "application/json", "user-agent": "mgmk-personal-recovery" },
+      method: "POST", redirect:"manual", headers: { authorization: `Bearer ${env.GITHUB_ACTIONS_TOKEN}`, accept: "application/vnd.github+json", "content-type": "application/json", "user-agent": "mgmk-personal-recovery" },
       body: JSON.stringify({ ref: env.GITHUB_REF || "main" }), signal: AbortSignal.timeout(10000),
     });
     return new Response(JSON.stringify({ ok: response.status === 204 }), { status: response.status === 204 ? 200 : 503 });

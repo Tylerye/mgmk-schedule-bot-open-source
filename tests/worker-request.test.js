@@ -7,7 +7,7 @@ test("parser result retries a transient D1 lock without changing the request", a
   const calls = [];
   const delays = [];
   const request = createWorkerRequester({
-    baseUrl: "https://worker.example",
+    baseUrl: "https://worker.audit-fixture.net",
     sharedSecret: "secret",
     fetchImpl: async (url, options) => {
       calls.push({ url, options });
@@ -25,7 +25,7 @@ test("parser result retries a transient D1 lock without changing the request", a
 test("parser result does not retry permanent failures", async () => {
   let calls = 0;
   const request = createWorkerRequester({
-    baseUrl: "https://worker.example",
+    baseUrl: "https://worker.audit-fixture.net",
     sharedSecret: "secret",
     fetchImpl: async () => { calls++; return { status: 403, ok: false }; },
     sleep: async () => assert.fail("must not sleep"),
@@ -37,7 +37,7 @@ test("parser result does not retry permanent failures", async () => {
 test("durable result submission retries temporary network and gateway failures", async () => {
   let calls = 0;
   const request = createWorkerRequester({
-    baseUrl: "https://worker.example", sharedSecret: "secret", sleep: async () => {},
+    baseUrl: "https://worker.audit-fixture.net", sharedSecret: "secret", sleep: async () => {},
     fetchImpl: async () => {
       calls++;
       if (calls === 1) throw new Error("connection reset");
@@ -48,3 +48,15 @@ test("durable result submission retries temporary network and gateway failures",
   assert.equal((await request("/internal/jobs/job/result", {}, { retryBusy: true })).queued, true);
   assert.equal(calls, 3);
 });
+
+ test('credential requests reject unsafe origins before network activity', () => {
+  for(const baseUrl of ['http://worker.audit-fixture.net','https://localhost','https://127.0.0.1','https://[::1]','https://worker.example','https://worker.audit-fixture.net/path','https://user:pass@worker.audit-fixture.net','https://worker.audit-fixture.net/?x=1']) {
+   assert.throws(()=>createWorkerRequester({baseUrl,sharedSecret:'dummy',fetchImpl:()=>assert.fail('network')}));
+  }
+ });
+ test('credential requests cannot follow redirects or escape internal paths',async()=>{
+  let calls=0;const r=createWorkerRequester({baseUrl:'https://worker.audit-fixture.net',sharedSecret:'dummy',fetchImpl:async(u,o)=>{calls++;assert.equal(o.redirect,'error');return {ok:true,json:async()=>({})};}});
+  await assert.rejects(r('//foreign.net'));
+  await r('/internal/jobs/job/result',{redirect:'follow'});
+  assert.equal(calls,1);
+ });

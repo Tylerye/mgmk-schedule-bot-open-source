@@ -20,9 +20,9 @@ test("workerd isolates D1 and authenticated service bindings; staged data is inv
     const oldDb = await mf.getD1Database("DB", "legacy"), newDb = await mf.getD1Database("DB", "personal");
     for (const file of await readdir("migrations")) {
       if (!file.endsWith(".sql")) continue;
-      for (const sql of (await readFile(`migrations/${file}`, "utf8")).replace(/--[^\n]*/gu, "").split(";").filter(s => s.trim())) await oldDb.prepare(sql).run();
+      for (const sql of (await readFile(`migrations/${file}`, "utf8")).replace(/--[^\n]*/gu, "").replace(/;\s*END;/gi,'__TRIGGER_END__;').split(';').map(s=>s.replaceAll('__TRIGGER_END__','; END;')).filter(s => s.trim())) await oldDb.prepare(sql).run();
     }
-    for (const sql of (await readFile("personal/migrations/0001_personal.sql", "utf8")).replace(/--[^\n]*/gu, "").split(";").filter(s => s.trim())) await newDb.prepare(sql).run();
+    for (const sql of (await readFile("personal/migrations/0001_personal.sql", "utf8")).replace(/--[^\n]*/gu, "").replace(/;\s*END;/gi,'__TRIGGER_END__;').split(';').map(s=>s.replaceAll('__TRIGGER_END__','; END;')).filter(s => s.trim())) await newDb.prepare(sql).run();
     const original = structuredClone(EMPTY_STATE); original.chatId = "-300"; original.pinnedSchedule = { date: "2026-11-12", messageId: 999, chatId: "-300" };
     const snapshot = JSON.stringify(original);
     await oldDb.prepare("INSERT INTO app_state VALUES(1,?,?)").bind(snapshot, new Date().toISOString()).run();

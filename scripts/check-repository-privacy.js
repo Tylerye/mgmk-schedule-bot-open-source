@@ -20,6 +20,7 @@ const secrets = [
   ["private key", /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/],
 ];
 let failed = false;
+const publicMode=process.argv.includes('--public');
 for (const file of files) {
   if (file !== ".env.example" && forbidden.test(file)) {
     console.error(`Private file must not be tracked: ${file}`);
@@ -27,6 +28,8 @@ for (const file of files) {
   }
   if (!existsSync(file)) continue;
   const content = readFileSync(file).toString("utf8");
+  if(publicMode && /^(src|cloudflare|personal)\//.test(file) && /(?:userId|CURATOR_USER_ID)\s*[:=]\s*["']?[1-9]\d{5,}/.test(content)) {console.error('Numeric privilege binding must not be embedded in public runtime: '+file);failed=true;}
+  if(/^(src|cloudflare|personal)\//.test(file) && /(?:PARSER_SHARED_SECRET|HEALTH_READ_SECRET|MAINTENANCE_SIGNING_SECRET|PERSONAL_SHARED_SECRET)\s*[:=]\s*["'][A-Za-z0-9_-]{24,}["']/.test(content)){console.error('Possible embedded credential: '+file+'; value omitted');failed=true;}
   for (const [kind, pattern] of secrets) if (pattern.test(content)) {
     console.error(`Possible ${kind} in ${file}; value omitted`);
     failed = true;

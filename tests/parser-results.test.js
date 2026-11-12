@@ -35,7 +35,7 @@ test("parser HTTP result is durable during lock contention, applies once and rej
     store.state.schedules["2026-10-02"] = { messageId: 55, messageChatId: "-1001" };
     await store.save();
     await db.prepare("INSERT INTO runtime_locks VALUES ('state', 'other', ?)").bind(Date.now() + 60000).run();
-    const payload = { document: { id: "source" }, schedule: { date: "2026-10-02", hash: "new-hash", lessons: [] } };
+    const payload = { document: { id: "source" }, schedule: { date: "2026-10-02", hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", lessons: [] } };
     const post = (body) => worker.fetch(new Request("https://worker.example/internal/jobs/new/result", {
       method: "POST", headers: { authorization: "Bearer secret", "content-type": "application/json" }, body: JSON.stringify(body),
     }), { DB: db, PARSER_SHARED_SECRET: "secret" }, { waitUntil(promise) { pending.push(promise); } });
@@ -51,15 +51,15 @@ test("parser HTTP result is durable during lock contention, applies once and rej
     await db.prepare("UPDATE runtime_locks SET locked_until=0").run();
     assert.equal((await drainParserResults(db)).value, 1);
     const state = await new D1StateStore(db).load();
-    assert.equal(state.schedules["2026-10-02"].scheduleHash, "new-hash");
+    assert.equal(state.schedules["2026-10-02"].scheduleHash, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     assert.equal(state.schedules["2026-10-02"].messageId, 55);
     assert.equal((await db.prepare("SELECT status FROM parse_jobs WHERE id='new'").first()).status, "complete");
     assert.equal((await post(payload)).status, 200);
     assert.equal((await drainParserResults(db)).value, 0);
     const oldJob = await db.prepare("SELECT * FROM parse_jobs WHERE id='old'").first();
-    await queueParserResult(db, oldJob, { ...payload, schedule: { ...payload.schedule, hash: "old-hash" } });
+    await queueParserResult(db, oldJob, { ...payload, schedule: { ...payload.schedule, hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } });
     await drainParserResults(db);
-    assert.equal((await new D1StateStore(db).load()).schedules["2026-10-02"].scheduleHash, "new-hash");
+    assert.equal((await new D1StateStore(db).load()).schedules["2026-10-02"].scheduleHash, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
   } finally { await Promise.all(pending); sqlite.close(); }
 });
 

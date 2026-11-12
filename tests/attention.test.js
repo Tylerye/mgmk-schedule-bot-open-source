@@ -2,10 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFile } from "node:fs/promises";
-import { AttentionStore, collectAttentionUpdate, processAttentionUpdate, recoverAttention, mentionChunks, CURATOR_USER_ID, authorizedAnnouncer } from "../src/attention.js";
+import { AttentionStore, collectAttentionUpdate, processAttentionUpdate, recoverAttention, mentionChunks, authorizedAnnouncer } from "../src/attention.js";
+const CURATOR_USER_ID="900000002";
 import { sqliteAdapter } from "../src/attention-local.js";
 
-const config = { adminUserId: "42" };
+const config = { curatorUserId: "900000002", adminUserId: "42" };
 const chat = { id: -1001, type: "supergroup" };
 const owner = { id: 42, first_name: "Owner", is_bot: false };
 const now = Date.now();
@@ -172,7 +173,7 @@ test("announcer permissions fail closed with missing config and malformed IDs", 
     assert.equal(authorizedAnnouncer(id, {}), false);
   }
   assert.equal(authorizedAnnouncer("42", config), true);
-  assert.equal(authorizedAnnouncer(CURATOR_USER_ID, {}), true);
+  assert.equal(authorizedAnnouncer(CURATOR_USER_ID, {curatorUserId:CURATOR_USER_ID}), true);
 });
 
 test("registration is bound to original button and malformed callback data is ignored", async () => {

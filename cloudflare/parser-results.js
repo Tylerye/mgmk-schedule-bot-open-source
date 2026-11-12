@@ -1,8 +1,9 @@
+import {validGroupResult} from "./result-schema.js";
 import { D1StateStore, withStateLock } from "./d1-store.js";
 
 // Receiving a parsed PDF must never wait for Telegram or the global state lease.
 export async function queueParserResult(database, job, payload) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload) || !payload.schedule
+  if (!validGroupResult(payload?.schedule) || !payload || typeof payload !== "object" || Array.isArray(payload) || !payload.schedule
     || payload.schedule.date !== job.schedule_date || payload.document?.id !== job.source_id
     || !Array.isArray(payload.schedule.lessons) || payload.schedule.lessons.length > 64
     || (payload.schedule.timeline !== undefined && (!Array.isArray(payload.schedule.timeline) || payload.schedule.timeline.length > 128))) {

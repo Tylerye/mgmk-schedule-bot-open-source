@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFile } from 'node:fs/promises';
 import { sqliteAdapter } from '../src/attention-local.js';
-import { AttentionStore, collectAttentionUpdate, processAttentionUpdate, CURATOR_USER_ID } from '../src/attention.js';
+import { AttentionStore, collectAttentionUpdate, processAttentionUpdate} from '../src/attention.js';
+const CURATOR_USER_ID="900000002";
 import { parseReminderArgument, deliverEventReminder, recoverEventReminders } from '../src/event-reminders.js';
 import { TelegramApiError, TelegramClient } from '../src/telegram.js';
 import { runReminderLoop } from '../src/runtime.js';
@@ -12,7 +13,7 @@ const now = Date.parse('2026-10-03T04:00:00Z'); // 07:00 Minsk
 const due = now + 60 * 60_000;
 const chat = { id: -1001, type: 'supergroup' };
 const owner = { id: 42, first_name: 'Owner' };
-const config = { adminUserId: '42' };
+const config = { curatorUserId: "900000002", adminUserId: '42' };
 async function fixture() {
   const db = new DatabaseSync(':memory:');
   for (const name of ['0004_attention.sql', '0005_acknowledgements.sql', '0006_recruitments.sql', '0007_event_reminders.sql']) db.exec(await readFile(`migrations/${name}`, 'utf8'));

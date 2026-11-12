@@ -6,7 +6,7 @@ import { AttentionStore, authorizedAnnouncer, collectAttentionUpdate } from "../
 import { sqliteAdapter } from "../src/attention-local.js";
 import { announcementLink, openPrivatePages, processPrivatePage } from "../src/private-pages.js";
 
-const now = Date.now(), chatId = "-100900000003", config = { adminUserId: "42" };
+const now = Date.now(), chatId = "-100900000003", config = { curatorUserId:"900000002", adminUserId: "42" };
 async function fixture() {
   const db = new DatabaseSync(":memory:");
   db.exec(await readFile("migrations/0004_attention.sql", "utf8"));

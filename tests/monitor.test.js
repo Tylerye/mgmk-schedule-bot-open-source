@@ -10,7 +10,7 @@ const candidate = {
   contentLength: 100,
   etag: "v1",
 };
-const config = {
+const config = { curatorUserId: "900000002",
   timezone: "Europe/Minsk",
   lookaheadDays: 5,
   groupName: "8Са",

@@ -71,7 +71,7 @@ test("webhook commands bypass busy state lease without duplicate replies or over
     await db.prepare("INSERT INTO runtime_locks VALUES ('state', 'other', ?)").bind(Date.now() + 60000).run();
     const send = (secret, update) => worker.fetch(new Request("http://localhost/telegram/webhook", {
       method: "POST", headers: { "content-type": "application/json", "x-telegram-bot-api-secret-token": secret }, body: JSON.stringify(update),
-    }), { DB: db, BOT_TOKEN: "test", ADMIN_USER_ID: "42", TELEGRAM_WEBHOOK_SECRET: "test-secret" }, { waitUntil(promise) { pending.push(promise); } });
+    }), { DB: db, BOT_TOKEN: "test", ADMIN_USER_ID: "42", INTERACTIVE_BURST_LIMIT:1000, INTERACTIVE_USER_LIMIT:1000, TELEGRAM_WEBHOOK_SECRET: "test-secret" }, { waitUntil(promise) { pending.push(promise); } });
     assert.equal((await send("bad", { update_id: 7 })).status, 403);
     assert.equal((await send("test-secret", {})).status, 400);
     assert.deepEqual(await (await send("test-secret", { update_id: 6, message: { text: "обычный разговор" } })).json(), { ok: true, ignored: true });

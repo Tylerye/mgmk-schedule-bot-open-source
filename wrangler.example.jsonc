@@ -3,15 +3,25 @@
   "name": "your-schedule-bot",
   "main": "cloudflare/worker.js",
   "compatibility_date": "2026-09-14",
-  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "compatibility_flags": [
+    "nodejs_compat",
+    "global_fetch_strictly_public"
+  ],
   "workers_dev": true,
   "minify": true,
-  "version_metadata": { "binding": "CF_VERSION_METADATA" },
-  "triggers": { "crons": ["* * * * *"] },
+  "version_metadata": {
+    "binding": "CF_VERSION_METADATA"
+  },
+  "triggers": {
+    "crons": [
+      "* * * * *"
+    ]
+  },
   "vars": {
     "TEACHERS_ENABLED": "false",
     "PERSONAL_ENABLED": "false",
-    "PERSONAL_PUBLIC": "false", "PERSONAL_PILOT_IDS": "",
+    "PERSONAL_PUBLIC": "false",
+    "PERSONAL_PILOT_IDS": "",
     "ADMIN_USER_ID": "REPLACE_WITH_YOUR_TELEGRAM_ID",
     "DRIVE_FOLDER_ID": "REPLACE_WITH_YOUR_PUBLIC_FOLDER_ID",
     "GROUP_NAME": "8Са",
@@ -21,12 +31,44 @@
     "LOOKAHEAD_DAYS": "5",
     "GITHUB_REPOSITORY": "YOUR_OWNER/YOUR_REPOSITORY",
     "GITHUB_REF": "main",
-    "LOG_LEVEL": "info"
+    "LOG_LEVEL": "info",
+    "WORKER_PUBLIC_ORIGIN": "https://REPLACE_WITH_YOUR_WORKER.workers.dev",
+    "CURATOR_USER_ID": "",
+    "OWNER_PREVIEW_ENABLED": "false",
+    "TEACHER_USER_IDS": "{}"
   },
-  "d1_databases": [{
-    "binding": "DB",
-    "database_name": "your-schedule-bot",
-    "database_id": "00000000-0000-0000-0000-000000000000",
-    "migrations_dir": "migrations"
-  }]
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "your-schedule-bot",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "INTERACTIVE_BURST",
+      "namespace_id": "8101",
+      "simple": {
+        "limit": 10,
+        "period": 10
+      }
+    },
+    {
+      "name": "INTERACTIVE_USER",
+      "namespace_id": "8102",
+      "simple": {
+        "limit": 30,
+        "period": 60
+      }
+    },
+    {
+      "name": "INTERACTIVE_TOTAL",
+      "namespace_id": "8103",
+      "simple": {
+        "limit": 120,
+        "period": 60
+      }
+    }
+  ]
 }

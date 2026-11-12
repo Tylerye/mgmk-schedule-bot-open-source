@@ -129,7 +129,7 @@ for (const count of [100, 300, 1500]) test(`mock load ${count}: fanout targets o
   assert.equal((await f.store.all("SELECT * FROM cards")).length, sends.length);
 });
 
-test("quota degradation uses actual D1 meta and preserves manual work", async t => {
+test("quota degradation stops manual work too", async t => {
   const f = await personalFixture(); t.after(() => f.close());
   assert.equal((await f.store.budget(now)).mode, "normal");
   await f.store.run("UPDATE budgets SET rows_written=23000"); assert.equal((await f.store.budget(now)).mode, "saving");
@@ -137,7 +137,7 @@ test("quota degradation uses actual D1 meta and preserves manual work", async t 
   await f.store.run("INSERT INTO users(user_id) VALUES(100)"); const u = await f.store.user(100);
   await f.store.enqueue(u, "reply", "manual", { due: now.getTime(), priority: 0, payload: { manual: true, text: "status" } });
   const calls = []; await deliverUser(f.store, { async call(method) { calls.push(method); return { message_id: 1 }; } }, 100, { mode: "stopped", now });
-  assert.deepEqual(calls, ["sendMessage"]);
+  assert.deepEqual(calls, []);
 });
 
 test("empty catalog groups do not delay the subscribed group, and a returning blocked user catches up", async t => {

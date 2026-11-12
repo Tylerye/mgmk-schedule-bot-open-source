@@ -1,3 +1,6 @@
+import { admitInteractive } from "./ingress-admission.js";
+import { credentialOrigin } from "../src/credential-origin.js";
+import { maintenanceHeaders, verifyMaintenance } from "./maintenance-auth.js";
 import bells from "../config/bells.json" with { type: "json" };
 import { addDays, dateInTimezone } from "../src/dates.js";
 import { createLogger } from "../src/logger.js";
@@ -14,6 +17,8 @@ import { collectTeacherUpdate, enqueueTeacherUpdate, teacherMaintenance, storeTe
 import { discoverTeacherFiles } from "../src/source/teacher-drive.js";
 import { relayPersonalUpdate, relayPersonalSource } from "./personal-relay.js";
 
+const healthReadWindows = new WeakMap();
+
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" };
 
 function json(value, status = 200) {
@@ -24,6 +29,7 @@ function configFromEnv(env) {
   return {
     botToken: env.BOT_TOKEN,
     adminUserId: env.ADMIN_USER_ID,
+    curatorUserId: env.CURATOR_USER_ID,
     driveFolderId: env.DRIVE_FOLDER_ID,
     groupName: env.GROUP_NAME || "8Са",
     displayGroup: env.DISPLAY_GROUP_NAME || "8-Сба",
@@ -100,7 +106,7 @@ async function dispatchJob(env, job) {
     const response = await fetch(
       `https://api.github.com/repos/${env.GITHUB_REPOSITORY}/actions/workflows/parse-schedule.yml/dispatches`,
       {
-        method: "POST",
+        method: "POST", redirect:"manual",
         headers: {
           accept: "application/vnd.github+json",
           authorization: `Bearer ${env.GITHUB_ACTIONS_TOKEN}`,
@@ -184,6 +190,7 @@ async function handleWebhook(request, env, config, logger, context) {
   // This marker is internal routing metadata, never accepted from the network.
   delete update._attention;
   const actor = update.callback_query?.from ?? update.message?.from;
+  if (Number.isSafeInteger(actor?.id) && actor.id>0 && !update.message?.new_chat_members && !update.message?.left_chat_member && !await admitInteractive(env, actor.id)) return json({ ok: true, limited: true });
   const ownerPersonal = env.PERSONAL_ENABLED === "true" && String(actor?.id) === String(config.adminUserId);
   if (ownerPersonal) {
     const personal = await relayPersonalUpdate(env, update, TEACHER_ACCOUNTS);
@@ -192,7 +199,7 @@ async function handleWebhook(request, env, config, logger, context) {
   if (env.TEACHERS_ENABLED === "true") {
     const teacherEntry = ownerPersonal && /^\/teacher(?:@\w+)?(?:\s|$)/iu.test(update.message?.text ?? "");
     const teacherInput = teacherEntry ? { ...update, message: { ...update.message, text: "/start" } } : update;
-    const teacherUpdate = await collectTeacherUpdate(env.DB, teacherInput);
+    const teacherUpdate = await collectTeacherUpdate(env.DB, teacherInput, env);
     if (teacherUpdate) {
       if (teacherEntry) teacherUpdate.welcome = false;
       await enqueueTeacherUpdate(env.DB, teacherUpdate);
@@ -377,45 +384,21 @@ async function handleJobRequest(request, env, pathname, context) {
   return json({ ok: true, queued: true }, 202);
 }
 
-async function handleStateImport(request, env) {
-  if (!authorized(request, env.PARSER_SHARED_SECRET)) return json({ ok: false }, 403);
-  const prior = await env.DB.prepare("SELECT imported_at FROM state_import WHERE id = 1").first();
-  if (prior?.imported_at) return json({ ok: false, error: "state import is already sealed" }, 409);
-  const state = await readJson(request, 2 * 1024 * 1024);
-  if (state.version !== 3 || !/^-\d+$/.test(String(state.chatId ?? "")) || !Number.isSafeInteger(Number(state.chatId))
-    || !state.schedules || Array.isArray(state.schedules) || typeof state.schedules !== "object"
-    || !state.documents || Array.isArray(state.documents) || typeof state.documents !== "object") return json({ ok: false, error: "invalid state" }, 400);
-  const result = await withStateLock(env.DB, async () => {
-    // Seal and replace in one transaction, under the same lease as every state writer.
-    const nowIso = new Date().toISOString();
-    const [seal] = await env.DB.batch([
-      env.DB.prepare("INSERT OR IGNORE INTO state_import (id, imported_at) VALUES (1, ?)").bind(nowIso),
-      env.DB.prepare("INSERT INTO app_state (id, json, updated_at) SELECT 1, ?, ? WHERE changes()>0 ON CONFLICT(id) DO UPDATE SET json=excluded.json, updated_at=excluded.updated_at")
-        .bind(JSON.stringify(state), nowIso),
-    ]);
-    return seal.meta?.changes === 1;
-  });
-  if (!result.acquired) return json({ ok: false, error: "state busy" }, 503);
-  if (!result.value) return json({ ok: false, error: "state import is already sealed" }, 409);
-  return json({ ok: true, schedules: Object.keys(state.schedules).length, documents: Object.keys(state.documents).length });
-}
-
 // One lightweight Cron fans out to independent authenticated HTTP invocations.
 const MAINTENANCE_LANES = ["live", "source", "queues", "attention"];
-const MAINTENANCE_ORIGIN = "https://your-schedule-bot.example.workers.dev";
 function maintenanceLanes(env) {
   return env.TEACHERS_ENABLED === "true" ? [...MAINTENANCE_LANES, "teacher-source", ...TEACHER_ACCOUNTS.map(t => `teacher-${t.id}`)] : MAINTENANCE_LANES;
 }
 
 async function dispatchMaintenance(env) {
-  if (!env.PARSER_SHARED_SECRET) throw new Error("Maintenance authentication is not configured");
+  const maintenanceOrigin = credentialOrigin(env.WORKER_PUBLIC_ORIGIN);
   const logger = createLogger(env.LOG_LEVEL || "info");
   // Public HTTP creates independent invocations/CPU budgets. Equivalent Cron
   // expressions were accepted by the API but did not fire independently.
   const lanes = maintenanceLanes(env);
   const results = await Promise.allSettled(lanes.map(async lane => {
-    const response = await fetch(`${MAINTENANCE_ORIGIN}/internal/maintenance/${lane}`, {
-      method: "POST", headers: { authorization: `Bearer ${env.PARSER_SHARED_SECRET}` },
+    const response = await fetch(`${maintenanceOrigin}/internal/maintenance/${lane}`, {
+      method: "POST", headers: await maintenanceHeaders(env, `/internal/maintenance/${lane}`),
       signal: AbortSignal.timeout(55_000), redirect: "manual",
     });
     await response.body?.cancel();
@@ -429,10 +412,13 @@ async function dispatchMaintenance(env) {
 }
 
 async function handleMaintenance(request, env, pathname, context) {
-  if (!authorized(request, env.PARSER_SHARED_SECRET)) return json({ ok: false }, 403);
+  if (!await verifyMaintenance(request, env)) return json({ ok: false }, 403);
   const lane = pathname.slice("/internal/maintenance/".length);
   if (!maintenanceLanes(env).includes(lane)) return json({ ok: false }, 404);
   if (request.method !== "POST") return json({ ok: false }, 405);
+  const interval = Math.floor(Number(request.headers.get("x-maintenance-time")) / 60000);
+  const claimed = await env.DB.prepare("INSERT INTO runtime_locks(name,owner,locked_until) VALUES(?,'maintenance',?) ON CONFLICT(name) DO UPDATE SET locked_until=excluded.locked_until WHERE runtime_locks.locked_until<excluded.locked_until").bind(`maintenance-admission:${lane}`, interval).run();
+  if (claimed.meta?.changes !== 1) return json({ ok: true, duplicate: true });
   const task = lane === "teacher-source" ? pollTeacherSource(env, configFromEnv(env), createLogger(env.LOG_LEVEL || "info"))
     : lane.startsWith("teacher-") ? teacherMaintenance(env, configFromEnv(env), createLogger(env.LOG_LEVEL || "info"), lane.slice(8))
     : lane === "attention"
@@ -585,7 +571,14 @@ export default {
     const url = new URL(request.url);
     const config = configFromEnv(env);
     const logger = createLogger(env.LOG_LEVEL || "info");
-    if (request.method === "GET" && url.pathname === "/healthz") {
+    if (url.pathname === "/internal/state/import") return json({ ok: false }, 404);
+    if (request.method === "GET" && url.pathname === "/healthz") return json({ alive: true });
+    if (request.method === "GET" && url.pathname === "/internal/health") {
+      if (!authorized(request, env.HEALTH_READ_SECRET)) return json({ ok: false }, 403);
+      const now = Date.now();
+      const window = healthReadWindows.get(env);
+      if (window && now - window.start < 60000 && window.count >= 6) return json({ ok: false }, 429);
+      healthReadWindows.set(env, !window || now - window.start >= 60000 ? { start: now, count: 1 } : { ...window, count: window.count + 1 });
       const state = await new D1StateStore(env.DB).load();
       const failure = state.health.liveError ?? state.health.sourceError ?? state.health.queuesError ?? state.health.attentionError ?? state.health.lastError;
       const stale = Boolean(state.chatId) && [state.health.lastSourcePollSuccessAt, state.health.lastReconcileSuccessAt,
@@ -611,13 +604,12 @@ export default {
         lastParserSuccessAt: state.health.lastParserSuccessAt,
         lastTelegramSuccessAt: state.health.lastTelegramSuccessAt,
         lastError: failure ? { at: failure.at, event: failure.event } : null,
-      });
+      }, failure || stale || teachers?.stale ? 503 : 200);
     }
     if (request.method === "POST" && url.pathname === "/telegram/webhook") return await handleWebhook(request, env, config, logger, context);
     if (url.pathname.startsWith("/internal/personal/")) return await relayPersonalSource(request, env, url.pathname);
     if (url.pathname.startsWith("/internal/maintenance/")) return await handleMaintenance(request, env, url.pathname, context);
     if (url.pathname.startsWith("/internal/jobs/")) return await handleJobRequest(request, env, url.pathname, context);
-    if (request.method === "POST" && url.pathname === "/internal/state/import") return await handleStateImport(request, env);
     return json({ ok: false }, 404);
     } catch (error) {
       if (error instanceof InputError) return json({ ok: false, error: error.message }, error.status);

@@ -75,7 +75,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
     if (!job) return;
     const payload = JSON.parse(job.payload);
     if (job.epoch !== user.epoch || (user.paused && !payload.manual)) { await finishJob(store, job, "cancelled"); return; }
-    if (mode !== "normal" && !payload.manual && (mode === "stopped" || job.priority > 1)) {
+    if (mode === "stopped" || (mode !== "normal" && !payload.manual && job.priority > 1)) {
       await store.run("UPDATE jobs SET due=? WHERE id=? AND revision=?", now.getTime() + 15 * 60000, job.id, job.revision);
       return;
     }

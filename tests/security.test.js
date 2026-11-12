@@ -39,13 +39,13 @@ test('webhook and internal routes fail closed without configured secrets before 
   const DB = { prepare() { assert.fail('unauthorized requests must not touch database'); } };
   for (const secret of [undefined, null, '']) {
     assert.equal((await w.fetch(request('/telegram/webhook', '{}'), { DB, TELEGRAM_WEBHOOK_SECRET: secret }, context)).status, 403);
-    assert.equal((await w.fetch(request('/internal/state/import', '{}'), { DB, PARSER_SHARED_SECRET: secret }, context)).status, 403);
+    assert.equal((await w.fetch(request('/internal/state/import', '{}'), { DB, PARSER_SHARED_SECRET: secret }, context)).status, 404);
     assert.equal((await w.fetch(request('/internal/jobs/x/result', '{}'), { DB, PARSER_SHARED_SECRET: secret }, context)).status, 403);
     assert.equal((await w.fetch(request('/internal/maintenance/live', '{}'), { DB, PARSER_SHARED_SECRET: secret }, context)).status, 403);
   }
   assert.equal((await w.fetch(request('/telegram/webhook', '{}', { 'x-telegram-bot-api-secret-token': 'wrong' }), { DB, TELEGRAM_WEBHOOK_SECRET: 'right' }, context)).status, 403);
   assert.equal((await w.fetch(request('/internal/maintenance/live', '{}', { authorization: 'Bearer wrong' }), { DB, PARSER_SHARED_SECRET: 'right' }, context)).status, 403);
-  assert.equal((await w.fetch(request('/internal/maintenance/all', '{}', { authorization: 'Bearer right' }), { DB, PARSER_SHARED_SECRET: 'right' }, context)).status, 404);
+  assert.equal((await w.fetch(request('/internal/maintenance/all', '{}', { authorization: 'Bearer right' }), { DB, PARSER_SHARED_SECRET: 'right' }, context)).status, 403);
 });
 
 test('authenticated malformed/oversized webhook input is rejected before database access', async () => {
@@ -55,24 +55,23 @@ test('authenticated malformed/oversized webhook input is rejected before databas
   assert.equal((await w.fetch(request('/telegram/webhook', '{"x":"' + 'a'.repeat(256 * 1024) + '"}', headers), env, context)).status, 413);
 });
 
-test('parallel state import seals once, cannot overwrite active state, and busy lease rejects it', async () => {
-  const db = new DatabaseSync(':memory:');
-  db.exec(await readFile('migrations/0001_initial.sql', 'utf8'));
-  const DB = sqliteAdapter(db); const w = await worker(); const env = { DB, PARSER_SHARED_SECRET: 'right' };
-  const first = { ...structuredClone(EMPTY_STATE), chatId: '-1001' }, second = { ...structuredClone(EMPTY_STATE), chatId: '-1002' };
-  const post = state => w.fetch(request('/internal/state/import', JSON.stringify(state), { authorization: 'Bearer right' }), env, context);
-  try {
-    await DB.prepare("INSERT INTO runtime_locks VALUES ('state','busy',?)").bind(Date.now() + 60000).run();
-    assert.equal((await post(first)).status, 503);
-    assert.equal(await DB.prepare('SELECT 1 FROM app_state').first(), null);
-    await DB.prepare("UPDATE runtime_locks SET locked_until=0").run();
-    const results = await Promise.all([post(first), post(second)]);
-    assert.equal(results.filter(r => r.status === 200).length, 1);
-    assert.ok(results.every(r => [200, 409, 503].includes(r.status)));
-    const saved = (await DB.prepare('SELECT json FROM app_state').first()).json;
-    assert.equal((await post(second)).status, 409);
-    assert.equal((await DB.prepare('SELECT json FROM app_state').first()).json, saved);
-  } finally { db.close(); }
+test('HTTP import is removed for every method and credential without database access', async () => {
+ const w=await worker(); const DB={prepare(){assert.fail('must not access DB');}};
+ for(const method of ['GET','POST','PUT','DELETE']) {
+  const r=await w.fetch(new Request('https://worker.test/internal/state/import',{method,headers:{authorization:'Bearer right'}}),{DB,PARSER_SHARED_SECRET:'right'},context);
+  assert.equal(r.status,404);
+ }
+});
+
+test('public liveness performs no database or background work', async () => {
+ const w=await worker(); const DB={prepare(){assert.fail('public liveness must not access DB');}};
+ const r=await w.fetch(new Request('https://worker.test/healthz'),{DB,TEACHERS_ENABLED:'true'},context);
+ assert.equal(r.status,200);assert.deepEqual(await r.json(),{alive:true});
+});
+
+test('detailed health rejects unauthorized requests before database access', async () => {
+ const w=await worker();const DB={prepare(){assert.fail('unauthorized DB access');}};
+ for(const headers of [{},{authorization:'Bearer wrong'}]) assert.equal((await w.fetch(new Request('https://worker.test/internal/health',{headers}),{DB,HEALTH_READ_SECRET:'right'},context)).status,403);
 });
 
 test('parser rejects malformed and oversized schedules without writing poisoned inbox entries', async () => {
@@ -86,11 +85,11 @@ test('parser rejects malformed and oversized schedules without writing poisoned 
   } finally { db.close(); }
 });
 
-test('public health omits exception details and disables caching', async () => {
+test('authenticated health omits exception details and disables caching', async () => {
   const w = await worker();
   const state = { ...structuredClone(EMPTY_STATE), health: { lastError: { at: 'now', event: 'source_poll', message: 'SECRET EXCEPTION' } } };
   const DB = { prepare() { return { async first() { return { json: JSON.stringify(state) }; } }; } };
-  const response = await w.fetch(new Request('https://worker.test/healthz'), { DB }, context);
+  const response = await w.fetch(new Request('https://worker.test/internal/health', { headers: { authorization: 'Bearer right' } }), { DB, HEALTH_READ_SECRET: 'right' }, context);
   assert.equal(response.headers.get('cache-control'), 'no-store');
   assert.deepEqual((await response.json()).lastError, { at: 'now', event: 'source_poll' });
 });
@@ -100,12 +99,12 @@ test('health detects stalled work even when the last saved error is null', async
   const state = { ...structuredClone(EMPTY_STATE), chatId: '-1001', health: { lastError: null,
     lastSourcePollSuccessAt: new Date(Date.now() - 600000).toISOString(), lastReconcileSuccessAt: new Date().toISOString() } };
   const DB = { prepare() { return { async first() { return { json: JSON.stringify(state) }; } }; } };
-  let health = await (await w.fetch(new Request('https://worker.test/healthz'), { DB }, context)).json();
+  let health = await (await w.fetch(new Request('https://worker.test/internal/health', { headers: { authorization: 'Bearer right' } }), { DB, HEALTH_READ_SECRET: 'right' }, context)).json();
   assert.equal(health.ok, false); assert.equal(health.stale, true);
   state.health.lastSourcePollSuccessAt = new Date().toISOString();
   state.health.lastQueuesSuccessAt = new Date().toISOString();
   state.health.lastAttentionSuccessAt = new Date().toISOString();
-  health = await (await w.fetch(new Request('https://worker.test/healthz'), { DB }, context)).json();
+  health = await (await w.fetch(new Request('https://worker.test/internal/health', { headers: { authorization: 'Bearer right' } }), { DB, HEALTH_READ_SECRET: 'right' }, context)).json();
   assert.equal(health.ok, true); assert.equal(health.stale, false);
 });
 

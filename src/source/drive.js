@@ -1,3 +1,4 @@
+import { boundedBytes, boundedText } from "./bounded.js";
 import { parseScheduleDate } from "../dates.js";
 import { fetchWithRetry } from "../http.js";
 
@@ -37,7 +38,7 @@ export function parsePublicFolderHtml(html) {
 export async function listDriveFiles(config) {
   const response = await fetchWithRetry(`${FOLDER_BASE}${encodeURIComponent(config.driveFolderId)}`, {}, config);
   if (!response.ok) throw new Error(`Drive folder listing failed: HTTP ${response.status}`);
-  const html = await response.text();
+  const html = await boundedText(response);
   const files = parsePublicFolderHtml(html);
   if (files.length === 0) throw new Error("Drive listing returned no PDF files; page structure may have changed");
   return files;
@@ -58,7 +59,7 @@ export async function inspectDriveFile(file, config) {
 export async function downloadDriveFile(file, config) {
   const response = await fetchWithRetry(file.downloadUrl, {}, config);
   if (!response.ok) throw new Error(`Drive download failed for ${file.id}: HTTP ${response.status}`);
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  const bytes = await boundedBytes(response, 20 * 1024 * 1024);
   const magic = new TextDecoder("ascii").decode(bytes.subarray(0, 5));
   if (magic !== "%PDF-") throw new Error(`File ${file.id} is not a PDF (magic ${JSON.stringify(magic)})`);
   return {

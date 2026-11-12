@@ -1,10 +1,11 @@
+import {credentialOrigin} from "../src/credential-origin.js";
 const token = process.env.BOT_TOKEN;
-const workerBaseUrl = process.env.WORKER_BASE_URL?.replace(/\/$/u, "");
+const workerBaseUrl = credentialOrigin(process.env.WORKER_BASE_URL);
 const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
 if (!token || !workerBaseUrl || !webhookSecret) throw new Error("BOT_TOKEN, WORKER_BASE_URL, and TELEGRAM_WEBHOOK_SECRET are required");
 
 const response = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
-  method: "POST",
+  method: "POST", redirect:"error",
   headers: { "content-type": "application/json" },
   body: JSON.stringify({
     url: `${workerBaseUrl}/telegram/webhook`,

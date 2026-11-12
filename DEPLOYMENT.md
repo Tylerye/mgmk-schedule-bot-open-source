@@ -85,3 +85,21 @@ leases; тяжёлый PDF parsing выполняется в Actions. Сохра
 очистку истории. В коде пока остаются привязки к исходным аккаунтам и реальные
 публичные учебные PDF; до открытия оцените их публикацию и обезличивание.
 Этот шаг сам по себе не разрешает изменение видимости репозитория.
+
+## Security configuration and release
+
+Public liveness is GET /healthz with only {"alive":true}, without D1. GET /internal/health requires a separate HEALTH_READ_SECRET and returns 503 on stale/error. Its local diagnostic throttle is six requests/minute/isolate, not a global quota.
+
+Set WORKER_PUBLIC_ORIGIN to the exact HTTPS origin of this Worker. Set MAINTENANCE_SIGNING_SECRET (at least 32 random characters), distinct from parser/webhook/health secrets. Maintenance uses origin/path/time/body-bound HMAC and durable minute admission; raw credentials are not transmitted. Redirects are rejected; workerd uses manual mode and rejects non-success statuses.
+
+Set CURATOR_USER_ID explicitly or leave empty. OWNER_PREVIEW_ENABLED defaults false; enabling it reserves preview for ADMIN_USER_ID. TEACHER_USER_IDS is a JSON object mapping existing teacher identifiers to verified numeric IDs for NEW enrollment. Existing enrolled seats remain authoritative; username alone never enrolls. Do not rename teacher identifiers or recreate seats.
+
+HTTP state import is removed. The old import helper refuses before reading state or networking. Never repeat setup as a migration mechanism.
+
+Ingress bindings enforce 10/10 seconds and 30/minute per user, 120/minute per instance, plus durable admission. Rate binding counters are approximate per location. User limits do not apply to membership-change notifications. Personal budget uses conservative concurrent reservations within existing daily ceilings; stopped mode also stops manual actions. Queue and technical storage caps reject excess work without removing receipts.
+
+Apply only the NEW migration 0009_security_limits.sql to the existing main database. Apply only personal migration 0002_security_limits.sql to the existing personal database. Never replay the initial personal schema. They add guards/timestamps and preserve publication IDs. Retention is read-only by default: retentionCandidates reports counts, does not delete. Protect all sends/uncertain receipts; review any later cleanup separately.
+
+PDF downloads are capped at 20 MiB, catalog HTML at 2 MiB. Extraction runs in a credential-free child process with 256 MiB V8 heap and 60-second deadline, plus page/item/text/coordinate bounds. Heap is not a hard OS RSS limit. Rejected sources retain last good schedules.
+
+Release: verify tests/privacy/dependencies and both dry-run bundles; record current versions/recovery point; add new secrets; apply additive migrations; deploy personal then main from the PRIVATE checkout; verify authenticated readiness and natural minute lanes. Public source must retain synthetic fixtures and empty privilege bindings. Code rollback must retain databases, receipts and message IDs; restoring the old maintenance protocol also requires restoring its matching configuration. Never claim liveness alone proves delivery health.

@@ -84,7 +84,7 @@ function policyFixture() {
     configureChat(chatId) { state.chatId = String(chatId); return true; },
     async save() { calls.push(["save"]); },
   };
-  const config = { adminUserId: "42", displayGroup: "8-Сба", timezone: "Europe/Minsk" };
+  const config = { curatorUserId: "900000002", adminUserId: "42", displayGroup: "8-Сба", timezone: "Europe/Minsk" };
   return { calls, client, store, config };
 }
 

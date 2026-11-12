@@ -7,7 +7,7 @@ import { TelegramClient, isMessageNotModified, isMessageUneditable } from "../sr
 // teacher's schedule without claiming that teacher's enrollment or pins.
 export const TEACHER_ACCOUNTS = [...TEACHERS, {
   id: "preview-teacher-one", sourceTeacherId: "teacher-one", name: "Примеров А. А.",
-  username: "example_owner", userId: 900000001,
+
 }];
 function sourceTeacherId(id) { return TEACHER_ACCOUNTS.find(t => t.id === id)?.sourceTeacherId ?? id; }
 
@@ -15,19 +15,21 @@ const commands = new Map([["/start", "next"], ["/today", "today"], ["/tomorrow",
 const actions = new Set(["today", "tomorrow", "next", "previous", "full", "compact", "pause", "resume"]);
 function clientFor(env, logger) { return new TelegramClient({ token: env.BOT_TOKEN, logger, timeoutMs: 8000, abortSignal: AbortSignal.timeout(25000) }); }
 
-export async function collectTeacherUpdate(database, update) {
+export async function collectTeacherUpdate(database, update, config = {}) {
+  let bindings; try { bindings = JSON.parse(config.TEACHER_USER_IDS || "{}"); } catch { return null; }
+  const accounts = TEACHER_ACCOUNTS.map(t => ({...t, userId: t.sourceTeacherId ? (config.OWNER_PREVIEW_ENABLED === "true" ? Number(config.ADMIN_USER_ID) : null) : Number(bindings[t.id]) || null}));
   const callback = update.callback_query, message = update.message ?? callback?.message;
   const from = callback?.from ?? message?.from;
   if (message?.chat?.type !== "private" || from?.is_bot || !Number.isSafeInteger(from?.id) || from.id <= 0 || message.chat.id !== from.id) return null;
   const action = callback ? String(callback.data ?? "").split(":")[1] : commands.get(String(message.text ?? "").trim().split(/\s/u)[0].split("@")[0].toLowerCase());
   if (!actions.has(action) || (callback && !/^teacher:(today|tomorrow|next|previous|full|compact|pause|resume)(?::\d{4}-\d{2}-\d{2})?$/.test(callback.data ?? ""))) return null;
-  const username = String(from.username ?? "").toLowerCase();
+
   // Unknown accounts without a pilot username are looked up only after tables
   // are installed (the feature flag gates this collector at the webhook).
   const enrolled = await database.prepare("SELECT * FROM teacher_users WHERE user_id=?").bind(from.id).first();
-  let teacher = enrolled && TEACHER_ACCOUNTS.find(t => t.id === enrolled.teacher_id);
+  let teacher = enrolled && accounts.find(t => t.id === enrolled.teacher_id);
   if (!teacher) {
-    teacher = TEACHER_ACCOUNTS.find(t => t.username === username);
+    teacher = accounts.find(t => Number.isSafeInteger(t.userId) && t.userId > 0 && t.userId === from.id);
     if (!teacher || callback || !/^\/start(?:@\w+)?(?:\s|$)/iu.test(message.text ?? "")) return null;
     if (teacher.userId && teacher.userId !== from.id) return null;
     await database.prepare("INSERT OR IGNORE INTO teacher_users(teacher_id,user_id,enrolled_at) VALUES(?,?,?)")
@@ -35,6 +37,7 @@ export async function collectTeacherUpdate(database, update) {
     const seat = await database.prepare("SELECT * FROM teacher_users WHERE teacher_id=?").bind(teacher.id).first();
     if (seat?.user_id !== from.id) return null;
   }
+  if (teacher.sourceTeacherId && (!teacher.userId || teacher.userId !== from.id)) return null;
   if (teacher.userId && teacher.userId !== from.id) return null;
   return { update_id: update.update_id, teacherId: teacher.id, action, userId: from.id,
     ...(!callback && /^\/start(?:@\w+)?(?:\s|$)/iu.test(message.text ?? "") ? { welcome: true } : {}),
@@ -96,7 +99,7 @@ export async function storeTeacherResult(database, job, payload) {
     || TEACHERS.some(t => schedules.filter(s => s.teacherId === t.id).length !== 1)
     || schedules.some(s => s.date !== job.schedule_date || !/^[a-f0-9]{64}$/.test(s.hash ?? "") || typeof s.status !== "string" || s.status.length > 500
       || !Array.isArray(s.lessons) || s.lessons.length > 24 || s.lessons.some(l => !Number.isInteger(l.number) || l.number < 1 || l.number > 24
-        || typeof l.group !== "string" || l.group.length > 50 || !/^\d{2}:\d{2}$/.test(l.start) || !/^\d{2}:\d{2}$/.test(l.end)))) return false;
+        || typeof l.group !== "string" || l.group.length > 50 || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(l.start) || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(l.end) || l.start >= l.end))) return false;
   const statements = schedules.map(s => database.prepare(
     "INSERT INTO teacher_schedules(teacher_id,date,hash,payload,source_created_at) VALUES(?,?,?,?,?) "
     + "ON CONFLICT(teacher_id,date) DO UPDATE SET hash=excluded.hash,payload=excluded.payload,source_created_at=excluded.source_created_at "
@@ -261,9 +264,11 @@ async function drainTeacherNotices({ database, client, teacher, user, now }) {
 export async function teacherMaintenance(env, config, logger, teacherId, now = new Date(), suppliedClient = null) {
   const teacher = TEACHER_ACCOUNTS.find(t => t.id === teacherId);
   if (!teacher) throw new Error("Unknown teacher lane");
+  if (teacher.sourceTeacherId && env.OWNER_PREVIEW_ENABLED !== "true") return { acquired: false };
   return withStateLock(env.DB, async () => {
     const user = await env.DB.prepare("SELECT * FROM teacher_users WHERE teacher_id=?").bind(teacher.id).first();
     if (!user) return;
+    if (teacher.sourceTeacherId && String(user.user_id) !== String(env.ADMIN_USER_ID)) throw new Error("Preview account identity mismatch");
     if (teacher.userId && teacher.userId !== user.user_id) throw new Error("Preview account identity mismatch");
     user.previewManual = env.PERSONAL_ENABLED === "true" && Boolean(teacher.sourceTeacherId);
     const client = suppliedClient ?? clientFor(env, logger);

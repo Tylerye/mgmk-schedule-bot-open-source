@@ -14,6 +14,7 @@ export async function loadConfig({ dryRun = false } = {}) {
   const bellsUrl = new URL("../config/bells.json", import.meta.url);
   const bells = JSON.parse(await readFile(bellsUrl, "utf8"));
   const config = {
+    curatorUserId: process.env.CURATOR_USER_ID?.trim() || null,
     botToken: process.env.BOT_TOKEN?.trim() || null,
     adminUserId: process.env.ADMIN_USER_ID?.trim() || null,
     driveFolderId: process.env.DRIVE_FOLDER_ID?.trim() || "REPLACE_WITH_YOUR_PUBLIC_FOLDER_ID",

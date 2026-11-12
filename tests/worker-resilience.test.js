@@ -1,3 +1,4 @@
+import { maintenanceHeaders } from "../cloudflare/maintenance-auth.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -59,9 +60,10 @@ async function fixture() {
     env: { DB: db, BOT_TOKEN: "test", DRIVE_FOLDER_ID: "folder", GITHUB_REPOSITORY: "owner/repo", LOG_LEVEL: "error" },
     async lane(lane) {
       const pending = [];
-      const response = await worker.fetch(new Request(`https://worker.example/internal/maintenance/${lane}`, {
-        method: "POST", headers: { authorization: "Bearer test-secret" },
-      }), { ...this.env, PARSER_SHARED_SECRET: "test-secret" }, { waitUntil(p) { pending.push(p); } });
+      await db.prepare("DELETE FROM runtime_locks WHERE name LIKE 'maintenance-admission:%'").run();
+      const response = await worker.fetch(new Request(`https://worker.audit-fixture.net/internal/maintenance/${lane}`, {
+        method: "POST", headers: await maintenanceHeaders({WORKER_PUBLIC_ORIGIN:"https://worker.audit-fixture.net",MAINTENANCE_SIGNING_SECRET:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"},`/internal/maintenance/${lane}`),
+      }), { ...this.env, WORKER_PUBLIC_ORIGIN:"https://worker.audit-fixture.net", MAINTENANCE_SIGNING_SECRET:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", PARSER_SHARED_SECRET: "test-secret" }, { waitUntil(p) { pending.push(p); } });
       await Promise.all(pending);
       return response;
     },
@@ -159,11 +161,11 @@ test("health reports stalled live updates even after a successful getMe and sour
     await patchHealth(f.db, { lastSourcePollSuccessAt: new Date().toISOString(), lastTelegramSuccessAt: new Date().toISOString(),
       lastReconcileSuccessAt: new Date(Date.now() - 10 * 60_000).toISOString(), lastError: null,
       lastQueuesSuccessAt: new Date().toISOString(), lastAttentionSuccessAt: new Date().toISOString() });
-    const health = await (await worker.fetch(new Request("https://worker.example/healthz"), f.env, {})).json();
+    const health = await (await worker.fetch(new Request("https://worker.audit-fixture.net/internal/health", {headers:{authorization:"Bearer health-test"}}), {...f.env,HEALTH_READ_SECRET:"health-test"}, {})).json();
     assert.equal(health.ok, false);
     assert.equal(health.stale, true);
     await patchHealth(f.db, { lastReconcileSuccessAt: new Date().toISOString() });
-    assert.equal((await (await worker.fetch(new Request("https://worker.example/healthz"), f.env, {})).json()).ok, true);
+    assert.equal((await (await worker.fetch(new Request("https://worker.audit-fixture.net/internal/health", {headers:{authorization:"Bearer health-test"}}), {...f.env,HEALTH_READ_SECRET:"health-test"}, {})).json()).ok, true);
   } finally { f.cleanup(); }
 });
 
@@ -201,7 +203,7 @@ test("successful source lane does not clear a live lane error", async () => {
     await patchHealth(f.db, { liveError: { at: new Date().toISOString(), event: "reconcile", message: "private details" },
       lastReconcileSuccessAt: new Date().toISOString() });
     await f.lane("source");
-    const health = await (await worker.fetch(new Request("https://worker.example/healthz"), f.env, {})).json();
+    const health = await (await worker.fetch(new Request("https://worker.audit-fixture.net/internal/health", {headers:{authorization:"Bearer health-test"}}), {...f.env,HEALTH_READ_SECRET:"health-test"}, {})).json();
     assert.equal(health.ok, false);
     assert.equal(health.lastError.event, "reconcile");
     assert.equal(JSON.stringify(health).includes("private details"), false);
@@ -215,13 +217,13 @@ test("minute dispatcher starts every bounded lane without database work or blind
     return new Response("{}", { status: String(url).endsWith("source") ? 503 : 200 });
   };
   try {
-    await assert.rejects(dispatchMaintenance({ PARSER_SHARED_SECRET: "private", LOG_LEVEL: "error",
+    await assert.rejects(dispatchMaintenance({ WORKER_PUBLIC_ORIGIN:"https://worker.audit-fixture.net", MAINTENANCE_SIGNING_SECRET:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", PARSER_SHARED_SECRET: "private", LOG_LEVEL: "error",
       DB: { prepare() { assert.fail("dispatcher must not load state"); } } }));
     assert.deepEqual(calls.map(c => c.path), ["live", "source", "queues", "attention"].map(l => `/internal/maintenance/${l}`));
     assert.ok(calls.every(c => c.options.method === "POST" && c.options.redirect === "manual"
-      && c.options.headers.authorization === "Bearer private" && c.options.signal));
+      && !c.options.headers.authorization && !!c.options.headers["x-maintenance-signature"] && c.options.signal));
     calls.length = 0;
-    await assert.rejects(dispatchMaintenance({}), /authentication/);
+    await assert.rejects(dispatchMaintenance({}), /origin/);
     assert.equal(calls.length, 0);
   } finally { globalThis.fetch = original; }
 });
@@ -242,7 +244,7 @@ test("live deadline includes exact lesson ends, Minsk midnight, pin rotation and
   const state = { schedules: { "2026-10-12": { schedule: { date: "2026-10-12", timeline: [
     { end: "09:00" }, { end: "09:10" }, { end: "09:55" },
   ] } } }, pinCapability: { checkedAt: "2026-10-12T05:59:59Z" } };
-  const config = { timezone: "Europe/Minsk", pinSwitchTime: "16:00" };
+  const config = { curatorUserId: "900000002", timezone: "Europe/Minsk", pinSwitchTime: "16:00" };
   assert.equal(nextLiveReconcileAt(state, config, new Date("2026-10-12T05:59:59Z")), Date.parse("2026-10-12T06:00:00Z"));
   assert.equal(nextLiveReconcileAt(state, config, new Date("2026-10-12T06:00:00Z")), Date.parse("2026-10-12T06:04:59Z"));
   state.pinCapability.checkedAt = "2026-10-12T12:59:30Z";

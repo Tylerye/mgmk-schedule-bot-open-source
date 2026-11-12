@@ -1,3 +1,4 @@
+import { boundedBytes, boundedText } from "./bounded.js";
 import { fetchWithRetry } from "../http.js";
 import { addDays, dateInTimezone } from "../dates.js";
 import { parsePublicFolderHtml, inspectDriveFile } from "./drive.js";
@@ -19,7 +20,7 @@ export function monthFolderName(date) {
 async function folderHtml(id, config) {
   const response = await fetchWithRetry(`https://drive.google.com/drive/folders/${encodeURIComponent(id)}`, {}, config);
   if (!response.ok) throw new Error(`Teacher Drive folder HTTP ${response.status}`);
-  return response.text();
+  return boundedText(response);
 }
 
 export async function discoverTeacherFiles({ config, database, now = new Date() }) {

@@ -4,7 +4,7 @@ import { RECRUITMENT_CALLBACK, createRecruitment, processRecruitment, recruitmen
 import { PRIVATE_PAGE_CALLBACK, processPrivatePage, announcementLink } from "./private-pages.js";
 import { EVENT_REMINDER_CALLBACK, parseReminderArgument, createEventReminder, processEventReminder } from "./event-reminders.js";
 
-export const CURATOR_USER_ID = "900000002";
+export const CURATOR_USER_ID = ""; // Legacy export; configuration supplies privileges.
 export const ATTENTION_UPDATES = ["message", "callback_query", "chat_member"];
 const GROUP_TYPES = new Set(["group", "supergroup"]);
 const changes = result => result.meta?.changes ?? 0;
@@ -17,7 +17,7 @@ const userMetadata = user => user ? { id: user.id, first_name: user.first_name, 
 
 export function authorizedAnnouncer(userId, config) {
   if (!validUserId(userId)) return false;
-  return [String(config.adminUserId), CURATOR_USER_ID].includes(String(userId));
+  return [String(config.adminUserId), String(config.curatorUserId ?? "")].includes(String(userId));
 }
 
 export class AttentionStore {

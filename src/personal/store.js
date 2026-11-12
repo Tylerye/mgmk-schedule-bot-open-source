@@ -1,3 +1,4 @@
+const stoppedDays = new WeakMap();
 // D1 and the future SQLite runtime share this small async SQL interface.
 // All mutable data below belongs to the separate personal database.
 export class PersonalStore {
@@ -50,14 +51,19 @@ export class PersonalStore {
   }
   async budget(now = new Date(), requests = 1) {
     const day = now.toISOString().slice(0, 10); // Account daily quotas use UTC.
-    const row = await this.first("INSERT INTO budgets(day,requests) VALUES(?,?) ON CONFLICT(day) DO UPDATE SET requests=requests+excluded.requests RETURNING *", day, requests);
+    if (stoppedDays.get(this.db) === day) return {mode:"stopped"};
+    this.reserved = { read: 2000, written: 200 };
+    const row = await this.first("INSERT INTO budgets(day,requests,rows_read,rows_written) VALUES(?,?,2000,200) ON CONFLICT(day) DO UPDATE SET requests=requests+excluded.requests,rows_read=rows_read+2000,rows_written=rows_written+200 WHERE requests+excluded.requests<27500 AND rows_read+2000<940000 AND rows_written+200<27000 RETURNING *", day, requests);
+    if (!row) { stoppedDays.set(this.db,day); this.reserved = null; return {mode:'stopped'}; }
     return { ...row, mode: row.requests >= 28000 || row.rows_read >= 950000 || row.rows_written >= 28000 ? "stopped"
       : row.requests >= 22000 || row.rows_read >= 800000 || row.rows_written >= 22000 ? "saving" : "normal" };
   }
   async flushBudget(now = new Date()) {
     // Measured D1 meta includes index writes. Reserve 2 additional writes/reads
     // for this accounting query and boundary races rather than undercount it.
+    if (!this.reserved) return;
     await this.run("UPDATE budgets SET rows_read=rows_read+?,rows_written=rows_written+? WHERE day=?",
-      this.read + 2, this.written + 2, now.toISOString().slice(0, 10));
+      this.read + 2 - this.reserved.read, this.written + 2 - this.reserved.written, now.toISOString().slice(0, 10));
+    this.reserved = null;
   }
 }

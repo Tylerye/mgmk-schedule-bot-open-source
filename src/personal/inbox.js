@@ -4,6 +4,8 @@ import { t, menu, button, supportKeyboard, settingsKeyboard, groupsKeyboard, ini
 export { collectPersonalUpdate } from "./update.js";
 
 export async function enqueuePersonalUpdate(store, update, now = Date.now()) {
+  const count=await store.first("SELECT (SELECT COUNT(*) FROM inbox WHERE status='pending') total,(SELECT COUNT(*) FROM inbox WHERE status='pending' AND user_id=?) own,(SELECT COUNT(*) FROM inbox) records",update.userId);
+  if(count.total>=500 || count.own>=5 || count.records>=100000) return false;
   await store.run("INSERT OR IGNORE INTO inbox(update_id,user_id,payload,received_at) VALUES(?,?,?,?)", update.update_id, update.userId, JSON.stringify(update), now);
 }
 

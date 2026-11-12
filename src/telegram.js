@@ -43,7 +43,7 @@ export class TelegramClient {
       const timeout = AbortSignal.timeout(this.timeoutMs);
       const signal = this.abortSignal ? AbortSignal.any([timeout, this.abortSignal]) : timeout;
       response = await fetch(`${this.baseUrl}/${method}`, {
-        method: "POST",
+        method: "POST", redirect:"manual",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
         signal,

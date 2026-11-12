@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { ensureDesiredState } from "../src/reconcile.js";
 import { TelegramApiError } from "../src/telegram.js";
 
-const config = { timezone: "Europe/Minsk", pinSwitchTime: "16:00" };
+const config = { curatorUserId: "900000002", timezone: "Europe/Minsk", pinSwitchTime: "16:00" };
 const beforeCutoff = new Date("2026-09-15T09:00:00Z");
 const afterCutoff = new Date("2026-09-15T13:01:00Z");
 

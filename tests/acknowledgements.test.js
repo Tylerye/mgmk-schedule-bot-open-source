@@ -8,7 +8,7 @@ import { acknowledgementReport, recoverAcknowledgements, refreshAcknowledgement,
 
 const chat = { id: -1001, type: "supergroup" };
 const owner = { id: 42, first_name: "Owner" };
-const config = { adminUserId: "42" };
+const config = { curatorUserId: "900000002", adminUserId: "42" };
 const now = Date.now();
 test("a deleted acknowledgement card is not retried every minute", async () => {
   const f = await fixture();

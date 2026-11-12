@@ -132,8 +132,8 @@ test("reminder webhook and maintenance bypass schedule lock, deduplicate and pre
     assert.equal(calls.filter(c => c.method === "sendMessage").length, 1);
     assert.equal((await f.DB.prepare("SELECT COUNT(*) AS n FROM event_reminders").first()).n, 1);
     await f.DB.prepare("UPDATE event_reminders SET due_at=?").bind(Date.now() - 1000).run();
-    await attentionMaintenance(f.env, { adminUserId: "42" }, { info() {}, warn() {} });
-    await attentionMaintenance(f.env, { adminUserId: "42" }, { info() {}, warn() {} });
+    await attentionMaintenance(f.env, { curatorUserId:"900000002", adminUserId: "42" }, { info() {}, warn() {} });
+    await attentionMaintenance(f.env, { curatorUserId:"900000002", adminUserId: "42" }, { info() {}, warn() {} });
     assert.equal(calls.filter(c => c.method === "sendMessage").length, 2);
     const reminder = calls.filter(c => c.method === "sendMessage")[1].body;
     assert.equal(reminder.reply_parameters.message_id, 9);
@@ -162,8 +162,8 @@ test("bootstrap keeps webhook secret and pending updates, configures private men
   };
   const logger = { info() {}, warn() {} };
   try {
-    await attentionMaintenance(f.env, { adminUserId: "42" }, logger);
-    await attentionMaintenance(f.env, { adminUserId: "42" }, logger);
+    await attentionMaintenance(f.env, { curatorUserId:"900000002", adminUserId: "42" }, logger);
+    await attentionMaintenance(f.env, { curatorUserId:"900000002", adminUserId: "42" }, logger);
     const webhook = calls.find(call => call.method === "setWebhook").body;
     assert.equal(webhook.url, "https://existing.test/telegram/webhook");
     assert.equal(webhook.secret_token, "fake");

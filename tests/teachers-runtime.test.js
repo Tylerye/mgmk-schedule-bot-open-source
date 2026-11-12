@@ -8,12 +8,12 @@ import { dateInTimezone, addDays } from "../src/dates.js";
 import { monthFolderName } from "../src/source/teacher-drive.js";
 
 test("workerd runs nine isolated lanes, durable teacher enrollment and publication without changing group pin", async () => {
-  const bundle = await build({ stdin: { contents: `import worker from './cloudflare/worker.js';export default {async fetch(request,env,ctx){if(new URL(request.url).pathname!=='/tick')return worker.fetch(request,env,ctx);const p=[];await worker.scheduled({cron:'* * * * *'},env,{waitUntil(t){p.push(t)}});await Promise.all(p);return new Response('ok')}}`, resolveDir: process.cwd() },
+  const bundle = await build({ stdin: { contents: `import worker from './cloudflare/worker.js';export default {async fetch(request,env,ctx){if(new URL(request.url).pathname!=='/tick')return worker.fetch(request,env,ctx);const p=[];await env.DB.prepare("DELETE FROM runtime_locks WHERE name LIKE 'maintenance-admission:%'").run();await worker.scheduled({cron:'* * * * *'},env,{waitUntil(t){p.push(t)}});await Promise.all(p);return new Response('ok')}}`, resolveDir: process.cwd() },
     bundle: true, write: false, format: "esm", platform: "neutral", external: ["node:crypto"] });
   const paths = [], calls = [];
   const mf = new Miniflare(convertV4MiniflareOptions({ workers: [{ name: "teacher-bot", modules: true, script: bundle.outputFiles[0].text,
     compatibilityDate: "2026-09-14", compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"], d1Databases: ["DB"],
-    bindings: { TEACHERS_ENABLED: "true", BOT_TOKEN: "123456789:fake", PARSER_SHARED_SECRET: "private", TELEGRAM_WEBHOOK_SECRET: "webhook", LOG_LEVEL: "error",
+    bindings: { OWNER_PREVIEW_ENABLED:"true", TEACHER_USER_IDS:JSON.stringify({"teacher-three":42}), WORKER_PUBLIC_ORIGIN:"https://worker.audit-fixture.net", MAINTENANCE_SIGNING_SECRET:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", HEALTH_READ_SECRET:"health-test", TEACHERS_ENABLED: "true", BOT_TOKEN: "123456789:fake", PARSER_SHARED_SECRET: "private", TELEGRAM_WEBHOOK_SECRET: "webhook", LOG_LEVEL: "error",
       DRIVE_FOLDER_ID: "folder", TIMEZONE: "Europe/Minsk", PIN_SWITCH_TIME: "16:00" }, outboundService: async request => {
       const url = new URL(request.url); paths.push(url.pathname);
       if (url.pathname.startsWith("/internal/maintenance/")) return mf.dispatchFetch(request.url, { method: request.method, headers: request.headers });
@@ -27,7 +27,7 @@ test("workerd runs nine isolated lanes, durable teacher enrollment and publicati
   try {
     const db = await mf.getD1Database("DB");
     for (const file of fs.readdirSync("migrations").filter(f => f.endsWith(".sql"))) {
-      for (const sql of fs.readFileSync(`migrations/${file}`, "utf8").replace(/--[^\n]*/g, "").split(";").filter(s => s.trim())) await db.prepare(sql).run();
+      for (const sql of fs.readFileSync(`migrations/${file}`, "utf8").replace(/--[^\n]*/g, "").replace(/;\s*END;/gi,'__TRIGGER_END__;').split(';').map(s=>s.replaceAll('__TRIGGER_END__','; END;')).filter(s => s.trim())) await db.prepare(sql).run();
     }
     const state = structuredClone(EMPTY_STATE); state.chatId = "-300";
     await db.prepare("INSERT INTO app_state VALUES(1,?,?)").bind(JSON.stringify(state), new Date().toISOString()).run();
@@ -37,7 +37,7 @@ test("workerd runs nine isolated lanes, durable teacher enrollment and publicati
       await db.prepare("INSERT INTO teacher_settings(key,value) VALUES(?,'month')").bind(`month:${month}`).run();
     assert.equal((await mf.dispatchFetch("http://localhost/tick")).status, 200);
     assert.equal(paths.filter(p => p.startsWith("/internal/maintenance/")).length, 9);
-    const health = await (await mf.dispatchFetch("http://localhost/healthz")).json();
+    const health = await (await mf.dispatchFetch("http://localhost/internal/health",{headers:{authorization:"Bearer health-test"}})).json();
     assert.equal(health.ok, true); assert.equal(health.teachers.stale, false);
     const schedule = { teacherId: "teacher-three", date: addDays(today, 1), hash: "a".repeat(64), lessons: [{ number: 2, group: "26Д", start: "09:10", end: "09:55" }], status: "" };
     await db.prepare("INSERT INTO teacher_schedules VALUES(?,?,?,?,?)").bind("teacher-three", schedule.date, schedule.hash, JSON.stringify(schedule), new Date().toISOString()).run();

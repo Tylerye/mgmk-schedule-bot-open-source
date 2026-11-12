@@ -73,8 +73,8 @@ export async function attentionMaintenance(env, config, logger) {
     const key = `setup:v1:${chatId}`;
     if (await store.setting(key) === "done") return;
     // Recheck the previously verified numeric curator identity before rollout.
-    const curator = await client.call("getChatMember", { chat_id: chatId, user_id: Number(CURATOR_USER_ID) });
-    if (!["creator", "administrator", "member"].includes(curator.status)) throw new Error("Configured curator is not a group member");
+    const curator = /^[1-9]\d*$/.test(config.curatorUserId ?? "") ? await client.call("getChatMember", { chat_id: chatId, user_id: Number(config.curatorUserId) }) : null;
+    if (curator && !["creator", "administrator", "member"].includes(curator.status)) throw new Error("Configured curator is not a group member");
     await client.getMe();
     const capability = await client.getPinCapability(chatId);
     if (!["creator", "administrator"].includes(capability.status)) throw new Error("Member tracking requires bot administrator rights");
@@ -83,8 +83,8 @@ export async function attentionMaintenance(env, config, logger) {
       await client.call("setWebhook", { url: webhook.url, secret_token: env.TELEGRAM_WEBHOOK_SECRET,
         allowed_updates: ATTENTION_UPDATES, drop_pending_updates: false, max_connections: webhook.max_connections ?? 40 });
     }
-    await configureGroupCommands(client, chatId, config.adminUserId, CURATOR_USER_ID);
-    await store.observe(chatId, curator.user, true, Date.now(), true);
+    await configureGroupCommands(client, chatId, config.adminUserId, config.curatorUserId);
+    if (curator) await store.observe(chatId, curator.user, true, Date.now(), true);
     const owner = await client.call("getChatMember", { chat_id: chatId, user_id: Number(config.adminUserId) });
     if (["creator", "administrator", "member"].includes(owner.status)) await store.observe(chatId, owner.user, true, Date.now(), true);
     // Reserve BEFORE sending: ambiguous network failures must not post duplicates.

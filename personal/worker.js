@@ -41,6 +41,7 @@ export default {
     let started = false;
     try {
       const budget = await store.budget(now, path === "/tick" ? 2 : 1); started = true;
+      if (budget.mode === "stopped") return json({ok:true,stopped:true,pending:false});
       if (await store.setting("budget-mode") !== budget.mode) await store.setSetting("budget-mode", budget.mode);
       if (path === "/tick") {
         const work = await store.first("SELECT (SELECT COUNT(*) FROM (SELECT 1 FROM inbox WHERE status='pending' LIMIT 1)) inbox,"
@@ -59,14 +60,12 @@ export default {
         return json({ ok: true, ...counts, budget, diagnostics: await diagnosticText(store, now) });
       }
       if (path === "/inbox") {
+        if (budget.mode === "stopped") return json({ ok: true, limited: true });
         const update = await readJson(request, 4096);
         if (!Number.isSafeInteger(update.update_id) || update.update_id < 0 || !Number.isSafeInteger(update.userId) || update.userId <= 0
           || !pilotAllowed(env, update.userId) || typeof update.action !== "string" || update.action.length > 100) return json({ ok: false }, 400);
         // Revalidate the sanitized schema; this endpoint is private and also
         // authenticated independently from the main webhook/parser secret.
-        if (update.callbackId && !paused) {
-          try { await new TelegramClient({token:env.BOT_TOKEN,logger,timeoutMs:2000}).answerCallbackQuery(update.callbackId); update.acknowledged=true; } catch {}
-        }
         await enqueuePersonalUpdate(store, update);
         if (!paused) context.waitUntil(internal(env, `/inbox/${update.update_id}`).then(() => kick(env)).catch(() => {}));
       } else if (path === "/source-status") {
@@ -100,7 +99,7 @@ export default {
       } else if (path === "/tick/fanout") { if (budget.mode !== "stopped") await fanoutBatch(store); }
       else if (path === "/tick/due") { if (budget.mode === "normal") await enqueueDue(store); }
       else if (path === "/tick/delivery") {
-        const rows = await store.all("SELECT user_id FROM jobs WHERE status='pending' AND due<=? ORDER BY priority,due LIMIT 16", now.getTime());
+        const rows = await store.all("SELECT j.user_id FROM jobs j JOIN users u ON u.user_id=j.user_id WHERE j.status='pending' AND j.due<=? AND u.blocked=0 GROUP BY j.user_id ORDER BY MIN(u.last_api_at),MIN(j.priority),MIN(j.due) LIMIT 4", now.getTime());
         const users = [...new Set(rows.map(r => r.user_id))].slice(0, 4);
         await Promise.all(users.map(id => internal(env, `/delivery/${id}`)));
         const pending = await store.first("SELECT 1 FROM jobs WHERE status='pending' AND due<=? LIMIT 1", now.getTime() + 1200);

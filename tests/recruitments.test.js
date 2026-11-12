@@ -6,7 +6,7 @@ import { AttentionStore, collectAttentionUpdate, processAttentionUpdate } from "
 import { sqliteAdapter } from "../src/attention-local.js";
 import { recoverRecruitments, refreshRecruitment } from "../src/recruitments.js";
 
-const now = Date.now(), chat = { id: -1001, type: "supergroup" }, config = { adminUserId: "42" };
+const now = Date.now(), chat = { id: -1001, type: "supergroup" }, config = { curatorUserId:"900000002", adminUserId: "42" };
 const owner = { id: 42, first_name: "Owner" };
 async function fixture() {
   const db = new DatabaseSync(":memory:");
