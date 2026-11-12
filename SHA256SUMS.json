@@ -105,7 +105,7 @@
   },
   {
     "path": "cloudflare/worker.js",
-    "sha256": "d7330b1ef60874a305c5703f544fbb2d3241a88f0513853ab27040cf80fb8167"
+    "sha256": "b1862c799275e10a7a4cbb272ba67695ffffcadb3e4d0c08be0f6b7f569b8414"
   },
   {
     "path": "compose.yaml",
@@ -185,7 +185,7 @@
   },
   {
     "path": "personal/worker.js",
-    "sha256": "be59e86d52ebf9226faeb9c3390e5e4bf5fc743cc2f31e084e83e10a7ad21dc4"
+    "sha256": "9c88466481ce43f6f1adee6f3aa37be50fe5c57099d137a7205eeac961bc1d8a"
   },
   {
     "path": "scripts/check-deployment-security.js",
@@ -325,7 +325,7 @@
   },
   {
     "path": "src/personal/store.js",
-    "sha256": "49a06c184589f44a7b456f40311b36375293f8b6f76ddbf64c92236dc940f1d6"
+    "sha256": "e40c3925426cfd0afd5cfae89e41f6eb5eb2e51f6328b862902f7d5a97d6a258"
   },
   {
     "path": "src/personal/update.js",
@@ -553,7 +553,7 @@
   },
   {
     "path": "tests/security-remediation.test.js",
-    "sha256": "a7fa3919b88613e67420d89f96a71317b7993dd7b4f794c2df03109079968004"
+    "sha256": "53e67a6fcec62faf0de3cfedc764946111b4844815b423aad566c757abd34c35"
   },
   {
     "path": "tests/security.test.js",

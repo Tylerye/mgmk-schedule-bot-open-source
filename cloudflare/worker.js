@@ -600,7 +600,7 @@ export default {
               method: "POST", headers: { authorization: `Bearer ${env.PERSONAL_SHARED_SECRET}` },
             });
             const health = await response.json();
-            personal.ok = response.ok && health.ok === true && !health.stopped && !health.paused && !health.sourceError;
+            personal.ok = response.ok && health.ok === true && !health.stopped && !health.deliveryStopped && !health.paused && !health.sourceError;
           }
         } catch { /* Readiness fails without exposing credentials or service errors. */ }
       }

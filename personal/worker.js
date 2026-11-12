@@ -40,7 +40,11 @@ export default {
     const now = new Date();
     let started = false;
     try {
-      const budget = await store.budget(now, path === "/tick" ? 2 : 1); started = true;
+      const budget = await store.budget(now, path === "/tick" ? 2 : 1, {
+        service: path === "/health",
+        router: ["/tick", "/tick/inbox", "/tick/delivery"].includes(path),
+        userWork: /^\/(inbox|delivery)\/\d+$/u.test(path),
+      }); started = true;
       if (budget.mode === "stopped") return json({ok:true,stopped:true,pending:false});
       if (await store.setting("budget-mode") !== budget.mode) await store.setSetting("budget-mode", budget.mode);
       if (path === "/tick") {
@@ -57,7 +61,8 @@ export default {
       }
       if (path === "/health") {
         const counts = await store.first("SELECT (SELECT COUNT(*) FROM catalog) groups,(SELECT COUNT(*) FROM active_versions) days,(SELECT COUNT(*) FROM users) users");
-        return json({ ok: !paused, paused, sourceError: Boolean(await store.setting("source-error")), ...counts, budget, diagnostics: await diagnosticText(store, now) });
+        const deliveryStopped = budget.rows_written + 100 >= 27900 || budget.rows_read + 2000 >= 948000 || budget.requests + 2 >= 27900;
+        return json({ ok: !paused, paused, deliveryStopped, sourceError: Boolean(await store.setting("source-error")), ...counts, budget, diagnostics: await diagnosticText(store, now) });
       }
       if (path === "/inbox") {
         if (budget.mode === "stopped") return json({ ok: true, limited: true });

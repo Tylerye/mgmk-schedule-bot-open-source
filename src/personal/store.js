@@ -60,12 +60,20 @@ export class PersonalStore {
     try { await action(); return true; }
     finally { await this.run("UPDATE locks SET expires_at=0 WHERE user_id=? AND token=?", id, token); }
   }
-  async budget(now = new Date(), requests = 1) {
+  async budget(now = new Date(), requests = 1, { service = false, router = false, userWork = false } = {}) {
     const day = now.toISOString().slice(0, 10); // Account daily quotas use UTC.
-    if (stoppedDays.get(this.db) === day) return {mode:"stopped"};
-    this.reserved = { read: 2000, written: 200 };
-    const row = await this.first("INSERT INTO budgets(day,requests,rows_read,rows_written) VALUES(?,?,2000,200) ON CONFLICT(day) DO UPDATE SET requests=requests+excluded.requests,rows_read=rows_read+2000,rows_written=rows_written+200 WHERE requests+excluded.requests<27500 AND rows_read+2000<940000 AND rows_written+200<27000 RETURNING *", day, requests);
-    if (!row) { stoppedDays.set(this.db,day); this.reserved = null; return {mode:'stopped'}; }
+    const cached = stoppedDays.get(this.db);
+    if (!service && cached?.day === day && cached.until > now.getTime()) return {mode:"stopped"};
+    this.reserved = { read: service ? 500 : 2000, written: service || router ? 20 : userWork ? 100 : 200 };
+    // The service allowance is INSIDE the unchanged daily ceiling. Lightweight
+    // orchestration does not reserve the full delivery batch's write allowance.
+    const limits = service ? [28000, 950000, 28000] : [27900, 948000, 27900];
+    const row = await this.first("INSERT INTO budgets(day,requests,rows_read,rows_written) VALUES(?,?,?,?) ON CONFLICT(day) DO UPDATE SET requests=requests+excluded.requests,rows_read=rows_read+excluded.rows_read,rows_written=rows_written+excluded.rows_written WHERE requests+excluded.requests<? AND rows_read+excluded.rows_read<? AND rows_written+excluded.rows_written<? RETURNING *", day, requests, this.reserved.read, this.reserved.written, ...limits);
+    if (!row) {
+      if (!service) stoppedDays.set(this.db, { day, until: now.getTime() + 60000 });
+      this.reserved = null;
+      return {mode:'stopped'};
+    }
     return { ...row, mode: row.requests >= 28000 || row.rows_read >= 950000 || row.rows_written >= 28000 ? "stopped"
       : row.requests >= 22000 || row.rows_read >= 800000 || row.rows_written >= 22000 ? "saving" : "normal" };
   }
