@@ -9,7 +9,10 @@ export async function enqueuePersonalUpdate(store, update, now = Date.now()) {
   if (count.seen) return false;
   if(count.total>=500 || count.own>=20 || count.records>=100000) return false;
   const inserted = await store.run("INSERT OR IGNORE INTO inbox(update_id,user_id,payload,received_at) VALUES(?,?,?,?)", update.update_id, update.userId, JSON.stringify(update), now);
-  return Number(inserted.meta?.changes ?? 0) === 1;
+  // D1 counts rows touched by triggers too: this insert also bumps the storage
+  // counter, so a successful insert reports 2 changes, not 1. A duplicate is
+  // ignored and reports 0. Requiring exactly 1 silently dropped every update.
+  return Number(inserted.meta?.changes ?? 0) >= 1;
 }
 
 export async function processPersonalInbox(store, row, now = new Date()) {

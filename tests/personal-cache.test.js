@@ -77,3 +77,23 @@ test('caches of two databases never mix', async () => {
     second.close();
   }
 });
+
+// D1 reports trigger-touched rows in `changes`, so a successful inbox insert can
+// report 2. Requiring exactly 1 dropped every interactive update silently.
+test('an inbox insert counts as admitted when triggers add their own change', async () => {
+  const { enqueuePersonalUpdate } = await import('../src/personal/inbox.js');
+  const rows = new Map();
+  const store = {
+    async first(sql, ...args) {
+      if (/\bseen\b/u.test(sql)) return { seen: 0, total: 0, own: 0, records: 0 };
+      return null;
+    },
+    async run(sql, updateId) {
+      rows.set(updateId, true);
+      // 2 = the row itself plus the storage-counter trigger, as D1 reports it.
+      return { meta: { changes: 2 } };
+    },
+  };
+  assert.equal(await enqueuePersonalUpdate(store, { update_id: 7, userId: 100, action: 'menu' }), true);
+  assert.equal(await enqueuePersonalUpdate(store, { update_id: 8, userId: 100, action: 'menu' }), true, 'trigger-side change must not look like a duplicate');
+});
