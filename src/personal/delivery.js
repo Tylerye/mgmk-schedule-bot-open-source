@@ -3,12 +3,19 @@ import { renderPersonal, t, subjectChanges, choosePersonalPin, nextRenderAt, nex
 
 const digest = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
+
+
 // One Telegram operation per user invocation. Every send has a durable intent
 // first. A process dying between intent and receipt leaves it uncertain.
-export async function telegramOperation(store, client, user, key, method, body, now = Date.now()) {
+export async function telegramOperation(store, client, user, key, method, body, now = Date.now(), after = []) {
   const id = `${user.user_id}:${key}`;
   const old = await store.first("SELECT * FROM operations WHERE id=?", id);
-  if (old?.status === "succeeded") return { done: true, result: JSON.parse(old.result) };
+  if (old?.status === "succeeded") {
+    // A repeated idempotent operation still has to carry the statements this
+    // delivery owed (job finished, payload advanced), or the job stays pending.
+    if (after.length) await store.batch(after);
+    return { done: true, result: JSON.parse(old.result) };
+  }
   if (old?.status === "uncertain" || (old?.status === "started" && method === "sendMessage")) {
     await store.run("UPDATE operations SET status='uncertain' WHERE id=?", id);
     return { uncertain: true };
@@ -19,6 +26,8 @@ export async function telegramOperation(store, client, user, key, method, body, 
   const slot = await store.first("INSERT INTO rate_gate(key,next_at) VALUES('telegram',?) ON CONFLICT(key) DO UPDATE SET next_at=excluded.next_at "
     + "WHERE rate_gate.next_at<=? RETURNING next_at", now + 84, now);
   if (!slot) return { retryAt: Math.max(now + 84, (await store.first("SELECT next_at FROM rate_gate WHERE key='telegram'")).next_at) };
+  // Both writes in one round trip: intent first, then the timestamp the interval
+  // above is measured against.
   await store.batch([
     ["INSERT INTO operations(id,user_id,method,status,started_at) VALUES(?,?,?,'started',?) ON CONFLICT(id) DO UPDATE SET status='started',started_at=excluded.started_at", id, user.user_id, method, now],
     ["UPDATE users SET last_api_at=? WHERE user_id=?", now, user.user_id],
@@ -27,7 +36,9 @@ export async function telegramOperation(store, client, user, key, method, body, 
     const result = await client.call(method, body);
     const stable = method === "sendMessage" ? { message_id: result?.message_id, content_hash: digest([body.text, body.reply_markup ?? { inline_keyboard: [] }]) } : true;
     if (method === "sendMessage" && !Number.isSafeInteger(stable.message_id)) throw new Error("Missing Telegram receipt");
-    await store.run("UPDATE operations SET status='succeeded',result=? WHERE id=?", JSON.stringify(stable), id);
+    // One round trip for the receipt plus whatever this delivery had to persist
+    // (job finished, payload advanced, screen hash): D1 costs ~130ms per trip.
+    await store.batch([["UPDATE operations SET status='succeeded',result=? WHERE id=?", JSON.stringify(stable), id], ...after]);
     return { done: true, result: stable };
   } catch (error) {
     if (method === "editMessageText" && /message is not modified/iu.test(error.description ?? "")) {
@@ -70,7 +81,7 @@ async function applyOutcome(store, job, outcome) {
 const pinCards = cards => cards.map(c => ({ date: c.date, messageId: c.parts[0]?.id, hasLessons: Boolean(c.schedule?.lessons.length) }));
 const currentPin = user => ({ messageId: user.pin_message_id, date: user.pin_date });
 async function loadCards(store, user) {
-  return (await store.all("SELECT * FROM cards WHERE user_id=? AND group_id=? ORDER BY date", user.user_id, user.group_id))
+  return (await store.cards(user.user_id, user.group_id))
     .map(c => ({ ...c, parts: JSON.parse(c.parts), schedule: c.schedule_payload ? JSON.parse(c.schedule_payload) : null }));
 }
 function nextDue(user, schedules, cards, now) {
@@ -92,17 +103,20 @@ async function pinStatement(store, user, cards, now) {
 
 export async function deliverUser(store, client, id, { now = new Date(), mode = "normal", ownerId } = {}) {
   return store.lock(id, now.getTime(), async () => {
-    const user = await store.user(id);
-    if (!user || user.blocked) return;
-    const job = await store.first("SELECT * FROM jobs WHERE user_id=? AND status='pending' AND due<=? ORDER BY priority,due,id LIMIT 1", id, now.getTime());
-    if (!job) return;
+    // Two independent reads: overlap them so only one round trip is waited on.
+    const [user, job] = await Promise.all([
+      store.user(id),
+      store.first("SELECT * FROM jobs WHERE user_id=? AND status='pending' AND due<=? ORDER BY priority,due,id LIMIT 1", id, now.getTime()),
+    ]);
+    if (!user || user.blocked || !job) return;
     const payload = JSON.parse(job.payload);
     if (job.epoch !== user.epoch || (user.paused && !payload.manual)) { await finishJob(store, job, "cancelled"); return; }
     if (mode === "stopped" || (mode !== "normal" && !payload.manual && job.priority > 1)) {
       await store.run("UPDATE jobs SET due=? WHERE id=? AND revision=?", now.getTime() + 15 * 60000, job.id, job.revision);
       return;
     }
-    const op = (key, method, body) => telegramOperation(store, client, user, key, method, body, now.getTime());
+    const op = (key, method, body, after = []) => telegramOperation(store, client, user, key, method, body, now.getTime(), after);
+    const finish = () => [["UPDATE jobs SET status='done' WHERE id=? AND revision=?", job.id, job.revision]];
     const sendBody = (text, keyboard, silent = true) => ({ chat_id: id, text, parse_mode: "HTML", disable_web_page_preview: true,
       disable_notification: silent, ...(keyboard ? { reply_markup: keyboard } : {}) });
     if (job.kind === "commands") {
@@ -116,8 +130,8 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
           ["UPDATE jobs SET status='done' WHERE id=? AND revision=?", job.id, job.revision]]);
       }
     } else if (job.kind === "callback") {
-      const result = await op(`callback:${job.date}`, "answerCallbackQuery", { callback_query_id: payload.callbackId });
-      if (await applyOutcome(store, job, result)) await finishJob(store, job);
+      const result = await op(`callback:${job.date}`, "answerCallbackQuery", { callback_query_id: payload.callbackId }, finish());
+      await applyOutcome(store, job, result);
     } else if (job.kind === "reply" || job.kind === "alert" || job.kind === "diagnostics") {
       if (job.kind === "alert" && payload.scheduleHash) {
         const latest = (await store.schedules(user.group_id)).find(s => s.date === payload.date);
@@ -135,31 +149,38 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       // Only standalone screens are cached: automatic cards and the owner's
       // teacher preview can be edited by other delivery paths.
       const screenKey = `screen-v1:${id}:${payload.editId}`;
+      // Judged from the card snapshot already in the isolate cache: no extra D1 trip.
       const standalone = job.kind === "reply" && payload.editId && String(id) !== String(ownerId)
-        && !await store.first("SELECT 1 FROM cards c,json_each(c.parts) p WHERE c.user_id=? AND json_extract(p.value,'$.id')=? LIMIT 1", id, payload.editId);
+        && !(await store.userCards(id)).some(c => JSON.parse(c.parts).some(part => part.id === payload.editId));
       const screenHash = digest([text, payload.keyboard ?? { inline_keyboard: [] }]);
       const unchanged = standalone && await store.setting(screenKey) === screenHash;
-      const result = unchanged ? { done: true } : await op(`${job.kind}:${job.date}:${job.revision}:${partIndex}:${digest(body)}`, method, body);
+      const persist = [
+        ...(standalone && !unchanged ? [["INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE settings.value IS NOT excluded.value", screenKey, JSON.stringify(screenHash)]] : []),
+        ...(payload.texts && partIndex + 1 < payload.texts.length
+          ? [["UPDATE jobs SET payload=? WHERE id=? AND revision=?", JSON.stringify({ ...payload, partIndex: partIndex + 1 }), job.id, job.revision]]
+          : finish()),
+      ];
+      const result = unchanged ? { done: true } : await op(`${job.kind}:${job.date}:${job.revision}:${partIndex}:${digest(body)}`, method, body, persist);
+      // An unchanged screen still has to advance or finish its job, otherwise the
+      // same delivery is retried forever.
+      if (unchanged) await store.batch(persist);
       if (result.failed && payload.editId) {
         // The user may have cleared the chat: create one replacement screen
         await store.run("UPDATE jobs SET payload=?,status='pending' WHERE id=? AND revision=?", JSON.stringify({...payload,editId:null}),job.id,job.revision);
         return;
       }
-      if (await applyOutcome(store, job, result)) {
-        if (standalone && !unchanged) await store.setSetting(screenKey, screenHash);
-        if (payload.texts && partIndex + 1 < payload.texts.length) await store.run("UPDATE jobs SET payload=? WHERE id=? AND revision=?", JSON.stringify({ ...payload, partIndex: partIndex + 1 }), job.id, job.revision);
-        else await finishJob(store, job);
-      }
+      await applyOutcome(store, job, result);
     } else if (job.kind === "unpin") {
-      const result = await op(`unpin:${user.epoch}:${payload.messageId}`, "unpinChatMessage", { chat_id: id, message_id: payload.messageId });
-      if (await applyOutcome(store, job, result)) await finishJob(store, job);
+      const result = await op(`unpin:${user.epoch}:${payload.messageId}`, "unpinChatMessage", { chat_id: id, message_id: payload.messageId }, finish());
+      await applyOutcome(store, job, result);
     } else if (job.kind === "pin") {
       if (user.paused || user.auto_pin === false || user.auto_pin === 0) { await finishJob(store, job, "cancelled"); return; }
-      const cards = await store.all("SELECT date,parts,mode,schedule_payload FROM cards WHERE user_id=? AND group_id=? ORDER BY date", id, user.group_id);
+      const cards = (await store.cards(id, user.group_id)).map(c => ({ date: c.date, parts: c.parts, mode: c.mode, schedule_payload: c.schedule_payload }));
       const eligible = cards.map(c => ({ date: c.date, messageId: JSON.parse(c.parts)[0]?.id, hasLessons: Boolean(c.schedule_payload && JSON.parse(c.schedule_payload).lessons.length) }));
       const desired = choosePersonalPin(eligible, { messageId: user.pin_message_id, date: user.pin_date }, now);
       if (!desired) { await finishJob(store, job); return; }
-      const result = await op(`pin:${user.epoch}:${job.revision}:${desired.messageId}`, "pinChatMessage", { chat_id: id, message_id: desired.messageId, disable_notification: true });
+      const pinAfter = [];
+      const result = await op(`pin:${user.epoch}:${job.revision}:${desired.messageId}`, "pinChatMessage", { chat_id: id, message_id: desired.messageId, disable_notification: true }, pinAfter);
       if (await applyOutcome(store, job, result)) {
         const statements = [["UPDATE users SET pin_message_id=?,pin_date=? WHERE user_id=?", desired.messageId, desired.date, id]];
         if (user.pin_message_id && user.pin_message_id !== desired.messageId) statements.push(store.jobStatement(user, "unpin", String(user.pin_message_id), { priority: 1, due: now.getTime(), payload: { messageId: user.pin_message_id } }));
@@ -236,6 +257,20 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       await store.batch(statements);
     } else await finishJob(store, job, "cancelled");
   });
+}
+
+// One tap produces more than one ready job (screen edit + acknowledgement).
+// Draining a few of them here keeps the reply immediate instead of waiting for
+// the next tick lane, while still respecting the shared Telegram rate gate.
+export async function drainUser(store, client, id, { mode = "normal", ownerId, rounds = 1 } = {}) {
+  for (let round = 0; round < rounds; round++) {
+    const acquired = await deliverUser(store, client, id, { now: new Date(), mode, ownerId });
+    if (acquired === false) return false;
+    if (round + 1 >= rounds) return true;
+    const more = await store.first("SELECT 1 FROM jobs WHERE user_id=? AND status='pending' AND due<=? LIMIT 1", id, Date.now());
+    if (!more) return true;
+  }
+  return true;
 }
 
 export async function enqueueDue(store, now = Date.now()) {
