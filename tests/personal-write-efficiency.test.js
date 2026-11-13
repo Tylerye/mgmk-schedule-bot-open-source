@@ -176,3 +176,45 @@ test('near-ceiling admissions remain atomic and UTC rollover never resets the sp
   assert.equal((await new PersonalStore(f.db).budget(new Date('2026-11-13T00:00:00Z'),1,{userWork:true})).mode,'normal');
   assert.equal((await f.store.first("SELECT rows_written FROM budgets WHERE day='2026-11-12'")).rows_written,spent);
 });
+
+test('queued card edits recover after a persistence crash using the same message without a second journal',async t=>{
+  const f=await fixture(t);await f.store.enqueue(f.user,'card',f.s.date,{due:local('09:00').getTime()});
+  const original=f.store.batch.bind(f.store);let crash=true,attempts=0;
+  f.store.batch=async statements=>{if(crash&&statements.some(([sql])=>sql.startsWith('INSERT INTO cards'))){crash=false;throw Error('card commit interrupted');}return original(statements);};
+  const client={async call(method,body){assert.equal(method,'editMessageText');assert.equal(body.message_id,88);attempts++;
+    if(attempts>1)throw Object.assign(Error('unchanged'),{apiRejected:true,errorCode:400,description:'Bad Request: message is not modified'});return true;}};
+  await assert.rejects(deliverUser(f.store,client,100,{now:local('09:00')}),/interrupted/u);
+  const resumed=new PersonalStore(f.db);await deliverUser(resumed,client,100,{now:local('09:01')});
+  assert.equal(attempts,2);assert.equal((await resumed.card(f.user,f.s.date)).parts[0].id,88);
+  assert.equal((await resumed.first('SELECT COUNT(*) n FROM operations')).n,0);
+  const done=await resumed.first("SELECT * FROM jobs WHERE kind='card'");assert.equal(done.status,'done');assert.ok(done.completed_at);
+  await resumed.enqueue(f.user,'card',f.s.date,{due:local('09:02').getTime()});
+  const reopened=await resumed.first("SELECT * FROM jobs WHERE kind='card'");assert.equal(reopened.completed_at,null);assert.ok(reopened.revision>done.revision);
+});
+
+for(const kind of ['timeout','429','403']) test(`queued card edit retains retry and block handling: ${kind}`,async t=>{
+  const f=await fixture(t);await f.store.enqueue(f.user,'card',f.s.date,{due:local('09:00').getTime()});
+  const client={async call(method){assert.equal(method,'editMessageText');if(kind==='timeout')throw Error('timeout');
+    throw Object.assign(Error('rejected'),{apiRejected:true,errorCode:Number(kind),parameters:{retry_after:25}});}};
+  await deliverUser(f.store,client,100,{now:local('09:00')});
+  assert.equal((await f.store.first('SELECT COUNT(*) n FROM operations')).n,0);
+  const job=await f.store.first("SELECT * FROM jobs WHERE kind='card'");
+  if(kind==='403'){assert.equal(job.status,'blocked');assert.equal((await f.store.user(100)).blocked,1);}
+  else {assert.equal(job.status,'pending');assert.ok(job.due>local('09:00').getTime());
+    await deliverUser(new PersonalStore(f.db),f.client,100,{now:local('09:01')});
+    assert.equal((await f.store.first("SELECT status FROM jobs WHERE kind='card'")).status,'done');
+    assert.deepEqual(f.calls.map(c=>c.method),['editMessageText']);}
+});
+
+test('uneditable card replacement still uses an uncertain-protected send intent',async t=>{
+  const f=await fixture(t);await f.store.enqueue(f.user,'card',f.s.date,{due:local('09:00').getTime()});
+  const methods=[],client={async call(method){methods.push(method);
+    if(method==='editMessageText')throw Object.assign(Error('missing'),{apiRejected:true,errorCode:400,description:'message to edit not found'});
+    throw Error('ambiguous send timeout');}};
+  await deliverUser(f.store,client,100,{now:local('09:00')});
+  await deliverUser(new PersonalStore(f.db),client,100,{now:local('09:01')});
+  await deliverUser(new PersonalStore(f.db),client,100,{now:local('09:02')});
+  assert.deepEqual(methods,['editMessageText','sendMessage']);
+  assert.equal((await f.store.first("SELECT status FROM jobs WHERE kind='card'")).status,'uncertain');
+  assert.equal((await f.store.first("SELECT status FROM operations WHERE method='sendMessage'")).status,'uncertain');
+});

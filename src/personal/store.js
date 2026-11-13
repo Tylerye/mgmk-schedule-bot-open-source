@@ -51,7 +51,7 @@ export class PersonalStore {
     return ["INSERT INTO jobs(id,user_id,epoch,kind,date,priority,due,payload) VALUES(?,?,?,?,?,?,?,?) "
       + "ON CONFLICT(id) DO UPDATE SET epoch=excluded.epoch,priority=CASE WHEN jobs.status='pending' AND jobs.epoch=excluded.epoch THEN MIN(jobs.priority,excluded.priority) ELSE excluded.priority END,"
       + "due=CASE WHEN jobs.status='pending' AND jobs.epoch=excluded.epoch THEN MIN(jobs.due,excluded.due) ELSE excluded.due END,"
-      + "payload=excluded.payload,revision=jobs.revision+1,status='pending'", id, user.user_id, user.epoch, kind, date, priority, due, JSON.stringify(payload)];
+      + "payload=excluded.payload,revision=jobs.revision+1,status='pending',completed_at=NULL", id, user.user_id, user.epoch, kind, date, priority, due, JSON.stringify(payload)];
   }
   async enqueue(user, kind, date, options) { return this.batch([this.jobStatement(user, kind, date, options)]); }
   async lock(id, now, action) {

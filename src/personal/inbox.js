@@ -27,7 +27,7 @@ export async function processPersonalInbox(store, row, now = new Date()) {
     const reply = (text, keyboard = menu(user), editId = update.messageId ?? null) => replies.push({ text, keyboard, editId });
     let action = update.action;
     // Only the latest navigation request should survive rapid taps
-    jobs.push(["UPDATE jobs SET status='superseded' WHERE user_id=? AND status='pending' AND kind IN ('reply','callback','commands')", user.user_id]);
+    jobs.push(["UPDATE jobs SET status='superseded',completed_at=COALESCE(completed_at,unixepoch()*1000) WHERE user_id=? AND status='pending' AND kind IN ('reply','callback','commands')", user.user_id]);
     if (action === "start") action = user.group_id ? "menu" : "language";
     if (action === "language") {
       reply("Русский / English", { inline_keyboard: [[button("Русский", "lang:ru"), button("English", "lang:en")]] });
@@ -117,6 +117,6 @@ export async function processPersonalInbox(store, row, now = new Date()) {
     const keys = ["language", "group_id", "epoch", "screen", "sound", "changes", "pin", "paused", "blocked", "support_seen", "pin_date", "next_due"];
     const changed = keys.filter(key => user[key] !== original[key]);
     await store.batch([...(changed.length ? [[`UPDATE users SET ${changed.map(k => `${k}=?`).join(",")} WHERE user_id=?`, ...changed.map(k => user[k]), user.user_id]] : []), ...jobs,
-      ["UPDATE inbox SET status='done',payload='{}' WHERE update_id=?", row.update_id]]);
+      ["UPDATE inbox SET status='done',payload='{}',completed_at=COALESCE(completed_at,unixepoch()*1000) WHERE update_id=?", row.update_id]]);
   });
 }

@@ -6,9 +6,13 @@ const digest = value => createHash("sha256").update(JSON.stringify(value)).diges
 
 // One Telegram operation per user invocation. Every send has a durable intent
 // first. A process dying between intent and receipt leaves it uncertain.
-export async function telegramOperation(store, client, user, key, method, body, now = Date.now()) {
+export async function telegramOperation(store, client, user, key, method, body, now = Date.now(), { queuedCardEdit = false } = {}) {
   const id = `${user.user_id}:${key}`;
-  const old = await store.first("SELECT * FROM operations WHERE id=?", id);
+  // For an existing card, the persisted job is already the intent and its
+  // atomic card hash/job completion is the receipt. Repeating an interrupted
+  // edit targets the same message and is idempotent; sends still need a journal.
+  const journal = !(queuedCardEdit && method === 'editMessageText');
+  const old = journal ? await store.first("SELECT * FROM operations WHERE id=?", id) : null;
   if (old?.status === "succeeded") return { done: true, result: JSON.parse(old.result) };
   if (old?.status === "uncertain" || (old?.status === "started" && method === "sendMessage")) {
     await store.run("UPDATE operations SET status='uncertain' WHERE id=?", id);
@@ -21,18 +25,18 @@ export async function telegramOperation(store, client, user, key, method, body, 
     + "WHERE rate_gate.next_at<=? RETURNING next_at", now + 84, now);
   if (!slot) return { retryAt: Math.max(now + 84, (await store.first("SELECT next_at FROM rate_gate WHERE key='telegram'")).next_at) };
   await store.batch([
-    ["INSERT INTO operations(id,user_id,method,status,started_at) VALUES(?,?,?,'started',?) ON CONFLICT(id) DO UPDATE SET status='started',started_at=excluded.started_at", id, user.user_id, method, now],
+    ...(journal ? [["INSERT INTO operations(id,user_id,method,status,started_at) VALUES(?,?,?,'started',?) ON CONFLICT(id) DO UPDATE SET status='started',started_at=excluded.started_at", id, user.user_id, method, now]] : []),
     ["UPDATE users SET last_api_at=? WHERE user_id=?", now, user.user_id],
   ]);
   try {
     const result = await client.call(method, body);
     const stable = method === "sendMessage" ? { message_id: result?.message_id, content_hash: digest([body.text, body.reply_markup ?? { inline_keyboard: [] }]) } : true;
     if (method === "sendMessage" && !Number.isSafeInteger(stable.message_id)) throw new Error("Missing Telegram receipt");
-    await store.run("UPDATE operations SET status='succeeded',result=? WHERE id=?", JSON.stringify(stable), id);
+    if (journal) await store.run("UPDATE operations SET status='succeeded',result=? WHERE id=?", JSON.stringify(stable), id);
     return { done: true, result: stable };
   } catch (error) {
     if (method === "editMessageText" && /message is not modified/iu.test(error.description ?? "")) {
-      await store.run("UPDATE operations SET status='succeeded',result='true' WHERE id=?", id);
+      if (journal) await store.run("UPDATE operations SET status='succeeded',result='true' WHERE id=?", id);
       return { done: true, result: true };
     }
     const ambiguous = method === "sendMessage" && !error.apiRejected;
@@ -41,26 +45,28 @@ export async function telegramOperation(store, client, user, key, method, body, 
       return { uncertain: true };
     }
     if (error.errorCode === 403 && error.apiRejected) {
-      await store.batch([["UPDATE users SET blocked=1,next_due=NULL WHERE user_id=?", user.user_id], ["UPDATE operations SET status='retry' WHERE id=?", id]]);
+      await store.batch([["UPDATE users SET blocked=1,next_due=NULL WHERE user_id=?", user.user_id], ...(journal ? [["UPDATE operations SET status='retry' WHERE id=?", id]] : [])]);
       return { blocked: true };
     }
     if (error.errorCode === 429) {
       const retryAt = now + Math.max(1, Number(error.parameters?.retry_after) || 30) * 1000;
-      await store.batch([["UPDATE rate_gate SET next_at=MAX(next_at,?) WHERE key='telegram'", retryAt], ["UPDATE operations SET status='retry' WHERE id=?", id]]);
+      await store.batch([["UPDATE rate_gate SET next_at=MAX(next_at,?) WHERE key='telegram'", retryAt], ...(journal ? [["UPDATE operations SET status='retry' WHERE id=?", id]] : [])]);
       const count = await store.setting("429", 0);
       await store.setSetting("429", count + 1);
       return { retryAt };
     }
     const permanent = error.apiRejected && error.errorCode >= 400 && error.errorCode < 500;
     const replaceable = method === 'editMessageText' && /message to edit not found|message can't be edited|message can not be edited/iu.test(error.description ?? '');
-    await store.run("UPDATE operations SET status=?,result=? WHERE id=?", permanent ? "failed" : "retry", JSON.stringify({replaceable}), id);
+    if (journal) await store.run("UPDATE operations SET status=?,result=? WHERE id=?", permanent ? "failed" : "retry", JSON.stringify({replaceable}), id);
     return permanent ? { failed: true, replaceable } : { retryAt: now + 5000 };
   }
 }
 
 async function finishJob(store, job, status = "done") {
-  await store.run("UPDATE jobs SET status=? WHERE id=? AND revision=?", status, job.id, job.revision);
+  const complete = ['done','superseded','cancelled'].includes(status) ? ',completed_at=COALESCE(completed_at,unixepoch()*1000)' : '';
+  await store.run("UPDATE jobs SET status=?" + complete + " WHERE id=? AND revision=?", status, job.id, job.revision);
 }
+const doneJob = job => ["UPDATE jobs SET status='done',completed_at=COALESCE(completed_at,unixepoch()*1000) WHERE id=? AND revision=?", job.id, job.revision];
 async function applyOutcome(store, job, outcome) {
   if (outcome.done) return true;
   if (outcome.retryAt) await store.run("UPDATE jobs SET due=? WHERE id=? AND revision=?", outcome.retryAt, job.id, job.revision);
@@ -100,7 +106,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
     const payload = JSON.parse(job.payload);
     if (job.epoch !== user.epoch || (user.paused && !payload.manual)) { await finishJob(store, job, "cancelled"); return; }
     if (mode === "stopped" || (mode !== "normal" && !payload.manual)) return;
-    const op = (key, method, body) => telegramOperation(store, client, user, key, method, body, now.getTime());
+    const op = (key, method, body) => telegramOperation(store, client, user, key, method, body, now.getTime(), { queuedCardEdit: job.kind === 'card' });
     const sendBody = (text, keyboard, silent = true) => ({ chat_id: id, text, parse_mode: "HTML", disable_web_page_preview: true,
       disable_notification: silent, ...(keyboard ? { reply_markup: keyboard } : {}) });
     if (job.kind === "commands") {
@@ -111,7 +117,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       const result = await op(`commands:${job.date}:${job.revision}:${user.language}`, "setMyCommands", { scope: { type: "chat", chat_id: id }, language_code: job.date, commands });
       if (await applyOutcome(store, job, result)) {
         await store.batch([["INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE settings.value IS NOT excluded.value", `commands-v1:${id}:${job.date}`, JSON.stringify(user.language)],
-          ["UPDATE jobs SET status='done' WHERE id=? AND revision=?", job.id, job.revision]]);
+          doneJob(job)]);
       }
     } else if (job.kind === "callback") {
       const result = await op(`callback:${job.date}`, "answerCallbackQuery", { callback_query_id: payload.callbackId });
@@ -165,7 +171,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
         const decoded = cards.map(c => ({ ...c, parts: JSON.parse(c.parts), schedule: c.schedule_payload ? JSON.parse(c.schedule_payload) : null }));
         const next = nextDue({ ...user, pin_message_id: desired.messageId, pin_date: desired.date }, await store.schedules(user.group_id), decoded, now);
         if (user.next_due !== next) statements.push(dueStatement(user, next));
-        statements.push(["UPDATE jobs SET status='done' WHERE id=? AND revision=?", job.id, job.revision]);
+        statements.push(doneJob(job));
         await store.batch(statements);
       }
     } else if (job.kind === "card") {
@@ -230,7 +236,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
         const next = nextDue(user, schedules, cards, now);
         if (user.next_due !== next) statements.push(dueStatement(user, next));
       }
-      statements.push(["UPDATE jobs SET status='done' WHERE id=? AND revision=?", job.id, job.revision]);
+      statements.push(doneJob(job));
       await store.batch(statements);
     } else await finishJob(store, job, "cancelled");
   });
