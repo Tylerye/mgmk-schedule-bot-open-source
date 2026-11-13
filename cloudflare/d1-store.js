@@ -88,23 +88,29 @@ export async function patchHealth(database, patch, { heartbeatKey, now = new Dat
 
 // Telegram work is bounded to 25 seconds. An interrupted invocation must not
 // stall more than the next minute tick; slow discovery has a separate lease.
-export async function withStateLock(database, task, { name = "state", leaseMs = name === "state" ? 60_000 : 180_000 } = {}) {
-  const owner = crypto.randomUUID();
+export async function withStateLock(database, task, { name = "state", leaseMs = name === "state" ? 60_000 : 180_000, interval = null } = {}) {
+  if (interval !== null && (!['source', 'teacher-source'].includes(name) || !Number.isSafeInteger(interval) || interval < 0)) throw new Error('Invalid maintenance interval');
+  const token = crypto.randomUUID();
+  const owner = interval === null ? token : JSON.stringify({ token, interval });
   const now = Date.now();
+  const saved = "CASE WHEN json_valid(runtime_locks.owner) THEN runtime_locks.owner ELSE '{}' END";
+  // Ordinary internal calls preserve the tick marker too: they must not reopen
+  // a completed signed tick for replay. Old plain-token rows remain compatible.
+  const nextOwner = interval === null
+    ? "CASE WHEN json_type(" + saved + ",'$.interval')='integer' THEN json_set(" + saved + ",'$.token',excluded.owner) ELSE excluded.owner END"
+    : 'excluded.owner';
   const acquired = await database.prepare(
-    "INSERT INTO runtime_locks (name, owner, locked_until) VALUES (?, ?, ?) "
-    + "ON CONFLICT(name) DO UPDATE SET owner = excluded.owner, locked_until = excluded.locked_until "
-    + "WHERE runtime_locks.locked_until <= ?",
-  ).bind(name, owner, now + leaseMs, now).run();
+    "INSERT INTO runtime_locks(name,owner,locked_until) SELECT ?,?,? WHERE "
+    + (interval === null ? '1' : 'NOT EXISTS(SELECT 1 FROM runtime_locks legacy WHERE legacy.name=? AND legacy.locked_until>=?)')
+    + " ON CONFLICT(name) DO UPDATE SET owner=" + nextOwner + ",locked_until=excluded.locked_until WHERE runtime_locks.locked_until<=?"
+    + (interval === null ? '' : " AND COALESCE(json_extract(" + saved + ",'$.interval'),-1)<?"),
+  ).bind(name, owner, now + leaseMs, ...(interval === null ? [] : [`maintenance-admission:${name}`, interval]), now, ...(interval === null ? [] : [interval])).run();
   if ((acquired.meta?.changes ?? 0) !== 1) return { acquired: false };
-  try {
-    return { acquired: true, value: await task() };
-  } finally {
-    const persistent = name === "state" || name === "source" || name === "teacher-source" || name.startsWith("teacher:");
-    if (!persistent) {
-      await database.prepare("DELETE FROM runtime_locks WHERE name = ? AND owner = ?").bind(name, owner).run();
-    } else await database.prepare(
-      "UPDATE runtime_locks SET owner = '', locked_until = 0 WHERE name = ? AND owner = ?",
-    ).bind(name, owner).run();
+  try { return { acquired: true, value: await task() }; }
+  finally {
+    const persistent = name === 'state' || name === 'source' || name === 'teacher-source' || name.startsWith('teacher:');
+    const owned = "(owner=? OR json_extract(CASE WHEN json_valid(owner) THEN owner ELSE '{}' END,'$.token')=?)";
+    if (!persistent) await database.prepare('DELETE FROM runtime_locks WHERE name=? AND ' + owned).bind(name, owner, token).run();
+    else await database.prepare("UPDATE runtime_locks SET owner=CASE WHEN json_type(CASE WHEN json_valid(owner) THEN owner ELSE '{}' END,'$.interval')='integer' THEN json_set(owner,'$.token','') ELSE '' END,locked_until=0 WHERE name=? AND " + owned).bind(name, owner, token).run();
   }
 }

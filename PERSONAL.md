@@ -73,6 +73,19 @@ work is budget-paused or overdue. Night freshness allows 20 minutes rather
 than the daytime five minutes, including a short morning handover. Manual
 availability and background degradation are separate states.
 
+An already displayed standalone screen can finish an acknowledged repeat tap
+inside its durable inbox transaction, without creating another reply job. The
+screen hash is read from D1 under the user's delivery lock after rendering from
+fresh state. Pending older navigation is still superseded. Automatic cards,
+owner preview, preference changes and callbacks still needing acknowledgement
+keep the normal delivery path. No TTL cache of mutable state is introduced.
+
+The main student's and teacher's source lanes store their signed tick marker
+in the same persistent lease row as their execution token. Replays stay blocked
+after completion or failure; a new tick still respects an active lease. Legacy
+admission rows are retained and honoured during the transition, without a schema
+migration or a reset of source polling frequency.
+
 Subscription epochs invalidate old jobs after group/language changes. Card work
 is serialized per user; sends persist intent before calling Telegram. An ambiguous
 send becomes `uncertain` and is not repeated automatically. Edits can be retried.

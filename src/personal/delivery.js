@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { renderPersonal, t, subjectChanges, choosePersonalPin, nextRenderAt, nextPersonalPinAt, noticeParts } from "./view.js";
 import { manualJobsOnly } from './quota.js';
 import { backgroundPolicy } from '../background-policy.js';
+import { standaloneScreen, screenHash as hashScreen } from './screen-state.js';
 
 const digest = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
@@ -140,9 +141,8 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       // Only standalone screens are cached: automatic cards and the owner's
       // teacher preview can be edited by other delivery paths.
       const screenKey = `screen-v1:${id}:${payload.editId}`;
-      const standalone = job.kind === "reply" && payload.editId && String(id) !== String(ownerId)
-        && !await store.first("SELECT 1 FROM cards c,json_each(c.parts) p WHERE c.user_id=? AND json_extract(p.value,'$.id')=? LIMIT 1", id, payload.editId);
-      const screenHash = digest([text, payload.keyboard ?? { inline_keyboard: [] }]);
+      const standalone = job.kind === "reply" && await standaloneScreen(store, id, payload.editId, ownerId);
+      const screenHash = hashScreen(text, payload.keyboard);
       const unchanged = standalone && await store.setting(screenKey) === screenHash;
       const result = unchanged ? { done: true } : await op(`${job.kind}:${job.date}:${job.revision}:${partIndex}:${digest(body)}`, method, body);
       if (result.failed && payload.editId) {

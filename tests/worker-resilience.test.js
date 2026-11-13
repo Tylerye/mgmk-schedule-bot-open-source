@@ -210,6 +210,20 @@ test("successful source lane does not clear a live lane error", async () => {
   } finally { f.cleanup(); }
 });
 
+test('a repeated source tick cannot erase a source error or poll again', async () => {
+  const f=await fixture(), originalNow=Date.now;
+  Date.now=()=>1794564000000;
+  try {
+    await f.lane('source');f.calls.length=0;
+    const failure={event:'source',at:new Date().toISOString()};
+    await patchHealth(f.db,{sourceError:failure});
+    await f.lane('source');
+    assert.equal(f.calls.length,0);
+    const state=await new D1StateStore(f.db).load();
+    assert.deepEqual(state.health.sourceError,failure);
+  } finally {Date.now=originalNow;f.cleanup();}
+});
+
 test("minute dispatcher starts every bounded lane without database work or blind retries", async () => {
   const original = globalThis.fetch; const calls = [];
   globalThis.fetch = async (url, options) => {

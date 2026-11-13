@@ -110,7 +110,7 @@ export default {
           // Process in a separate CPU lane before returning, then start the
           // user's own delivery chain. Persisted inbox/jobs remain the fallback.
           const processed = await internal(env, `/inbox/${update.update_id}`);
-          if (!processed.busy && !processed.stopped)
+          if (!processed.busy && !processed.stopped && processed.delivery !== false)
             context.waitUntil(deliverInteractive(env, update.userId).catch(() => {}));
         }
       } else if (path === "/source-status") {
@@ -142,8 +142,9 @@ export default {
       } else if (/^\/inbox\/\d+$/u.test(path)) {
         const row = await store.first("SELECT * FROM inbox WHERE update_id=? AND status='pending'", Number(path.split("/")[2]));
         if (row && pilotAllowed(env, row.user_id)) {
-          const acquired = await processPersonalInbox(store, row, now);
-          return json({ ok: true, busy: acquired === false });
+          const acquired = await processPersonalInbox(store, row, now, { ownerId: env.ADMIN_USER_ID });
+          const delivery = acquired !== false && Boolean(await store.first("SELECT 1 FROM jobs WHERE user_id=? AND status='pending' AND json_extract(payload,'$.manual')=1 LIMIT 1", row.user_id));
+          return json({ ok: true, busy: acquired === false, delivery });
         }
       } else if (path === "/tick/fanout") {
         let pending = true;

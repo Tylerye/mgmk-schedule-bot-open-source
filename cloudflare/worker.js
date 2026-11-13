@@ -419,14 +419,15 @@ async function handleMaintenance(request, env, pathname, context) {
   if (!maintenanceLanes(env).includes(lane)) return json({ ok: false }, 404);
   if (request.method !== "POST") return json({ ok: false }, 405);
   const interval = Math.floor(Number(request.headers.get("x-maintenance-time")) / 60000);
-  const claimed = await env.DB.prepare("INSERT INTO runtime_locks(name,owner,locked_until) VALUES(?,'maintenance',?) ON CONFLICT(name) DO UPDATE SET locked_until=excluded.locked_until WHERE runtime_locks.locked_until<excluded.locked_until").bind(`maintenance-admission:${lane}`, interval).run();
-  if (claimed.meta?.changes !== 1) return json({ ok: true, duplicate: true });
-  const task = lane === "teacher-source" ? pollTeacherSource(env, configFromEnv(env), createLogger(env.LOG_LEVEL || "info"))
+  const combinedSourceLease = lane === "source" || lane === "teacher-source";
+  const claimed = combinedSourceLease ? null : await env.DB.prepare("INSERT INTO runtime_locks(name,owner,locked_until) VALUES(?,'maintenance',?) ON CONFLICT(name) DO UPDATE SET locked_until=excluded.locked_until WHERE runtime_locks.locked_until<excluded.locked_until").bind(`maintenance-admission:${lane}`, interval).run();
+  if (claimed && claimed.meta?.changes !== 1) return json({ ok: true, duplicate: true });
+  const task = lane === "teacher-source" ? pollTeacherSource(env, configFromEnv(env), createLogger(env.LOG_LEVEL || "info"), interval)
     : lane.startsWith("teacher-") ? teacherMaintenance(env, configFromEnv(env), createLogger(env.LOG_LEVEL || "info"), lane.slice(8))
     : lane === "attention"
     ? attentionMaintenance(env, configFromEnv(env), createLogger(env.LOG_LEVEL || "info")).then(() =>
       patchHealth(env.DB, { lastAttentionSuccessAt: new Date().toISOString(), attentionError: null }, { heartbeatKey: "lastAttentionSuccessAt" }))
-    : scheduled(env, lane);
+    : scheduled(env, lane, combinedSourceLease ? interval : null);
   // Keep the claimed work alive if the caller disconnects. Never retry an
   // ambiguous dispatch inside the same tick; durable queues resume next minute.
   context.waitUntil(task.catch(() => {}));
@@ -443,7 +444,7 @@ async function handleMaintenance(request, env, pathname, context) {
   }
 }
 
-async function pollTeacherSource(env, config, logger) {
+async function pollTeacherSource(env, config, logger, interval = null) {
   return withStateLock(env.DB, async () => {
     const files = await discoverTeacherFiles({ config, database: env.DB });
     let dispatched = 0;
@@ -459,10 +460,10 @@ async function pollTeacherSource(env, config, logger) {
     }
     await writeTeacherStatus(env.DB, "source-health", { files: files.length, dispatched });
     logger.info("teacher_source_complete", { files: files.length, dispatched });
-  }, { name: "teacher-source", leaseMs: 180000 });
+  }, { name: "teacher-source", leaseMs: 180000, interval });
 }
 
-async function scheduled(env, lane = "all") {
+async function scheduled(env, lane = "all", interval = null) {
   const config = configFromEnv(env);
   const now = new Date();
   const cacheKey = JSON.stringify([env.CF_VERSION_METADATA?.id ?? "local", config.bells, config.pinSwitchTime, config.timezone, config.displayGroup]);
@@ -533,9 +534,12 @@ async function scheduled(env, lane = "all") {
       });
     }
     return health;
-  }, { name: "source", leaseMs: 180_000 }));
+  }, { name: "source", leaseMs: 180_000, interval }));
   if (source?.acquired) sourceHealth = source.value;
-  if (source && !source.acquired) logger.warn("source_poll_deferred", { reason: "source_lock_busy" });
+  if (source && !source.acquired) {
+    logger.warn("source_poll_deferred", { reason: "source_lock_busy_or_tick_seen" });
+    return source; // No successful poll: retain its error and heartbeat.
+  }
   }
   const latest = errors.at(-1);
   const failure = latest ? { at: new Date().toISOString(), event: latest.event, message: latest.error.message } : null;

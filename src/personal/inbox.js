@@ -1,4 +1,5 @@
 import { findGroups } from "./catalog.js";
+import { screenHash, standaloneScreen } from './screen-state.js';
 import { t, menu, button, supportKeyboard, settingsKeyboard, groupsKeyboard, initialDates, selectedDate, renderPersonal, informationText, informationKeyboard } from "./view.js";
 
 export { collectPersonalUpdate } from "./update.js";
@@ -13,7 +14,7 @@ export async function enqueuePersonalUpdate(store, update, now = Date.now()) {
   return Number(inserted.meta?.changes ?? 0) > 0;
 }
 
-export async function processPersonalInbox(store, row, now = new Date()) {
+export async function processPersonalInbox(store, row, now = new Date(), { ownerId } = {}) {
   const update = JSON.parse(row.payload);
   const job = (user, kind, date, options = {}) => store.jobStatement(user, kind, date, { due: now.getTime(), ...options });
   return store.lock(row.user_id, now.getTime(), async () => {
@@ -110,12 +111,19 @@ export async function processPersonalInbox(store, row, now = new Date()) {
     if (update.action === "start" && user.group_id) {
       for (const s of initialDates(await store.schedules(user.group_id), now)) jobs.push(job(user, "card", s.date, { priority: 0, payload: { manual: true } }));
     }
-    for (const [index, payload] of replies.entries()) jobs.push(job(user, "reply", payload.editId ? "screen" : `${row.update_id}:${index}`, { priority: -2, payload: { ...payload, manual: true } }));
+    const keys = ["language", "group_id", "epoch", "screen", "sound", "changes", "pin", "paused", "blocked", "support_seen", "pin_date", "next_due"];
+    const changed = keys.filter(key => user[key] !== original[key]);
+    // Only skip a proven standalone screen, using its durable successful receipt.
+    // User/card/source state is freshly read under the same lock as delivery.
+    // Supersede older navigation even when this latest tap needs no new job.
+    const only = replies.length === 1 ? replies[0] : null;
+    const unchanged = only && update.acknowledged && !changed.length && jobs.length === 1
+      && await standaloneScreen(store, user.user_id, only.editId, ownerId)
+      && await store.setting(`screen-v1:${user.user_id}:${only.editId}`) === screenHash(only.text, only.keyboard);
+    if (!unchanged) for (const [index, payload] of replies.entries()) jobs.push(job(user, "reply", payload.editId ? "screen" : `${row.update_id}:${index}`, { priority: -2, payload: { ...payload, manual: true } }));
     // Insert after superseding older navigation jobs. Keep the visible reply
     // first; the transient acknowledgement must not delay the screen edit.
     if (update.callbackId && !update.acknowledged) jobs.push(job(user, "callback", String(row.update_id), { priority: -1, payload: { callbackId: update.callbackId, manual: true } }));
-    const keys = ["language", "group_id", "epoch", "screen", "sound", "changes", "pin", "paused", "blocked", "support_seen", "pin_date", "next_due"];
-    const changed = keys.filter(key => user[key] !== original[key]);
     await store.batch([...(changed.length ? [[`UPDATE users SET ${changed.map(k => `${k}=?`).join(",")} WHERE user_id=?`, ...changed.map(k => user[k]), user.user_id]] : []), ...jobs,
       ["UPDATE inbox SET status='done',payload='{}',completed_at=COALESCE(completed_at,unixepoch()*1000) WHERE update_id=?", row.update_id]]);
   });
