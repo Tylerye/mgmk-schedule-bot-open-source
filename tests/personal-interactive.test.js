@@ -33,7 +33,9 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
     // waitUntil must finish the visible reply and acknowledgement, without Cron.
     for(let i=0;i<100 && calls.length<2;i++) await new Promise(resolve=>setTimeout(resolve,50));
     assert.deepEqual(calls.map(c=>c.method),['editMessageText','answerCallbackQuery']);
-    assert.match(calls[0].body.text,/МАТЕМАТИКА|Учебный день завершён/u);
+    // Either fixture lesson can be the remaining one at the runner's real
+    // Minsk time; finishing lesson 1 must not make this test fail at 09:00.
+    assert.match(calls[0].body.text,/МАТЕМАТИКА|ФИЗИКА|Учебный день завершён/u);
     assert.equal(calls[0].body.chat_id,100);
     assert.equal((await db.prepare("SELECT status FROM jobs WHERE id='other'").first()).status,'pending');
     assert.ok(lanes.includes('/inbox/1'));assert.ok(lanes.includes('/delivery/100'));
