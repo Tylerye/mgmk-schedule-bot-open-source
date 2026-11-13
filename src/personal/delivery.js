@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { renderPersonal, t, subjectChanges, choosePersonalPin, nextRenderAt, nextPersonalPinAt, noticeParts } from "./view.js";
 import { manualJobsOnly } from './quota.js';
+import { backgroundPolicy } from '../background-policy.js';
 
 const digest = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
@@ -242,8 +243,10 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
   });
 }
 
-export async function enqueueDue(store, now = Date.now()) {
-  const users = await store.all("SELECT * FROM users WHERE paused=0 AND blocked=0 AND next_due IS NOT NULL AND next_due<=? ORDER BY next_due LIMIT 4", now);
+export async function enqueueDue(store, now = Date.now(), userId = null) {
+  const users = userId === null
+    ? await store.all("SELECT * FROM users WHERE paused=0 AND blocked=0 AND next_due IS NOT NULL AND next_due<=? ORDER BY next_due LIMIT 4", now)
+    : await store.all("SELECT * FROM users WHERE user_id=? AND paused=0 AND blocked=0 AND next_due<=?", userId, now);
   for (const user of users) {
     await store.lock(user.user_id, now, async () => {
       const fresh = await store.user(user.user_id);
@@ -268,11 +271,21 @@ export async function enqueueDue(store, now = Date.now()) {
     });
   }
 }
-export async function diagnosticText(store, now = new Date()) {
+export async function deliveryHealth(store, now = new Date()) {
+  const due = await store.first("SELECT COUNT(*) count,MIN(next_due) oldest FROM users WHERE paused=0 AND blocked=0 AND next_due<=?", now.getTime());
+  const jobs = await store.first("SELECT COUNT(*) count,MIN(due) oldest FROM jobs WHERE status='pending' AND due<=? AND user_id IN (SELECT user_id FROM users WHERE blocked=0)", now.getTime());
+  const lag = value => value == null ? 0 : Math.max(0, Math.floor((now.getTime()-value)/1000));
+  const dueLagSeconds = lag(due.oldest), jobLagSeconds = lag(jobs.oldest);
+  const late = Math.max(dueLagSeconds, jobLagSeconds) > (backgroundPolicy(now).staleAfterMs / 1000);
+  return { dueUsers: due.count, dueLagSeconds, pendingJobs: jobs.count, jobLagSeconds, late };
+}
+export async function diagnosticText(store, now = new Date(), delivery = null) {
+  delivery ??= await deliveryHealth(store, now);
   const queue = await store.first("SELECT COUNT(*) count,MIN(due) oldest FROM jobs WHERE status='pending'");
   const uncertain = await store.first("SELECT COUNT(*) count FROM operations WHERE status='uncertain' OR (status='started' AND method='sendMessage')");
   const failed = await store.first("SELECT COUNT(*) count FROM jobs WHERE status='failed'");
   const source = await store.setting("source-error", null);
   const budget = await store.first("SELECT * FROM budgets WHERE day=?", now.toISOString().slice(0, 10));
-  return `Personal pilot\nQueue: ${queue.count}; lag: ${queue.oldest ? Math.max(0, Math.round((now.getTime() - queue.oldest) / 1000)) : 0}s\nUncertain: ${uncertain.count}\nFailed: ${failed.count}\n429: ${await store.setting("429", 0)}\nParser: ${source ? `error (last good version retained); groups: ${source.groups?.length ?? "unknown"}; structure: ${source.structuralErrors ?? "unknown"}` : "ok"}\nQuota (measured D1 meta + accounting reserve): ${JSON.stringify(budget)}\nMode: ${await store.setting("budget-mode", "normal")}\nMass launch: disabled`;
+  const policy = backgroundPolicy(now);
+  return `Personal timetable\nQueue: ${queue.count}; lag: ${delivery.jobLagSeconds}s\nDue users: ${delivery.dueUsers}; lag: ${delivery.dueLagSeconds}s\nDelivery: ${delivery.late ? 'delayed' : 'on time'}\nBackground: ${policy.night ? 'night (15 min)' : 'day (1 min)'}\nUncertain: ${uncertain.count}\nFailed: ${failed.count}\n429: ${await store.setting("429", 0)}\nParser: ${source ? 'error (last good version retained)' : 'ok'}\nQuota (D1 meta + accounting reserve): ${JSON.stringify(budget)}\nMode: ${await store.setting("budget-mode", "normal")}`;
 }

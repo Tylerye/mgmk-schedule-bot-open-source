@@ -7,6 +7,8 @@ import { readJson, InputError } from "../cloudflare/request-json.js";
 import { pilotAllowed } from "../cloudflare/personal-relay.js";
 import { dateInTimezone } from "../src/dates.js";
 import { manualJobsOnly } from '../src/personal/quota.js';
+import { backgroundPolicy } from '../src/background-policy.js';
+import { deliveryHealth } from '../src/personal/delivery.js';
 
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 const logger = { info() {}, warn() {}, error() {} }; // Do not log user payloads.
@@ -17,13 +19,16 @@ async function internal(env, path) {
   if (!r.ok) throw new Error(`Personal lane failed: ${r.status}`);
   return r.json();
 }
-async function kick(env, { inbox = true, delivery = true } = {}) {
+async function kick(env, { inbox = true, delivery = true, due = false, fanout = false } = {}) {
   // Bounded orchestration: each inbox/user runs in a separate HTTP invocation
   // with its own CPU budget. A minute Cron resumes after isolate termination.
-  for (let wave = 0; wave < 5; wave++) {
+  const deadline = Date.now() + 20000;
+  for (let wave = 0; wave < 12 && Date.now() < deadline; wave++) {
+    if (fanout) { fanout = Boolean((await internal(env, '/tick/fanout')).pending); delivery = true; }
+    if (due) { due = Boolean((await internal(env, '/tick/due')).pending); delivery = true; }
     if (inbox) inbox = Boolean((await internal(env, "/tick/inbox")).pending);
     if (delivery) delivery = Boolean((await internal(env, "/tick/delivery")).pending);
-    if (!inbox && !delivery) break;
+    if (!inbox && !delivery && !due && !fanout) break;
     // Inbox commands may have created delivery work in this wave.
     delivery = true;
     await wait(1100);
@@ -49,7 +54,7 @@ export default {
     if (request.method !== "POST") return json({ ok: false }, 405);
     const path = new URL(request.url).pathname;
     const paused = env.PERSONAL_DELIVERY_ENABLED === "false";
-    if (paused && (path.startsWith("/tick") || path.startsWith("/delivery/") || /^\/inbox\/\d+$/u.test(path))) {
+    if (paused && (path.startsWith("/tick") || path.startsWith("/delivery/") || path.startsWith('/due/') || /^\/inbox\/\d+$/u.test(path))) {
       return json({ ok: true, paused: true, pending: false });
     }
     const store = new PersonalStore(env.DB, env);
@@ -58,9 +63,9 @@ export default {
     try {
       const budget = await store.budget(now, path === "/tick" ? 2 : 1, {
         service: path === "/health",
-        router: ["/tick", "/tick/inbox", "/tick/delivery"].includes(path),
-        userWork: /^\/(inbox|delivery)\/\d+$/u.test(path),
-        lane: path === '/health' ? 'service' : ['/tick/fanout', '/tick/due'].includes(path) ? 'background'
+        router: ["/tick", "/tick/inbox", "/tick/delivery", "/tick/due", "/tick/fanout"].includes(path),
+        userWork: /^\/(inbox|delivery|due)\/\d+$/u.test(path),
+        lane: path === '/health' ? 'service' : (['/tick/fanout', '/tick/due', '/fanout'].includes(path) || path.startsWith('/due/')) ? 'background'
           : ['/source-status', '/catalog', '/begin', '/stage', '/finish', '/source-error', '/tick/recover'].includes(path) ? 'source' : 'interactive',
       }); started = true;
       if (budget.mode === "stopped") {
@@ -86,7 +91,11 @@ export default {
       if (path === "/health") {
         const counts = await store.first("SELECT (SELECT COUNT(*) FROM catalog) groups,(SELECT COUNT(*) FROM active_versions) days,(SELECT COUNT(*) FROM users) users");
         const deliveryStopped = budget.rows_written + 200 >= store.quota.written - 100 || budget.rows_read + 2000 >= 948000 || budget.requests + 2 >= 27900;
-        return json({ ok: !paused, paused, deliveryStopped, backgroundPaused: budget.mode !== 'normal', quota: store.quota, sourceError: Boolean(await store.setting("source-error")), ...counts, budget, diagnostics: await diagnosticText(store, now) });
+        const delivery = await deliveryHealth(store, now);
+        const backgroundPaused = budget.mode !== 'normal';
+        return json({ ok: !paused, paused, deliveryStopped, backgroundPaused,
+          degraded: backgroundPaused || delivery.late, ...delivery,
+          background: backgroundPolicy(now), quota: store.quota, sourceError: Boolean(await store.setting("source-error")), ...counts, budget, diagnostics: await diagnosticText(store, now, delivery) });
       }
       if (path === "/inbox") {
         if (budget.mode === "stopped") return json({ ok: true, limited: true });
@@ -136,8 +145,21 @@ export default {
           const acquired = await processPersonalInbox(store, row, now);
           return json({ ok: true, busy: acquired === false });
         }
-      } else if (path === "/tick/fanout") { if (budget.mode !== "stopped") await fanoutBatch(store); }
-      else if (path === "/tick/due") { if (budget.mode === "normal") await enqueueDue(store); }
+      } else if (path === "/tick/fanout") {
+        let pending = true;
+        for (let i=0;i<4 && pending;i++) pending = Boolean((await internal(env, '/fanout')).pending);
+        return json({ok:true,pending});
+      } else if (path === '/fanout') {
+        if (budget.mode === 'normal' && !paused) await fanoutBatch(store);
+        return json({ok:true,pending:Boolean(await store.first("SELECT 1 FROM fanout f JOIN datasets d ON d.id=f.dataset_id WHERE f.status='pending' AND d.status='ready' LIMIT 1"))});
+      }
+      else if (path === "/tick/due") {
+        const users = await store.all("SELECT user_id FROM users WHERE paused=0 AND blocked=0 AND next_due<=? ORDER BY next_due,user_id LIMIT 8", now.getTime());
+        await Promise.all(users.map(u => internal(env, `/due/${u.user_id}`)));
+        return json({ok:true,pending:Boolean(await store.first("SELECT 1 FROM users WHERE paused=0 AND blocked=0 AND next_due<=? LIMIT 1", now.getTime()))});
+      } else if (/^\/due\/\d+$/u.test(path)) {
+        if (budget.mode === 'normal') await enqueueDue(store, now.getTime(), Number(path.split('/')[2]));
+      }
       else if (path === "/tick/delivery") {
         const rows = await store.all("SELECT j.user_id FROM (SELECT user_id,priority,due FROM jobs WHERE status='pending' AND due<=?" + manualJobsOnly(budget.mode) + " ORDER BY priority,due LIMIT 128) j JOIN users u ON u.user_id=j.user_id WHERE u.blocked=0 GROUP BY j.user_id ORDER BY MIN(u.last_api_at),MIN(j.priority),MIN(j.due) LIMIT 4", now.getTime());
         const users = [...new Set(rows.map(r => r.user_id))].slice(0, 4);
@@ -164,11 +186,10 @@ export default {
     } finally { if (started) await store.flushBudget(now); }
   },
   async scheduled(controller, env, context) {
+    if (!backgroundPolicy(new Date(controller.scheduledTime ?? Date.now())).run) return;
     context.waitUntil(internal(env, "/tick").then(async work => {
       if (work.recover) await internal(env, "/tick/recover");
-      if (work.fanout) await internal(env, "/tick/fanout");
-      if (work.due) await internal(env, "/tick/due");
-      if (work.inbox || work.delivery || work.due || work.fanout) await kick(env, { inbox: Boolean(work.inbox), delivery: true });
+      if (work.inbox || work.delivery || work.due || work.fanout) await kick(env, { inbox: Boolean(work.inbox), delivery: true, due: Boolean(work.due), fanout: Boolean(work.fanout) });
     }).catch(() => {}));
   },
 };

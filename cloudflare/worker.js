@@ -17,6 +17,8 @@ import { collectTeacherUpdate, enqueueTeacherUpdate, teacherMaintenance, storeTe
 import { discoverTeacherFiles } from "../src/source/teacher-drive.js";
 import { relayPersonalUpdate, relayPersonalSource } from "./personal-relay.js";
 
+import { backgroundPolicy } from '../src/background-policy.js';
+
 const healthReadWindows = new WeakMap();
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" };
@@ -577,16 +579,17 @@ export default {
       if (window && now - window.start < 60000 && window.count >= 6) return json({ ok: false }, 429);
       healthReadWindows.set(env, !window || now - window.start >= 60000 ? { start: now, count: 1 } : { ...window, count: window.count + 1 });
       const state = await new D1StateStore(env.DB).load();
+      const background = backgroundPolicy(new Date(now));
       const failure = state.health.liveError ?? state.health.sourceError ?? state.health.queuesError ?? state.health.attentionError ?? state.health.lastError;
       const stale = Boolean(state.chatId) && [state.health.lastSourcePollSuccessAt, state.health.lastReconcileSuccessAt,
         state.health.lastQueuesSuccessAt, state.health.lastAttentionSuccessAt]
-        .some(value => !value || !Number.isFinite(Date.parse(value)) || Date.now() - Date.parse(value) > 5 * 60_000);
+        .some(value => !value || !Number.isFinite(Date.parse(value)) || now - Date.parse(value) > background.staleAfterMs);
       let teachers;
       if (env.TEACHERS_ENABLED === "true") {
         const rows = (await env.DB.prepare("SELECT key,value FROM teacher_settings WHERE key LIKE 'health:teacher-%'").all()).results;
         const health = Object.fromEntries(rows.map(r => [r.key.slice(7), JSON.parse(r.value)]));
         const lanes = maintenanceLanes(env).filter(l => l.startsWith("teacher-"));
-        teachers = { enabled: true, stale: lanes.some(l => !health[l]?.at || health[l]?.error || Date.now() - Date.parse(health[l].at) > 300000) };
+        teachers = { enabled: true, stale: lanes.some(l => !health[l]?.at || health[l]?.error || now - Date.parse(health[l].at) > background.staleAfterMs) };
       }
       let personal;
       if (env.PERSONAL_ENABLED === "true") {
@@ -598,11 +601,18 @@ export default {
             });
             const health = await response.json();
             personal.ok = response.ok && health.ok === true && !health.stopped && !health.deliveryStopped && !health.paused && !health.sourceError;
+            personal.degraded = health.degraded === true || health.backgroundPaused === true;
+            personal.backgroundPaused = health.backgroundPaused === true;
+            personal.dueUsers = health.dueUsers ?? null;
+            personal.dueLagSeconds = health.dueLagSeconds ?? null;
+            personal.jobLagSeconds = health.jobLagSeconds ?? null;
           }
         } catch { /* Readiness fails without exposing credentials or service errors. */ }
       }
       return json({
-        ok: !failure && !stale && !teachers?.stale && personal?.ok !== false,
+        ok: !failure && !stale && !teachers?.stale && personal?.ok !== false && !personal?.degraded,
+        degraded: personal?.degraded === true,
+        background,
         ...(teachers ? { teachers } : {}),
         ...(personal ? { personal } : {}),
         stale,
@@ -615,7 +625,7 @@ export default {
         lastParserSuccessAt: state.health.lastParserSuccessAt,
         lastTelegramSuccessAt: state.health.lastTelegramSuccessAt,
         lastError: failure ? { at: failure.at, event: failure.event } : null,
-      }, failure || stale || teachers?.stale || personal?.ok === false ? 503 : 200);
+      }, failure || stale || teachers?.stale || personal?.ok === false || personal?.degraded ? 503 : 200);
     }
     if (request.method === "POST" && url.pathname === "/telegram/webhook") return await handleWebhook(request, env, config, logger, context);
     if (url.pathname.startsWith("/internal/personal/")) return await relayPersonalSource(request, env, url.pathname);
@@ -628,7 +638,10 @@ export default {
     }
   },
   async scheduled(controller, env, context) {
-    if (controller.cron === "* * * * *") { context.waitUntil(dispatchMaintenance(env)); return; }
+    if (controller.cron === "* * * * *") {
+      if (backgroundPolicy(new Date(controller.scheduledTime ?? Date.now())).run) context.waitUntil(dispatchMaintenance(env));
+      return;
+    }
     // Legacy/local explicit invocation; production has exactly one Cron.
     context.waitUntil(scheduled(env, "all"));
     const logger = createLogger(env.LOG_LEVEL || "info");

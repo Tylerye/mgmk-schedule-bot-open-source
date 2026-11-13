@@ -53,6 +53,26 @@ performed per invocation. A shared 84 ms gate and 1050 ms per-user gate limit th
 new sender to under 12 operations/s. `429` applies a shared `retry_after` cooldown.
 Telegram's limit is shared with the existing bot, so pilot metrics still matter.
 
+Background maintenance runs every minute from 06:00 until 21:30 Minsk time,
+and every 15 minutes from 21:30 until 06:00. Both Workers skip quiet minutes
+before accessing D1 or dispatching HTTP lanes. Midnight and the UTC quota reset
+are included in the night cadence. Webhook commands and manual views remain
+immediate; a persisted retry left after a long Telegram cooldown resumes on a
+background pass. Night source detection can take up to 15 minutes, plus parsing
+and bounded delivery time. No additional persistent request logs are enabled.
+
+Due-user admission uses batches of eight independent per-user HTTP invocations.
+The pump repeats admission and delivery for at most 12 waves / 20 seconds before
+yielding to the next background pass. Source fanout uses separate bounded lanes
+as well. Locks, budget reservations, epochs and ambiguous-send protection remain
+in force; this does not promise unlimited throughput or daily capacity.
+
+Health and owner diagnostics include due-user count and oldest due age, even
+before a delivery job exists. Readiness reports degradation when background
+work is budget-paused or overdue. Night freshness allows 20 minutes rather
+than the daytime five minutes, including a short morning handover. Manual
+availability and background degradation are separate states.
+
 Subscription epochs invalidate old jobs after group/language changes. Card work
 is serialized per user; sends persist intent before calling Telegram. An ambiguous
 send becomes `uncertain` and is not repeated automatically. Edits can be retried.

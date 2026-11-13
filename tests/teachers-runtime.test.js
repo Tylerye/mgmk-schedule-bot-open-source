@@ -8,7 +8,7 @@ import { dateInTimezone, addDays } from "../src/dates.js";
 import { monthFolderName } from "../src/source/teacher-drive.js";
 
 test("workerd runs nine isolated lanes, durable teacher enrollment and publication without changing group pin", async () => {
-  const bundle = await build({ stdin: { contents: `import worker from './cloudflare/worker.js';export default {async fetch(request,env,ctx){if(new URL(request.url).pathname!=='/tick')return worker.fetch(request,env,ctx);const p=[];await env.DB.prepare("DELETE FROM runtime_locks WHERE name LIKE 'maintenance-admission:%'").run();await worker.scheduled({cron:'* * * * *'},env,{waitUntil(t){p.push(t)}});await Promise.all(p);return new Response('ok')}}`, resolveDir: process.cwd() },
+  const bundle = await build({ stdin: { contents: `import worker from './cloudflare/worker.js';export default {async fetch(request,env,ctx){if(new URL(request.url).pathname!=='/tick')return worker.fetch(request,env,ctx);const p=[];await env.DB.prepare("DELETE FROM runtime_locks WHERE name LIKE 'maintenance-admission:%'").run();await worker.scheduled({cron:'* * * * *',scheduledTime:Date.parse('2026-11-13T09:00:00+03:00')},env,{waitUntil(t){p.push(t)}});await Promise.all(p);return new Response('ok')}}`, resolveDir: process.cwd() },
     bundle: true, write: false, format: "esm", platform: "neutral", external: ["node:crypto"] });
   const paths = [], calls = [];
   const mf = new Miniflare(convertV4MiniflareOptions({ workers: [{ name: "teacher-bot", modules: true, script: bundle.outputFiles[0].text,

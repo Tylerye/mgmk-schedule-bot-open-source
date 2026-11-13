@@ -80,7 +80,7 @@ test('readiness detects a stopped personal service without exposing its diagnost
  let calls=0;
  const env={DB,HEALTH_READ_SECRET:'right',PERSONAL_ENABLED:'true',PERSONAL_SHARED_SECRET:'private-test',PERSONAL:{async fetch(url,options){calls++;assert.equal(options.method,'POST');return new Response(JSON.stringify({ok:true,stopped:true,diagnostics:'INTERNAL TEST DETAIL'}));}}};
  const response=await w.fetch(new Request('https://worker.test/internal/health',{headers:{authorization:'Bearer right'}}),env,context);
- assert.equal(response.status,503);const result=await response.json();assert.deepEqual(result.personal,{enabled:true,ok:false});assert.equal(JSON.stringify(result).includes('INTERNAL TEST DETAIL'),false);assert.equal(calls,1);
+ assert.equal(response.status,503);const result=await response.json();assert.equal(result.personal.enabled,true);assert.equal(result.personal.ok,false);assert.equal(JSON.stringify(result).includes('INTERNAL TEST DETAIL'),false);assert.equal(calls,1);
 });
 
 test('parser rejects malformed and oversized schedules without writing poisoned inbox entries', async () => {

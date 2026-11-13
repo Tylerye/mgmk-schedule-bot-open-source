@@ -6,7 +6,7 @@ import { groupKey, displayGroup, isGroupLabel, mergeCatalog } from "./catalog.js
 const clean = value => String(value ?? "").replace(/\s+/gu, " ").trim();
 const hash = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const border = line => /^[-+L└─┌┐┘┬┴┼]/u.test(line);
-const heading = line => /^(?:РАСПИСАНИЕ|с учетом|ПОНЕДЕЛЬНИК|ВТОРНИК|СРЕД[АУ]|ЧЕТВЕРГ|ПЯТНИЦ[АУ]|СУББОТ[АУ]|ВОСКРЕСЕНЬЕ)/iu.test(line);
+const heading = line => /^(?:РАСПИСАНИЕ|с уч[её]том|ПОНЕДЕЛЬНИК|ВТОРНИК|СРЕД[АУ]|ЧЕТВЕРГ|ПЯТНИЦ[АУ]|СУББОТ[АУ]|ВОСКРЕСЕНЬЕ)/iu.test(line);
 const footer = line => /^Зам\.\s*директора/iu.test(line);
 const noteText = text => /^(?:вся группа|подгрупп[аы]|примечание|\*|для |сбор |занятия |начало )/iu.test(text);
 
@@ -73,7 +73,7 @@ export function parseAllGroupSchedules(pdf, { expectedDate, bells, previousCatal
       }
       current = groups.get(id) ?? { id, group: label, date, lessons: [], notes: [], statuses: [], rows: [], errors: [] };
       groups.set(id, current);
-    } else if (label) {
+    } else if (label && !(current && /^п\/г$/iu.test(label))) {
       structuralErrors.push({ message: "Unrecognized group column", ...ref });
       continue;
     }
@@ -122,6 +122,7 @@ export function parseAllGroupSchedules(pdf, { expectedDate, bells, previousCatal
       current.lessons.push(lesson);
     }
     lesson.variants.push({ subject, room, teacher, ...ref, continuations: [] });
+    if (/^п\/г$/iu.test(label)) lesson.notes.push({ text: label, ...ref });
   }
   if (!tableSeen || !groups.size || !footerSeen) structuralErrors.push({ message: "Incomplete student table envelope" });
   const scheduleSet = bells?.previous && date < bells.effectiveFrom ? bells.previous : bells;

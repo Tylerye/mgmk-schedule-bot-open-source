@@ -13,7 +13,7 @@ test('workerd keeps independent HTTP lanes and skips empty inbox waves while dra
   const script=(await build({stdin:{contents:`import worker from './personal/worker.js';
     export default {async fetch(request,env,ctx){
       if(new URL(request.url).pathname==='/test-cron') {
-        const pending=[];await worker.scheduled({},env,{waitUntil(p){pending.push(p)}});await Promise.all(pending);return new Response('ok');
+        const pending=[];await worker.scheduled({scheduledTime:Date.parse("2026-11-13T09:00:00+03:00")},env,{waitUntil(p){pending.push(p)}});await Promise.all(pending);return new Response('ok');
       }
       return worker.fetch(request,env,ctx);
     }};`,resolveDir:process.cwd()},bundle:true,write:false,format:'esm',platform:'neutral',external:['node:crypto'],
@@ -59,6 +59,14 @@ test('workerd keeps independent HTTP lanes and skips empty inbox waves while dra
       if((await response.json()).pending) assert.equal((await mf.dispatchFetch('http://localhost/test-cron')).status,200);
       assert.deepEqual(telegram,['sendMessage','sendMessage','sendMessage','sendMessage']);
       assert.equal((await db.prepare("SELECT COUNT(*) count FROM jobs WHERE id LIKE 'burst%' AND status='pending'").first()).count,0);
+      // A college-wide boundary must not admit just four users per minute.
+      // Each admission keeps its own CPU invocation, and the pump is bounded.
+      for(let id=300;id<355;id++) await db.prepare('INSERT INTO users(user_id,next_due) VALUES(?,0)').bind(id).run();
+      lanes.length=0;
+      assert.equal((await mf.dispatchFetch('http://localhost/test-cron')).status,200);
+      assert.equal((await db.prepare('SELECT COUNT(*) count FROM users WHERE user_id>=300 AND next_due=0').first()).count,0);
+      assert.equal(lanes.filter(p=>/^\/due\/\d+$/u.test(p)).length,55);
+      assert.ok(lanes.filter(p=>p==='/tick/due').length<12);
     }
   } finally {await mf.dispose();}
 });

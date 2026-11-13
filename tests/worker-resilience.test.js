@@ -69,7 +69,7 @@ async function fixture() {
     },
     async cron(cron) {
       const pending = [];
-      await worker.scheduled(cron ? { cron } : {}, this.env, { waitUntil(p) { pending.push(p); } });
+      await worker.scheduled(cron ? { cron, scheduledTime: Date.parse("2026-11-13T09:00:00+03:00") } : {}, this.env, { waitUntil(p) { pending.push(p); } });
       return Promise.allSettled(pending);
     },
     cleanup() { globalThis.fetch = originalFetch; sqlite.close(); },
