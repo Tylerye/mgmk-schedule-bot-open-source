@@ -62,7 +62,7 @@ export async function processPersonalInbox(store, row, now = new Date()) {
           jobs.push(job(user,'unpin',String(user.pin_message_id),{priority:0,payload:{messageId:user.pin_message_id,manual:true}}));
           jobs.push(["UPDATE users SET pin_message_id=NULL,pin_date=NULL WHERE user_id=?",user.user_id]);
           user.pin_date=null;
-        } else if(user.auto_pin) { jobs.push(["UPDATE jobs SET status='superseded' WHERE user_id=? AND kind='unpin' AND status='pending'",user.user_id]); jobs.push(job(user,'pin','',{priority:1})); }
+        } else if(user.auto_pin) { jobs.push(["UPDATE jobs SET status='superseded' WHERE user_id=? AND kind='unpin' AND status='pending'",user.user_id]); jobs.push(job(user,'pin','',{priority:1,payload:{manual:true}})); }
       }
       if (key === "paused") {
         user.epoch++; user.next_due = null;

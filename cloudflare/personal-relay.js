@@ -17,10 +17,14 @@ export async function relayPersonalUpdate(env, update, teacherAccounts = []) {
     if (reserved || (env.TEACHERS_ENABLED === "true" && await env.DB.prepare("SELECT 1 FROM teacher_users WHERE user_id=?").bind(from.id).first())) return null;
   }
   const response = await env.PERSONAL.fetch("https://personal.internal/inbox", {
-    method: "POST", headers: { authorization: `Bearer ${env.PERSONAL_SHARED_SECRET}`, "content-type": "application/json" }, body: JSON.stringify(collected),
+    method: "POST", headers: { authorization: `Bearer ${env.PERSONAL_SHARED_SECRET}`, "content-type": "application/json" }, body: JSON.stringify({ ...collected, ...(collected.callbackId ? { acknowledged: true } : {}) }),
   });
   if (!response.ok) return new Response(JSON.stringify({ ok: false, error: "personal inbox unavailable" }), { status: 503, headers: { "content-type": "application/json" } });
-  return new Response(JSON.stringify({ ok: true, queued: true }), { headers: { "content-type": "application/json" } });
+  // Telegram executes this lightweight method from the webhook response. Only
+  // the spinner acknowledgement uses it: messages keep durable intents/receipts.
+  return new Response(JSON.stringify(collected.callbackId
+    ? { method: 'answerCallbackQuery', callback_query_id: collected.callbackId }
+    : { ok: true, queued: true }), { headers: { "content-type": "application/json" } });
 }
 
 export async function relayPersonalSource(request, env, pathname) {

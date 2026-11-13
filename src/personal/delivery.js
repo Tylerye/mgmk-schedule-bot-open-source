@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { renderPersonal, t, subjectChanges, choosePersonalPin, nextRenderAt, nextPersonalPinAt, noticeParts } from "./view.js";
+import { manualJobsOnly } from './quota.js';
 
 const digest = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
@@ -94,14 +95,11 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
   return store.lock(id, now.getTime(), async () => {
     const user = await store.user(id);
     if (!user || user.blocked) return;
-    const job = await store.first("SELECT * FROM jobs WHERE user_id=? AND status='pending' AND due<=? ORDER BY priority,due,id LIMIT 1", id, now.getTime());
+    const job = await store.first("SELECT * FROM jobs WHERE user_id=? AND status='pending' AND due<=?" + manualJobsOnly(mode) + " ORDER BY priority,due,id LIMIT 1", id, now.getTime());
     if (!job) return;
     const payload = JSON.parse(job.payload);
     if (job.epoch !== user.epoch || (user.paused && !payload.manual)) { await finishJob(store, job, "cancelled"); return; }
-    if (mode === "stopped" || (mode !== "normal" && !payload.manual && job.priority > 1)) {
-      await store.run("UPDATE jobs SET due=? WHERE id=? AND revision=?", now.getTime() + 15 * 60000, job.id, job.revision);
-      return;
-    }
+    if (mode === "stopped" || (mode !== "normal" && !payload.manual)) return;
     const op = (key, method, body) => telegramOperation(store, client, user, key, method, body, now.getTime());
     const sendBody = (text, keyboard, silent = true) => ({ chat_id: id, text, parse_mode: "HTML", disable_web_page_preview: true,
       disable_notification: silent, ...(keyboard ? { reply_markup: keyboard } : {}) });

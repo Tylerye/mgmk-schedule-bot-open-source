@@ -8,7 +8,7 @@
   "preview_urls": false,
   "minify": true,
   "triggers": { "crons": ["* * * * *"] },
-  "vars": { "ADMIN_USER_ID": "REPLACE_WITH_OWNER_ID", "PERSONAL_PUBLIC": "false", "PERSONAL_PILOT_IDS": "", "PERSONAL_DELIVERY_ENABLED": "true" },
+  "vars": { "ADMIN_USER_ID": "REPLACE_WITH_OWNER_ID", "PERSONAL_PUBLIC": "false", "PERSONAL_PILOT_IDS": "", "PERSONAL_DELIVERY_ENABLED": "true", "PERSONAL_DAILY_WRITES": "28000", "PERSONAL_BACKGROUND_WRITES": "22000", "PERSONAL_SOURCE_WRITES": "26000" },
   "services": [{ "binding": "SELF", "service": "your-personal-pilot" }, { "binding": "LEGACY", "service": "your-schedule-bot" }],
   "d1_databases": [{ "binding": "DB", "database_name": "your-personal-pilot", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "personal/migrations" }]
 }

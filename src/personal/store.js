@@ -1,8 +1,9 @@
+import { personalQuota } from './quota.js';
 const stoppedDays = new WeakMap();
 // D1 and the future SQLite runtime share this small async SQL interface.
 // All mutable data below belongs to the separate personal database.
 export class PersonalStore {
-  constructor(db) { this.db = db; this.read = 0; this.written = 0; }
+  constructor(db, env = {}) { this.db = db; this.quota = personalQuota(env); this.read = 0; this.written = 0; }
   measure(result) {
     this.read += result?.meta?.rows_read ?? 0;
     this.written += result?.meta?.rows_written ?? 0;
@@ -61,22 +62,31 @@ export class PersonalStore {
     try { await action(); return true; }
     finally { await this.run("UPDATE locks SET expires_at=0 WHERE user_id=? AND token=?", id, token); }
   }
-  async budget(now = new Date(), requests = 1, { service = false, router = false, userWork = false } = {}) {
+  backgroundPaused(row) {
+    return row.rows_written >= this.quota.background || row.rows_read >= 800000 || row.requests >= 22000;
+  }
+  budgetLimits(lane = 'interactive') {
+    return lane === 'service' ? [28000, 950000, this.quota.written]
+      : lane === 'background' ? [22000, 800000, this.quota.background]
+      : lane === 'source' ? [26000, 900000, this.quota.source]
+      : [27900, 948000, this.quota.written - 100];
+  }
+  async budget(now = new Date(), requests = 1, { service = false, router = false, userWork = false, lane = service ? 'service' : 'interactive' } = {}) {
     const day = now.toISOString().slice(0, 10); // Account daily quotas use UTC.
     const cached = stoppedDays.get(this.db);
-    if (!service && cached?.day === day && cached.until > now.getTime()) return {mode:"stopped"};
+    // Exhausting background/source allowance must never cache a manual stop.
+    if (!service && cached?.day === day && cached.lane === lane && cached.until > now.getTime()) return {mode:"stopped"};
     this.reserved = { read: service ? 500 : 2000, written: service || router ? 20 : userWork ? 100 : 200 };
     // The service allowance is INSIDE the unchanged daily ceiling. Lightweight
     // orchestration does not reserve the full delivery batch's write allowance.
-    const limits = service ? [28000, 950000, 28000] : [27900, 948000, 27900];
+    const limits = this.budgetLimits(lane);
     const row = await this.first("INSERT INTO budgets(day,requests,rows_read,rows_written) VALUES(?,?,?,?) ON CONFLICT(day) DO UPDATE SET requests=requests+excluded.requests,rows_read=rows_read+excluded.rows_read,rows_written=rows_written+excluded.rows_written WHERE requests+excluded.requests<? AND rows_read+excluded.rows_read<? AND rows_written+excluded.rows_written<? RETURNING *", day, requests, this.reserved.read, this.reserved.written, ...limits);
     if (!row) {
-      if (!service) stoppedDays.set(this.db, { day, until: now.getTime() + 60000 });
+      if (!service) stoppedDays.set(this.db, { day, lane, until: now.getTime() + 60000 });
       this.reserved = null;
       return {mode:'stopped'};
     }
-    return { ...row, mode: row.requests >= 28000 || row.rows_read >= 950000 || row.rows_written >= 28000 ? "stopped"
-      : row.requests >= 22000 || row.rows_read >= 800000 || row.rows_written >= 22000 ? "saving" : "normal" };
+    return { ...row, mode: this.backgroundPaused(row) ? 'saving' : 'normal' };
   }
   async flushBudget(now = new Date()) {
     // Measured D1 meta includes index writes. Reserve 2 additional writes/reads

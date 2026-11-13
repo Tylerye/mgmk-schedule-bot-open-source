@@ -6,6 +6,7 @@ import { TelegramClient } from "../src/telegram.js";
 import { readJson, InputError } from "../cloudflare/request-json.js";
 import { pilotAllowed } from "../cloudflare/personal-relay.js";
 import { dateInTimezone } from "../src/dates.js";
+import { manualJobsOnly } from '../src/personal/quota.js';
 
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 const logger = { info() {}, warn() {}, error() {} }; // Do not log user payloads.
@@ -51,7 +52,7 @@ export default {
     if (paused && (path.startsWith("/tick") || path.startsWith("/delivery/") || /^\/inbox\/\d+$/u.test(path))) {
       return json({ ok: true, paused: true, pending: false });
     }
-    const store = new PersonalStore(env.DB);
+    const store = new PersonalStore(env.DB, env);
     const now = new Date();
     let started = false;
     try {
@@ -59,25 +60,33 @@ export default {
         service: path === "/health",
         router: ["/tick", "/tick/inbox", "/tick/delivery"].includes(path),
         userWork: /^\/(inbox|delivery)\/\d+$/u.test(path),
+        lane: path === '/health' ? 'service' : ['/tick/fanout', '/tick/due'].includes(path) ? 'background'
+          : ['/source-status', '/catalog', '/begin', '/stage', '/finish', '/source-error', '/tick/recover'].includes(path) ? 'source' : 'interactive',
       }); started = true;
-      if (budget.mode === "stopped") return json({ok:true,stopped:true,pending:false});
+      if (budget.mode === "stopped") {
+        // Uploaders must not mistake an uncommitted source for a successful
+        // activation. A bounded Actions retry/recovery will resume it later.
+        const source = ['/source-status', '/catalog', '/begin', '/stage', '/finish', '/source-error', '/tick/recover'].includes(path);
+        return json({ok:!source,stopped:true,pending:false}, source ? 503 : 200);
+      }
       if (await store.setting("budget-mode") !== budget.mode) await store.setSetting("budget-mode", budget.mode);
       if (path === "/tick") {
         const work = await store.first("SELECT (SELECT COUNT(*) FROM (SELECT 1 FROM inbox WHERE status='pending' LIMIT 1)) inbox,"
           + "(SELECT COUNT(*) FROM (SELECT 1 FROM fanout f JOIN datasets d ON d.id=f.dataset_id WHERE f.status='pending' AND d.status='ready' LIMIT 1)) fanout,"
           + "(SELECT COUNT(*) FROM (SELECT 1 FROM users WHERE paused=0 AND blocked=0 AND next_due<=? LIMIT 1)) due,"
-          + "(SELECT COUNT(*) FROM (SELECT 1 FROM jobs WHERE status='pending' AND due<=? LIMIT 1)) delivery", now.getTime(), now.getTime());
+          + "(SELECT COUNT(*) FROM (SELECT 1 FROM jobs WHERE status='pending' AND due<=?" + manualJobsOnly(budget.mode) + " LIMIT 1)) delivery", now.getTime(), now.getTime());
+        if (budget.mode !== 'normal') { work.due = 0; work.fanout = 0; }
         const error = await store.setting("source-error");
         const staging = await store.first("SELECT 1 FROM datasets WHERE status='staging' AND generation<? AND date>=? LIMIT 1", now.getTime() - 300000, dateInTimezone(now, "Europe/Minsk"));
         const recovery = await store.setting("recovery", {});
-        const recover = Boolean(env.LEGACY && (error || staging) && (recovery.day !== now.toISOString().slice(0, 10) || recovery.count < 3)
+        const recover = Boolean(budget.rows_written + 200 < store.quota.source && env.LEGACY && (error || staging) && (recovery.day !== now.toISOString().slice(0, 10) || recovery.count < 3)
           && (!recovery.at || now.getTime() - recovery.at >= 20 * 60000));
         return json({ ok: true, ...work, recover });
       }
       if (path === "/health") {
         const counts = await store.first("SELECT (SELECT COUNT(*) FROM catalog) groups,(SELECT COUNT(*) FROM active_versions) days,(SELECT COUNT(*) FROM users) users");
-        const deliveryStopped = budget.rows_written + 100 >= 27900 || budget.rows_read + 2000 >= 948000 || budget.requests + 2 >= 27900;
-        return json({ ok: !paused, paused, deliveryStopped, sourceError: Boolean(await store.setting("source-error")), ...counts, budget, diagnostics: await diagnosticText(store, now) });
+        const deliveryStopped = budget.rows_written + 200 >= store.quota.written - 100 || budget.rows_read + 2000 >= 948000 || budget.requests + 2 >= 27900;
+        return json({ ok: !paused, paused, deliveryStopped, backgroundPaused: budget.mode !== 'normal', quota: store.quota, sourceError: Boolean(await store.setting("source-error")), ...counts, budget, diagnostics: await diagnosticText(store, now) });
       }
       if (path === "/inbox") {
         if (budget.mode === "stopped") return json({ ok: true, limited: true });
@@ -130,7 +139,7 @@ export default {
       } else if (path === "/tick/fanout") { if (budget.mode !== "stopped") await fanoutBatch(store); }
       else if (path === "/tick/due") { if (budget.mode === "normal") await enqueueDue(store); }
       else if (path === "/tick/delivery") {
-        const rows = await store.all("SELECT j.user_id FROM (SELECT user_id,priority,due FROM jobs WHERE status='pending' AND due<=? ORDER BY priority,due LIMIT 128) j JOIN users u ON u.user_id=j.user_id WHERE u.blocked=0 GROUP BY j.user_id ORDER BY MIN(u.last_api_at),MIN(j.priority),MIN(j.due) LIMIT 4", now.getTime());
+        const rows = await store.all("SELECT j.user_id FROM (SELECT user_id,priority,due FROM jobs WHERE status='pending' AND due<=?" + manualJobsOnly(budget.mode) + " ORDER BY priority,due LIMIT 128) j JOIN users u ON u.user_id=j.user_id WHERE u.blocked=0 GROUP BY j.user_id ORDER BY MIN(u.last_api_at),MIN(j.priority),MIN(j.due) LIMIT 4", now.getTime());
         const users = [...new Set(rows.map(r => r.user_id))].slice(0, 4);
         await Promise.all(users.map(async (id, index) => {
           // Keep independent CPU lanes, but avoid launching all four against
@@ -138,14 +147,14 @@ export default {
           if (index) await wait(index * 100);
           return internal(env, `/delivery/${id}`);
         }));
-        const pending = await store.first("SELECT 1 FROM jobs WHERE status='pending' AND due<=? LIMIT 1", now.getTime() + 1200);
+        const pending = await store.first("SELECT 1 FROM jobs WHERE status='pending' AND due<=?" + manualJobsOnly(budget.mode) + " LIMIT 1", now.getTime() + 1200);
         return json({ ok: true, pending: Boolean(pending) });
       } else if (/^\/delivery\/\d+$/u.test(path)) {
         const id = Number(path.split("/")[2]);
         if (pilotAllowed(env, id)) {
           const acquired = await deliverUser(store, new TelegramClient({ token: env.BOT_TOKEN, logger, timeoutMs: 8000 }), id,
             { now, mode: budget.mode, ownerId: env.ADMIN_USER_ID });
-          const next = await store.first("SELECT MIN(due) due FROM jobs WHERE user_id=? AND status='pending'", id);
+          const next = await store.first("SELECT MIN(due) due FROM jobs WHERE user_id=? AND status='pending'" + manualJobsOnly(budget.mode), id);
           return json({ ok: true, busy: acquired === false, pending: next?.due != null, nextDue: next?.due ?? null });
         }
       } else return json({ ok: false }, 404);
