@@ -8,12 +8,12 @@ const digest = value => createHash("sha256").update(JSON.stringify(value)).diges
 
 // One Telegram operation per user invocation. Every send has a durable intent
 // first. A process dying between intent and receipt leaves it uncertain.
-export async function telegramOperation(store, client, user, key, method, body, now = Date.now(), { queuedCardEdit = false } = {}) {
+export async function telegramOperation(store, client, user, key, method, body, now = Date.now(), { queuedEdit = false } = {}) {
   const id = `${user.user_id}:${key}`;
-  // For an existing card, the persisted job is already the intent and its
-  // atomic card hash/job completion is the receipt. Repeating an interrupted
-  // edit targets the same message and is idempotent; sends still need a journal.
-  const journal = !(queuedCardEdit && method === 'editMessageText');
+  // For queued cards and manual screens the job is already durable intent.
+  // An interrupted edit repeats on the same message under the user lock;
+  // completion (and card/screen hash) is the receipt. Sends still need a journal.
+  const journal = !(queuedEdit && method === 'editMessageText');
   const old = journal ? await store.first("SELECT * FROM operations WHERE id=?", id) : null;
   if (old?.status === "succeeded") return { done: true, result: JSON.parse(old.result) };
   if (old?.status === "uncertain" || (old?.status === "started" && method === "sendMessage")) {
@@ -108,7 +108,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
     const payload = JSON.parse(job.payload);
     if (job.epoch !== user.epoch || (user.paused && !payload.manual)) { await finishJob(store, job, "cancelled"); return; }
     if (mode === "stopped" || (mode !== "normal" && !payload.manual)) return;
-    const op = (key, method, body) => telegramOperation(store, client, user, key, method, body, now.getTime(), { queuedCardEdit: job.kind === 'card' });
+    const op = (key, method, body) => telegramOperation(store, client, user, key, method, body, now.getTime(), { queuedEdit: job.kind === 'card' || job.kind === 'reply' });
     const sendBody = (text, keyboard, silent = true) => ({ chat_id: id, text, parse_mode: "HTML", disable_web_page_preview: true,
       disable_notification: silent, ...(keyboard ? { reply_markup: keyboard } : {}) });
     if (job.kind === "commands") {

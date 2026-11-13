@@ -44,11 +44,14 @@ test('teacher deadlines skip idle writes but wake on commands, source correction
  await DB.prepare("INSERT INTO teacher_users(teacher_id,user_id,enrolled_at) VALUES(?,101,'local')").bind(teacherId).run();
  const schedule={teacherId,date:'2026-11-12',hash:'a'.repeat(64),status:'',lessons:[{number:1,start:'08:15',end:'09:00',group:'1А'}]};
  const seed=async s=>DB.prepare('INSERT OR REPLACE INTO teacher_schedules VALUES(?,?,?,?,?)').bind(s.teacherId,s.date,s.hash,JSON.stringify(s),'local').run();await seed(schedule);
- const tick=time=>teacherMaintenance(env,config,logger,teacherId,at(time),client);
- await tick('07:00');calls.length=0;
+ let claims=0,allowed=true;
+ const admit=async()=>{claims++;return allowed;};
+ const tick=time=>teacherMaintenance(env,config,logger,teacherId,at(time),client,admit);
+ await tick('07:00');calls.length=0;assert.equal(claims,1);
  sqlite.exec('CREATE TABLE lease_writes(n INTEGER); CREATE TRIGGER watch_lease AFTER UPDATE ON runtime_locks BEGIN INSERT INTO lease_writes VALUES(1); END;');
- assert.equal((await tick('07:01')).idle,true);assert.equal((await DB.prepare('SELECT COUNT(*) n FROM lease_writes').first()).n,0);
- await tick('08:15');assert.ok(calls.includes('edit'));calls.length=0;await tick('09:00');assert.ok(calls.includes('edit'));
+ assert.equal((await tick('07:01')).idle,true);assert.equal(claims,1,'idle probe does not write minute admission');assert.equal((await DB.prepare('SELECT COUNT(*) n FROM lease_writes').first()).n,0);
+ allowed=false;assert.equal((await tick('08:15')).duplicate,true);assert.equal(calls.length,0,'rejected admission cannot execute live edits');
+ allowed=true;await tick('08:15');assert.ok(calls.includes('edit'));calls.length=0;await tick('09:00');assert.ok(calls.includes('edit'));
  await seed({...schedule,hash:'b'.repeat(64),lessons:[{...schedule.lessons[0],group:'2Б'}]});calls.length=0;await tick('09:01');assert.ok(calls.includes('edit'));
  await DB.prepare("INSERT INTO teacher_inbox(update_id,teacher_id,payload) VALUES(1,?,?)").bind(teacherId,JSON.stringify({teacherId,userId:101,action:'today',callbackId:'cb',messageId:88})).run();calls.length=0;await tick('09:02');assert.ok(calls.includes('ack'));
  await seed({...schedule,date:'2026-11-13',hash:'c'.repeat(64)});await tick('09:03');calls.length=0;await tick('16:00');assert.ok(calls.includes('pin'));

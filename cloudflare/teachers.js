@@ -301,7 +301,7 @@ async function saveTeacherCheck(env, config, teacher, now, processedSchedules) {
     .bind(`maintenance:${teacher.id}`,JSON.stringify({signature:state.signature,next})).run();
 }
 
-export async function teacherMaintenance(env, config, logger, teacherId, now = new Date(), suppliedClient = null) {
+export async function teacherMaintenance(env, config, logger, teacherId, now = new Date(), suppliedClient = null, admit = null) {
   const teacher = TEACHER_ACCOUNTS.find(t => t.id === teacherId);
   if (!teacher) throw new Error("Unknown teacher lane");
   if (teacher.sourceTeacherId && env.OWNER_PREVIEW_ENABLED !== "true") return { acquired: false };
@@ -314,6 +314,7 @@ export async function teacherMaintenance(env, config, logger, teacherId, now = n
     const saved = JSON.parse(cached.value);
     if (saved.signature === probe.signature && saved.next > now.getTime()) return { checked: true, idle: true };
   }
+  if (admit && !await admit()) return { acquired: false, duplicate: true };
   const result = await withStateLock(env.DB, async () => {
     const user = await env.DB.prepare("SELECT * FROM teacher_users WHERE teacher_id=?").bind(teacher.id).first();
     if (!user) return;

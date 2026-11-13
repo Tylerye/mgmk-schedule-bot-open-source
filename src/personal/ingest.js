@@ -73,6 +73,7 @@ export async function finishDataset(store, id) {
     ["UPDATE datasets SET status='ready' WHERE id=?", id],
     ["UPDATE datasets SET status='superseded' WHERE date=? AND generation<? AND status='staging'", dataset.date, dataset.generation],
     ["INSERT OR IGNORE INTO fanout(dataset_id,group_id) SELECT s.dataset_id,s.group_id FROM snapshots s WHERE s.dataset_id=? "
+      + "AND EXISTS(SELECT 1 FROM users u WHERE u.group_id=s.group_id AND u.paused=0 AND u.blocked=0) "
       + "AND NOT EXISTS(SELECT 1 FROM active_versions a WHERE a.date=? AND a.generation>=?) "
       + "AND NOT EXISTS(SELECT 1 FROM snapshots old JOIN active_versions a ON old.dataset_id=a.dataset_id WHERE a.date=? AND old.group_id=s.group_id AND old.hash=s.hash)",
       id, dataset.date, dataset.generation, dataset.date],

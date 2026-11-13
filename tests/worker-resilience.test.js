@@ -58,9 +58,9 @@ async function fixture() {
   };
   return { sqlite, db, store, calls,
     env: { DB: db, BOT_TOKEN: "test", DRIVE_FOLDER_ID: "folder", GITHUB_REPOSITORY: "owner/repo", LOG_LEVEL: "error" },
-    async lane(lane) {
+    async lane(lane, { clearAdmission = true } = {}) {
       const pending = [];
-      await db.prepare("DELETE FROM runtime_locks WHERE name LIKE 'maintenance-admission:%'").run();
+      if (clearAdmission) await db.prepare("DELETE FROM runtime_locks WHERE name LIKE 'maintenance-admission:%'").run();
       const response = await worker.fetch(new Request(`https://worker.audit-fixture.net/internal/maintenance/${lane}`, {
         method: "POST", headers: await maintenanceHeaders({WORKER_PUBLIC_ORIGIN:"https://worker.audit-fixture.net",MAINTENANCE_SIGNING_SECRET:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"},`/internal/maintenance/${lane}`),
       }), { ...this.env, WORKER_PUBLIC_ORIGIN:"https://worker.audit-fixture.net", MAINTENANCE_SIGNING_SECRET:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", PARSER_SHARED_SECRET: "test-secret" }, { waitUntil(p) { pending.push(p); } });
@@ -272,10 +272,23 @@ test("quiet live ticks use persisted deadlines but new versions and invalidation
   try {
     await f.lane("live"); f.calls.length = 0;
     await f.lane("live"); assert.equal(f.calls.length, 0);
+    assert.equal((await f.db.prepare("SELECT COUNT(*) n FROM runtime_locks WHERE name='maintenance-admission:live'").first()).n,0);
     f.env.CF_VERSION_METADATA = { id: "new-deployment" };
     await f.lane("live"); assert.ok(f.calls.some(c => c.url.endsWith("getMe")));
     f.calls.length = 0;
     await patchHealth(f.db, { nextLiveReconcileAt: 0 });
     await f.lane("live"); assert.ok(f.calls.some(c => c.url.endsWith("getMe")));
+  } finally { f.cleanup(); }
+});
+
+test('a consumed live admission still rejects replay after source/cache invalidation', async () => {
+  const f = await fixture();
+  try {
+    await f.lane('live'); f.calls.length = 0;
+    await patchHealth(f.db, { nextLiveReconcileAt: 0 });
+    const response = await f.lane('live', { clearAdmission: false });
+    assert.equal((await response.json()).duplicate, true);
+    assert.equal(f.calls.length, 0);
+    assert.equal((await new D1StateStore(f.db).load()).health.nextLiveReconcileAt, 0);
   } finally { f.cleanup(); }
 });

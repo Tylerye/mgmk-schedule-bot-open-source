@@ -105,9 +105,10 @@ test("pilot routing respects teacher reservations, group updates, owner ID and d
 });
 
 for (const count of [100, 300, 1500]) test(`mock load ${count}: fanout targets only the changed group; latest subscription wins`, { skip: process.env.RUN_PERSONAL_LOAD_TESTS !== "true" }, async t => {
-  const f = await personalFixture(); t.after(() => f.close()); const s = await sampleSchedule(); await installSchedules(f.store, [s]);
+  const f = await personalFixture(); t.after(() => f.close()); const s = await sampleSchedule();
   const insert = f.sqlite.prepare("INSERT INTO users(user_id,group_id) VALUES(?,?)");
   f.sqlite.exec("BEGIN"); for (let id = 1; id <= count; id++) insert.run(id, id % 2 ? "8СА" : "8ТС"); f.sqlite.exec("COMMIT");
+  await installSchedules(f.store, [s]);
   for (let i = 0; i < Math.ceil(count / 24) + 1; i++) await fanoutBatch(f.store, now.getTime());
   const jobs = await f.store.all("SELECT * FROM jobs"); assert.equal(jobs.length, Math.ceil(count / 2)); assert.ok(jobs.every(j => j.user_id % 2));
   // Replace outdated work without generating an additional job per user.
@@ -143,8 +144,9 @@ test("quota degradation stops manual work too", async t => {
 test("empty catalog groups do not delay the subscribed group, and a returning blocked user catches up", async t => {
   const f = await personalFixture(); t.after(() => f.close());
   const a = await sampleSchedule("1А"), b = await sampleSchedule("2Б"), c = await sampleSchedule("8Са");
-  await installSchedules(f.store, [a, b, c]);
   await f.store.run("INSERT INTO users(user_id,group_id) VALUES(100,'8СА')");
+  await installSchedules(f.store, [a, b, c]);
+  assert.equal((await f.store.first("SELECT COUNT(*) n FROM fanout")).n,1);
   await fanoutBatch(f.store, now.getTime());
   assert.equal((await f.store.all("SELECT * FROM jobs WHERE user_id=100")).length, 1);
   assert.equal((await f.store.first("SELECT count(*) n FROM fanout WHERE status='pending'")).n, 0);

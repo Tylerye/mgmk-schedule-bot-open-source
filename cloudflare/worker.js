@@ -420,19 +420,23 @@ async function handleMaintenance(request, env, pathname, context) {
   if (request.method !== "POST") return json({ ok: false }, 405);
   const interval = Math.floor(Number(request.headers.get("x-maintenance-time")) / 60000);
   const combinedSourceLease = lane === "source" || lane === "teacher-source";
-  const claimed = combinedSourceLease ? null : await env.DB.prepare("INSERT INTO runtime_locks(name,owner,locked_until) VALUES(?,'maintenance',?) ON CONFLICT(name) DO UPDATE SET locked_until=excluded.locked_until WHERE runtime_locks.locked_until<excluded.locked_until").bind(`maintenance-admission:${lane}`, interval).run();
-  if (claimed && claimed.meta?.changes !== 1) return json({ ok: true, duplicate: true });
+  const claim = async () => (await env.DB.prepare("INSERT INTO runtime_locks(name,owner,locked_until) VALUES(?,'maintenance',?) ON CONFLICT(name) DO UPDATE SET locked_until=excluded.locked_until WHERE runtime_locks.locked_until<excluded.locked_until").bind(`maintenance-admission:${lane}`, interval).run()).meta?.changes === 1;
+  // Idle probes only read current state and coalesce health. Claim the signed
+  // minute only when there is actual work, before its execution lease/API calls.
+  const deferredAdmission = lane === "live" || (lane.startsWith("teacher-") && lane !== "teacher-source");
+  if (!combinedSourceLease && !deferredAdmission && !await claim()) return json({ ok: true, duplicate: true });
   const task = lane === "teacher-source" ? pollTeacherSource(env, configFromEnv(env), createLogger(env.LOG_LEVEL || "info"), interval)
-    : lane.startsWith("teacher-") ? teacherMaintenance(env, configFromEnv(env), createLogger(env.LOG_LEVEL || "info"), lane.slice(8))
+    : lane.startsWith("teacher-") ? teacherMaintenance(env, configFromEnv(env), createLogger(env.LOG_LEVEL || "info"), lane.slice(8), new Date(), null, claim)
     : lane === "attention"
     ? attentionMaintenance(env, configFromEnv(env), createLogger(env.LOG_LEVEL || "info")).then(() =>
       patchHealth(env.DB, { lastAttentionSuccessAt: new Date().toISOString(), attentionError: null }, { heartbeatKey: "lastAttentionSuccessAt" }))
-    : scheduled(env, lane, combinedSourceLease ? interval : null);
+    : scheduled(env, lane, combinedSourceLease ? interval : null, lane === "live" ? claim : null);
   // Keep the claimed work alive if the caller disconnects. Never retry an
   // ambiguous dispatch inside the same tick; durable queues resume next minute.
   context.waitUntil(task.catch(() => {}));
   try {
     const result = await task;
+    if (result?.duplicate) return json({ ok: true, duplicate: true });
     if (lane.startsWith("teacher-") && (result?.acquired || result?.checked)) await writeTeacherStatus(env.DB, `health:${lane}`, { error: false });
     return json({ ok: true });
   }
@@ -463,7 +467,7 @@ async function pollTeacherSource(env, config, logger, interval = null) {
   }, { name: "teacher-source", leaseMs: 180000, interval });
 }
 
-async function scheduled(env, lane = "all", interval = null) {
+async function scheduled(env, lane = "all", interval = null, admit = null) {
   const config = configFromEnv(env);
   const now = new Date();
   const cacheKey = JSON.stringify([env.CF_VERSION_METADATA?.id ?? "local", config.bells, config.pinSwitchTime, config.timezone, config.displayGroup]);
@@ -476,6 +480,7 @@ async function scheduled(env, lane = "all", interval = null) {
       return;
     }
   }
+  if (admit && !await admit()) return { duplicate: true };
   const logger = createLogger(env.LOG_LEVEL || "info");
   const errors = [];
   let sourceHealth = {};
