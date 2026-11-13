@@ -8,7 +8,9 @@ export async function enqueuePersonalUpdate(store, update, now = Date.now()) {
   const count=await store.first("SELECT (SELECT COUNT(*) FROM (SELECT 1 FROM inbox WHERE status='pending' LIMIT 500)) total,(SELECT COUNT(*) FROM (SELECT 1 FROM inbox WHERE status='pending' AND user_id=? LIMIT 5)) own,(SELECT rows FROM security_storage_counts WHERE name='inbox') records",update.userId);
   if(count.total>=500 || count.own>=5 || count.records>=100000) return false;
   const inserted = await store.run("INSERT OR IGNORE INTO inbox(update_id,user_id,payload,received_at) VALUES(?,?,?,?)", update.update_id, update.userId, JSON.stringify(update), now);
-  return Number(inserted.meta?.changes ?? 0) === 1;
+  // D1 includes the storage-counter trigger in changes (normally 2).
+  // A duplicate changes no rows; trigger writes must not defer a new tap.
+  return Number(inserted.meta?.changes ?? 0) > 0;
 }
 
 export async function processPersonalInbox(store, row, now = new Date()) {

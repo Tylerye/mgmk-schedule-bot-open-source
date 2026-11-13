@@ -29,6 +29,19 @@ async function kick(env, { inbox = true, delivery = true } = {}) {
   }
 }
 
+async function deliverInteractive(env, id) {
+  // Keep CPU-isolated delivery invocations, but service the person who tapped
+  // immediately instead of putting them behind four other users and a Cron.
+  for (let round = 0; round < 6; round++) {
+    const result = await internal(env, `/delivery/${id}`);
+    if (!result.pending || result.stopped || result.paused) return;
+    const delay = Math.max(100, (result.nextDue ?? Date.now()) - Date.now());
+    // Long Telegram retry_after and held leases belong to the durable retry.
+    if (delay > 1500 || result.busy) return;
+    await wait(delay);
+  }
+}
+
 export default {
   async fetch(request, env, context) {
     if (!env.PERSONAL_SHARED_SECRET || request.headers.get("authorization") !== `Bearer ${env.PERSONAL_SHARED_SECRET}`) return json({ ok: false }, 403);
@@ -75,7 +88,13 @@ export default {
         // authenticated independently from the main webhook/parser secret.
         const admitted = await enqueuePersonalUpdate(store, update);
         if (!admitted) return json({ ok: true, queued: false });
-        if (!paused) context.waitUntil(internal(env, `/inbox/${update.update_id}`).then(() => kick(env)).catch(() => {}));
+        if (!paused) {
+          // Process in a separate CPU lane before returning, then start the
+          // user's own delivery chain. Persisted inbox/jobs remain the fallback.
+          const processed = await internal(env, `/inbox/${update.update_id}`);
+          if (!processed.busy && !processed.stopped)
+            context.waitUntil(deliverInteractive(env, update.userId).catch(() => {}));
+        }
       } else if (path === "/source-status") {
         const body = await readJson(request, 4096);
         return json({ enabled: true, known: await store.setting(`source:${String(body.id).slice(0, 100)}`) });
@@ -104,7 +123,10 @@ export default {
         return json({ ok: true, pending: Boolean(row && await store.first("SELECT 1 FROM inbox WHERE status='pending' LIMIT 1")) });
       } else if (/^\/inbox\/\d+$/u.test(path)) {
         const row = await store.first("SELECT * FROM inbox WHERE update_id=? AND status='pending'", Number(path.split("/")[2]));
-        if (row && pilotAllowed(env, row.user_id)) await processPersonalInbox(store, row, now);
+        if (row && pilotAllowed(env, row.user_id)) {
+          const acquired = await processPersonalInbox(store, row, now);
+          return json({ ok: true, busy: acquired === false });
+        }
       } else if (path === "/tick/fanout") { if (budget.mode !== "stopped") await fanoutBatch(store); }
       else if (path === "/tick/due") { if (budget.mode === "normal") await enqueueDue(store); }
       else if (path === "/tick/delivery") {
@@ -120,8 +142,12 @@ export default {
         return json({ ok: true, pending: Boolean(pending) });
       } else if (/^\/delivery\/\d+$/u.test(path)) {
         const id = Number(path.split("/")[2]);
-        if (pilotAllowed(env, id)) await deliverUser(store, new TelegramClient({ token: env.BOT_TOKEN, logger, timeoutMs: 8000 }), id,
-          { now, mode: budget.mode, ownerId: env.ADMIN_USER_ID });
+        if (pilotAllowed(env, id)) {
+          const acquired = await deliverUser(store, new TelegramClient({ token: env.BOT_TOKEN, logger, timeoutMs: 8000 }), id,
+            { now, mode: budget.mode, ownerId: env.ADMIN_USER_ID });
+          const next = await store.first("SELECT MIN(due) due FROM jobs WHERE user_id=? AND status='pending'", id);
+          return json({ ok: true, busy: acquired === false, pending: next?.due != null, nextDue: next?.due ?? null });
+        }
       } else return json({ ok: false }, 404);
       return json({ ok: true });
     } catch (error) {
