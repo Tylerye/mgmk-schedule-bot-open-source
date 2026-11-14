@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { PersonalStore } from "../../src/personal/store.js";
 import { beginDataset, stageSchedules, finishDataset, compactSchedule } from "../../src/personal/ingest.js";
 import { parseAllGroupSchedules } from "../../src/personal/parse.js";
+import { dayKey } from "../../src/dates.js";
 
 export async function personalFixture() {
   const sqlite = new DatabaseSync(":memory:");
@@ -22,6 +23,9 @@ export async function personalFixture() {
 
 export async function sampleSchedule(group = "8Са", date = "2026-11-12") {
   const bells = JSON.parse(await readFile(new URL("../../config/bells.json", import.meta.url)));
+  // This synthetic runtime fixture needs two lessons on any runner date,
+  // including Sunday; it does not model the college's real weekend timetable.
+  if (!bells[dayKey(date)]?.length) bells[dayKey(date)] = bells.thursday;
   const human = date.split("-").reverse().join(".");
   const rows = ["РАСПИСАНИЕ НА", `ЧЕТВЕРГ ${human}`, "¦гр.¦ур¦Предмет¦Ауд¦Преподаватель¦", `¦${group}¦1¦МАТЕМАТИКА¦245¦Иванов А А¦`,
     "¦¦8¦ФИЗИКА¦210¦Петров Б Б¦", "Зам. директора по УР________"].map(line => ({ line }));

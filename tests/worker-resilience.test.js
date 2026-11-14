@@ -159,7 +159,7 @@ test("health reports stalled live updates even after a successful getMe and sour
   const f = await fixture();
   try {
     await patchHealth(f.db, { lastSourcePollSuccessAt: new Date().toISOString(), lastTelegramSuccessAt: new Date().toISOString(),
-      lastReconcileSuccessAt: new Date(Date.now() - 10 * 60_000).toISOString(), lastError: null,
+      lastReconcileSuccessAt: new Date(Date.now() - 25 * 60_000).toISOString(), lastError: null,
       lastQueuesSuccessAt: new Date().toISOString(), lastAttentionSuccessAt: new Date().toISOString() });
     const health = await (await worker.fetch(new Request("https://worker.audit-fixture.net/internal/health", {headers:{authorization:"Bearer health-test"}}), {...f.env,HEALTH_READ_SECRET:"health-test"}, {})).json();
     assert.equal(health.ok, false);

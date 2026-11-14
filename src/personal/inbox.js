@@ -67,7 +67,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
       }
       if (key === "paused") {
         user.epoch++; user.next_due = null;
-        if (!user.paused && user.group_id) for (const s of initialDates(await store.schedules(user.group_id), now)) jobs.push(job(user, "card", s.date));
+        if (!user.paused && user.group_id) for (const s of initialDates(await store.schedules(user.group_id), now)) jobs.push(job(user, "card", s.date, { priority: 0, payload: { manual: true } }));
       }
       reply(t(user).settings, settingsKeyboard(user));
     } else if (action === "settings") reply(t(user).settings, settingsKeyboard(user));
@@ -96,7 +96,17 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
           const rendered = renderPersonal(schedules.find(s => s.date === date), user, { now, mode: action.startsWith("preview:") ? action.split(":")[2] : "compact" });
           const keyboard = structuredClone(rendered.keyboard);
           for (const row of keyboard.inline_keyboard) for (const b of row) b.callback_data = b.callback_data.replace('personal:view:', 'personal:preview:');
-          rendered.parts.forEach((text, i) => reply(text, i ? {inline_keyboard:[]} : keyboard, i ? null : update.messageId ?? null));
+          // A preview is one navigable screen, independent of automatic cards.
+          // Paging needs no extra sends, receipts or persisted message IDs.
+          const page = Math.max(0, Math.min(Number(action.split(":")[3]) || 0, rendered.parts.length - 1));
+          if (rendered.parts.length > 1) {
+            const mode = action.startsWith("preview:") ? action.split(":")[2] : "compact";
+            const pages = [];
+            if (page > 0) pages.push(button("◀️", `preview:${date}:${mode}:${page - 1}`));
+            if (page + 1 < rendered.parts.length) pages.push(button("▶️", `preview:${date}:${mode}:${page + 1}`));
+            keyboard.inline_keyboard.unshift(pages);
+          }
+          reply(rendered.parts[page], keyboard);
         }
       }
     } else reply(t(user).menu);

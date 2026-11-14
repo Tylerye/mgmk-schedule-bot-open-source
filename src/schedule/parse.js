@@ -10,12 +10,12 @@ function cleanCell(value) {
 function parseTableLine(line) {
   if (!/[|¦]/.test(line)) return null;
   const cells = line.split(/[|¦]/).map(cleanCell);
-  if (cells.length < 6) return null;
+  if (cells.length < 6 && !(cells.length === 5 && !cells[2])) return null;
   return {
     group: cells[1] ?? "",
     lesson: cells[2] ?? "",
     subject: cells[3] ?? "",
-    room: cells[4] ?? "",
+    room: cells.length === 5 ? "" : cells[4] ?? "",
     teacher: cells.slice(5).join(" ").trim(),
     rawLine: line,
   };
@@ -85,7 +85,10 @@ export function parseGroupSchedule(parsedPdf, { targetGroup, expectedDate, bells
       }
       if (!insideTarget) continue;
 
-      if (pdfRow.line.split(/[|¦]/).length !== 7) {
+      const cells = pdfRow.line.split(/[|¦]/).map(cleanCell);
+      // Merged text-only continuations are valid; numbered rows must retain
+      // all columns so a damaged lesson cannot be accepted as missing fields.
+      if ((cells.length !== 7 && !(cells.length === 5 && !cells[2])) || cells[0] || cells.at(-1)) {
         throw new Error(`Malformed table columns in ${targetGroup}: ${pdfRow.line}`);
       }
 

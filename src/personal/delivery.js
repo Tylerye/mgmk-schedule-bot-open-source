@@ -59,8 +59,10 @@ export async function telegramOperation(store, client, user, key, method, body, 
     }
     const permanent = error.apiRejected && error.errorCode >= 400 && error.errorCode < 500;
     const replaceable = method === 'editMessageText' && /message to edit not found|message can't be edited|message can not be edited/iu.test(error.description ?? '');
-    if (journal) await store.run("UPDATE operations SET status=?,result=? WHERE id=?", permanent ? "failed" : "retry", JSON.stringify({replaceable}), id);
-    return permanent ? { failed: true, replaceable } : { retryAt: now + 5000 };
+    const missingPin = permanent && method === 'pinChatMessage' && /message to pin not found/iu.test(error.description ?? '');
+    const failure = { replaceable, ...(missingPin ? { missingPin: true } : {}) };
+    if (journal) await store.run("UPDATE operations SET status=?,result=? WHERE id=?", permanent ? "failed" : "retry", JSON.stringify(failure), id);
+    return permanent ? { failed: true, ...failure } : { retryAt: now + 5000 };
   }
 }
 
@@ -165,6 +167,19 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       const desired = choosePersonalPin(eligible, { messageId: user.pin_message_id, date: user.pin_date }, now);
       if (!desired) { await finishJob(store, job); return; }
       const result = await op(`pin:${user.epoch}:${job.revision}:${desired.messageId}`, "pinChatMessage", { chat_id: id, message_id: desired.messageId, disable_notification: true });
+      if (result.missingPin) {
+        // Only a definite missing-message response permits replacement. Preserve
+        // the old ID in the send key so a crash/timeout cannot duplicate it.
+        const card = cards.find(c => c.date === desired.date);
+        const parts = JSON.parse(card.parts);
+        parts[0] = { id: null, hash: null, replacementFor: desired.messageId };
+        await store.batch([
+          ["UPDATE cards SET parts=? WHERE user_id=? AND group_id=? AND date=?", JSON.stringify(parts), id, user.group_id, desired.date],
+          store.jobStatement(user, "card", desired.date, { priority: 0, due: now.getTime(), payload: payload.manual ? { manual: true } : {} }),
+          doneJob(job),
+        ]);
+        return;
+      }
       if (await applyOutcome(store, job, result)) {
         const statements = [["UPDATE users SET pin_message_id=?,pin_date=? WHERE user_id=?", desired.messageId, desired.date, id]];
         if (user.pin_message_id && user.pin_message_id !== desired.messageId) statements.push(store.jobStatement(user, "unpin", String(user.pin_message_id), { priority: 1, due: now.getTime(), payload: { messageId: user.pin_message_id } }));
