@@ -23,15 +23,23 @@ async function kick(env, { inbox = true, delivery = true, due = false, fanout = 
   // Bounded orchestration: each inbox/user runs in a separate HTTP invocation
   // with its own CPU budget. A minute Cron resumes after isolate termination.
   const deadline = Date.now() + 20000;
-  for (let wave = 0; wave < 12 && Date.now() < deadline; wave++) {
-    if (fanout) { fanout = Boolean((await internal(env, '/tick/fanout')).pending); delivery = true; }
-    if (due) { due = Boolean((await internal(env, '/tick/due')).pending); delivery = true; }
-    if (inbox) inbox = Boolean((await internal(env, "/tick/inbox")).pending);
-    if (delivery) delivery = Boolean((await internal(env, "/tick/delivery")).pending);
+  let calls = 0;
+  const run = path => { calls++; return internal(env, path); };
+  // At most four router calls per wave. Preserve the previous 48-call bound
+  // but allow more delivery-only waves after fanout/due work has finished.
+  while (calls <= 44 && Date.now() < deadline) {
+    let nextDue = null;
+    if (fanout) { fanout = Boolean((await run('/tick/fanout')).pending); delivery = true; }
+    if (due) { due = Boolean((await run('/tick/due')).pending); delivery = true; }
+    if (inbox) inbox = Boolean((await run("/tick/inbox")).pending);
+    if (delivery) {
+      const result = await run("/tick/delivery");
+      delivery = Boolean(result.pending); nextDue = result.nextDue ?? null;
+    }
     if (!inbox && !delivery && !due && !fanout) break;
     // Inbox commands may have created delivery work in this wave.
     delivery = true;
-    await wait(1100);
+    await wait(nextDue === null ? 1100 : Math.max(100, Math.min(1100, nextDue - Date.now())));
   }
 }
 
@@ -121,7 +129,13 @@ export default {
       else if (path === "/stage") {
         const body = await readJson(request, 196608); await stageSchedules(store, body.id, body.schedules);
       } else if (path === "/finish") {
-        const body = await readJson(request, 4096); await finishDataset(store, body.id); await store.setSetting("source-error", null);
+        const body = await readJson(request, 4096);
+        const activated = await finishDataset(store, body.id);
+        await store.setSetting("source-error", null);
+        // Start delivery as soon as a new source is durable. Cron still recovers
+        // interrupted pumps; repeated finish calls never replay a publication.
+        if (activated && !paused && budget.mode === 'normal')
+          context.waitUntil(kick(env, { inbox: false, delivery: true, fanout: true }).catch(() => {}));
       } else if (path === "/source-error") {
         const body = await readJson(request, 4096);
         const previous = await store.setting("source-error", {});
@@ -147,9 +161,8 @@ export default {
           return json({ ok: true, busy: acquired === false, delivery });
         }
       } else if (path === "/tick/fanout") {
-        let pending = true;
-        for (let i=0;i<4 && pending;i++) pending = Boolean((await internal(env, '/fanout')).pending);
-        return json({ok:true,pending});
+        // One batch spans groups while fitting the existing D1 reservation.
+        return json(await internal(env, '/fanout'));
       } else if (path === '/fanout') {
         if (budget.mode === 'normal' && !paused) await fanoutBatch(store);
         return json({ok:true,pending:Boolean(await store.first("SELECT 1 FROM fanout f JOIN datasets d ON d.id=f.dataset_id WHERE f.status='pending' AND d.status='ready' LIMIT 1"))});
@@ -162,16 +175,27 @@ export default {
         if (budget.mode === 'normal') await enqueueDue(store, now.getTime(), Number(path.split('/')[2]));
       }
       else if (path === "/tick/delivery") {
-        const rows = await store.all("SELECT j.user_id FROM (SELECT user_id,priority,due FROM jobs WHERE status='pending' AND due<=?" + manualJobsOnly(budget.mode) + " ORDER BY priority,due LIMIT 128) j JOIN users u ON u.user_id=j.user_id WHERE u.blocked=0 GROUP BY j.user_id ORDER BY MIN(u.last_api_at),MIN(j.priority),MIN(j.due) LIMIT 4", now.getTime());
+        const rows = await store.all("SELECT j.user_id FROM (SELECT user_id,priority,due FROM jobs WHERE status='pending' AND due<=?" + manualJobsOnly(budget.mode) + " ORDER BY priority,due LIMIT 128) j JOIN users u ON u.user_id=j.user_id WHERE u.blocked=0 AND u.last_api_at<=? GROUP BY j.user_id ORDER BY MIN(j.priority),MIN(j.due),MIN(u.last_api_at) LIMIT 4", now.getTime(), now.getTime() - 1050);
         const users = [...new Set(rows.map(r => r.user_id))].slice(0, 4);
-        await Promise.all(users.map(async (id, index) => {
-          // Keep independent CPU lanes, but avoid launching all four against
-          // the same 84ms Telegram slot. The first user still starts immediately.
-          if (index) await wait(index * 100);
-          return internal(env, `/delivery/${id}`);
-        }));
-        const pending = await store.first("SELECT 1 FROM jobs WHERE status='pending' AND due<=?" + manualJobsOnly(budget.mode) + " LIMIT 1", now.getTime() + 1200);
-        return json({ ok: true, pending: Boolean(pending) });
+        let lastStart = 0;
+        for (const id of users) {
+          // Each user still has an independent HTTP/CPU invocation. Await the
+          // previous lane and space starts so D1 latency cannot shuffle four
+          // concurrent claims into the same 84ms Telegram slot and waste writes.
+          if (lastStart) await wait(Math.max(0, 100 - (Date.now() - lastStart)));
+          lastStart = Date.now();
+          await internal(env, `/delivery/${id}`);
+        }
+        // Skip still-cooling users without allocating their locks, intents and
+        // HTTP lanes. Other subscribers can advance immediately; only a wave
+        // with no eligible recipient waits for the earliest durable deadline.
+        const clock = Date.now();
+        const next = await store.first("SELECT CASE WHEN EXISTS(SELECT 1 FROM jobs j JOIN users u ON u.user_id=j.user_id "
+          + "WHERE j.status='pending' AND j.due<=? AND u.blocked=0 AND u.last_api_at<=?" + manualJobsOnly(budget.mode) + " LIMIT 1) THEN ? "
+          + "ELSE (SELECT MIN(MAX(j.due,u.last_api_at+1050)) FROM jobs j JOIN users u ON u.user_id=j.user_id "
+          + "WHERE j.status='pending' AND j.due<=? AND u.blocked=0" + manualJobsOnly(budget.mode) + ") END due",
+          clock, clock - 1050, clock, clock + 1200);
+        return json({ ok: true, pending: next?.due != null && next.due <= Date.now() + 1200, nextDue: next?.due ?? null });
       } else if (/^\/delivery\/\d+$/u.test(path)) {
         const id = Number(path.split("/")[2]);
         if (pilotAllowed(env, id)) {

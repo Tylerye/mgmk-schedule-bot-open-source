@@ -1,4 +1,5 @@
 import { mergeCatalog, groupKey } from "./catalog.js";
+import { JOB_CONFLICT_UPDATE } from './store.js';
 
 const validDate = v => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(v) && new Date(`${v}T00:00:00Z`).toISOString().slice(0, 10) === v;
 const validHash = v => typeof v === "string" && /^[a-f0-9]{64}$/u.test(v);
@@ -63,13 +64,13 @@ export async function stageSchedules(store, id, schedules) {
 export async function finishDataset(store, id) {
   const dataset = await store.first("SELECT * FROM datasets WHERE id=?", id);
   if (!dataset) throw new Error("Unknown dataset");
-  if (dataset.status === "ready") return;
+  if (dataset.status === "ready") return false;
   const rows = await store.all("SELECT group_id,hash FROM snapshots WHERE dataset_id=?", id);
   const manifest = JSON.parse(dataset.manifest);
   if (rows.length !== dataset.expected_count || rows.some(r => manifest[r.group_id] !== r.hash)) throw new Error("Incomplete dataset; delivery prohibited");
   // Activation and creation of fanout cursors are one transaction. Generations
   // are assigned by the existing source job; older jobs cannot replace newer.
-  await store.batch([
+  const results = await store.batch([
     ["UPDATE datasets SET status='ready' WHERE id=?", id],
     ["UPDATE datasets SET status='superseded' WHERE date=? AND generation<? AND status='staging'", dataset.date, dataset.generation],
     ["INSERT OR IGNORE INTO fanout(dataset_id,group_id) SELECT s.dataset_id,s.group_id FROM snapshots s WHERE s.dataset_id=? "
@@ -82,6 +83,7 @@ export async function finishDataset(store, id) {
     ...(dataset.source_id ? [["INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
       `source:${dataset.source_id}`, JSON.stringify({ fingerprint: dataset.fingerprint, date: dataset.date })]] : []),
   ]);
+  return Number(results[3]?.meta?.changes) > 0;
 }
 
 export async function fanoutBatch(store, now = Date.now()) {
@@ -93,9 +95,32 @@ export async function fanoutBatch(store, now = Date.now()) {
   const event = await store.first("SELECT f.*,d.date FROM fanout f JOIN datasets d ON d.id=f.dataset_id WHERE f.status='pending' AND d.status='ready' ORDER BY d.generation DESC LIMIT 1");
   if (!event) return;
   const active = await store.first("SELECT dataset_id FROM active_versions WHERE date=?", event.date);
-  if (active?.dataset_id !== event.dataset_id) { await store.run("UPDATE fanout SET status='superseded' WHERE dataset_id=? AND group_id=?", event.dataset_id, event.group_id); return; }
-  const users = await store.all("SELECT * FROM users WHERE group_id=? AND paused=0 AND blocked=0 AND user_id>? ORDER BY user_id LIMIT 12", event.group_id, event.cursor);
-  await store.batch([...users.map(u => store.jobStatement(u, "card", event.date, { due: now, priority: 1 })),
-    ["UPDATE fanout SET cursor=?,status=? WHERE dataset_id=? AND group_id=? AND cursor=?", users.at(-1)?.user_id ?? event.cursor,
-      users.length < 12 ? "done" : "pending", event.dataset_id, event.group_id, event.cursor]]);
+  if (active?.dataset_id !== event.dataset_id) { await store.run("UPDATE fanout SET status='superseded' WHERE dataset_id=? AND status='pending'", event.dataset_id); return; }
+  // A batch spans subscribed groups in one bounded transaction,
+  // rather than making late groups wait behind one HTTP invocation per group.
+  // Reserve a revision range once; unused revisions are harmless gaps. All
+  // selection and cursor advancement happens under the same D1 transaction,
+  // so concurrent pumps cannot requeue recipients from a completed batch.
+  // At most 24 new jobs (6 D1 writes each), 24 cursor/index updates
+  // (2 each), and one sequence write fit the existing 200-write reservation.
+  const limit = 24;
+  await store.batch([
+    ["UPDATE job_revision_sequence SET value=value+? WHERE id=1", limit],
+    ["INSERT INTO jobs(id,user_id,epoch,kind,date,priority,due,payload,revision) "
+      + "SELECT CAST(u.user_id AS TEXT)||':card:'||?,u.user_id,u.epoch,'card',?,1,?,'{}',"
+      + "(SELECT value FROM job_revision_sequence WHERE id=1)-?+ROW_NUMBER() OVER (ORDER BY u.group_id,u.user_id) "
+      + "FROM users u JOIN fanout f ON f.group_id=u.group_id JOIN active_versions a ON a.dataset_id=f.dataset_id "
+      + "WHERE f.dataset_id=? AND f.status='pending' AND u.paused=0 AND u.blocked=0 AND u.user_id>f.cursor "
+      + "ORDER BY u.group_id,u.user_id LIMIT ? " + JOB_CONFLICT_UPDATE,
+      event.date, event.date, now, limit, event.dataset_id, limit],
+    ["WITH progress AS MATERIALIZED (SELECT u.group_id,MAX(u.user_id) next_cursor FROM users u "
+      + "JOIN jobs j ON j.id=CAST(u.user_id AS TEXT)||':card:'||? "
+      + "WHERE j.revision>(SELECT value FROM job_revision_sequence WHERE id=1)-? "
+      + "AND j.revision<=(SELECT value FROM job_revision_sequence WHERE id=1) GROUP BY u.group_id) "
+      + "UPDATE fanout SET cursor=COALESCE((SELECT next_cursor FROM progress WHERE group_id=fanout.group_id),cursor),"
+      + "status=CASE WHEN EXISTS(SELECT 1 FROM users u WHERE u.group_id=fanout.group_id AND u.paused=0 AND u.blocked=0 "
+      + "AND u.user_id>COALESCE((SELECT next_cursor FROM progress WHERE group_id=fanout.group_id),fanout.cursor)) "
+      + "THEN 'pending' ELSE 'done' END WHERE dataset_id=? AND status='pending' AND group_id IN (SELECT group_id FROM progress)",
+      event.date, limit, event.dataset_id],
+  ]);
 }
