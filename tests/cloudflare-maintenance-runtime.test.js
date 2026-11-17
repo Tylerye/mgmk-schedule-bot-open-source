@@ -24,6 +24,15 @@ try{
   const health=await(await mf.dispatchFetch('http://localhost/internal/health',{headers:{authorization:'Bearer health-test'}})).json();
   assert.equal(health.ok,true);
   assert.equal(paths.filter(p=>p.startsWith('/internal/maintenance/')).length,4);
+  const admissions = () => db.prepare("SELECT COUNT(*) n FROM runtime_locks WHERE name IN ('maintenance-admission:queues','maintenance-admission:attention')").first('n');
+  assert.equal(await admissions(), 0, 'quiet queues and attention must not write admission markers');
+  await db.prepare("INSERT INTO telegram_updates VALUES (1, 'local'), (2, 'local')").run();
+  await db.prepare("INSERT INTO telegram_inbox VALUES (1, ?, 'local'), (2, ?, 'local')")
+    .bind(JSON.stringify({ update_id: 1 }), JSON.stringify({ update_id: 2, _attention: true })).run();
+  const busy = await mf.dispatchFetch('http://localhost/test-tick');
+  assert.equal(busy.status, 200, await busy.text());
+  assert.equal(await admissions(), 2, 'nonempty lanes must still claim the signed minute');
+  assert.equal(await db.prepare('SELECT COUNT(*) n FROM telegram_inbox').first('n'), 0);
   console.log(JSON.stringify({runtime:'workerd',lanes:paths.filter(p=>p.startsWith('/internal/maintenance/')),health}));
 }finally{await mf.dispose()}
 });

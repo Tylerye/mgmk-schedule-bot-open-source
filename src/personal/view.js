@@ -17,8 +17,8 @@ export const words = {
     missing: "Расписание пока не опубликовано или ещё не прочитано. Это не означает, что занятий нет.",
     full: "Прошедшие уроки", compact: "Только актуальное", ended: "Учебный день завершён", lesson: "урок", room: "Кабинет",
     break: "Перемена", large_break: "Большая перемена", lunch: "ОБЕД", curator_hour: "Кураторский час", information_hour: "Информационный час",
-    supportText: "💛 Бот помогает не теряться в расписании и заменах\n\nЕсли он тебе пригодился — загляни в канал автора или поддержи развитие\nЭто по желанию, расписание всегда доступно бесплатно",
-    channel: "ТГК автора", donate: "Поддержать развитие", later: "Позже", details: "Реквизиты скоро появятся", closed: "👌 Хорошо, возвращаемся к расписанию",
+    supportText: "💛 Если бот тебе помогает, можешь добровольно поддержать автора. Расписание доступно бесплатно.",
+    channel: "ТГК автора", donate: "Реквизиты", later: "Позже", details: "Реквизиты сейчас недоступны.", closed: "👌 Хорошо, возвращаемся к расписанию",
     helpText: "👋 Привет, это твоё расписание МГМК\n\n👥 Выбери свою группу — дальше бот сам пришлёт новые расписания и предупредит о заменах\n\n📅 Сегодня и Завтра открывают нужный день\n⏭ Ближайший день поможет заглянуть вперёд, даже если впереди выходные\n🕘 Прошедшие уроки можно вернуть кнопкой под карточкой\n\n📌 До 16:30 в закрепе остаётся сегодняшний день, а потом — ближайший опубликованный будущий\nЗанятия после 16:30 продолжают отображаться до своего окончания\n\n⚙️ В настройках можно сменить группу и язык, отключить звук или поставить автообновления на паузу\nНа паузе расписание по кнопкам всё равно доступно\n\n📌 Автоматический закреп уже включён\nЕсли он тебе не нужен, отключи его в настройках",
     settingsText: "⚙️ Настроим под тебя\n\n👥 Группу и язык можно поменять в любой момент\n🔊 Звук — для новых карточек\n🔔 Замены — отдельные сообщения об изменении предметов\n📌 Автоматический закреп включён\nЕсли он не нужен, отключи его кнопкой ниже\n⏸ Пауза останавливает автоматические обновления, но кнопки расписания продолжают работать",
     changed: "Изменения в расписании", added: "добавлен", removed: "отменён", on: "вкл", off: "выкл", saving: "Автообновления временно отложены для сохранения бесплатного лимита. Расписание можно открыть вручную.",
@@ -33,8 +33,8 @@ export const words = {
     missing: "The timetable has not been published or read yet. This does not mean there are no lessons.",
     full: "Past lessons", compact: "Current lessons only", ended: "The school day is over", lesson: "lesson", room: "Room",
     break: "Break", large_break: "Long break", lunch: "LUNCH", curator_hour: "Tutor period", information_hour: "Information period",
-    supportText: "Timetables are free. You can support the bot's development or visit the author's channel.",
-    channel: "Author's channel", donate: "Support development", later: "Later", details: "Donation details coming soon", closed: "Offer closed. Your timetable is available from the menu.",
+    supportText: "💛 If the bot helps you, you can support the author with a voluntary contribution. Timetables are free.",
+    channel: "Author's channel", donate: "Payment details", later: "Later", details: "Payment details are currently unavailable.", closed: "Offer closed. Your timetable is available from the menu.",
     helpText: "Choose one group. New timetables and lesson changes arrive automatically. Future timetables may arrive early; pins switch from 16:30 Minsk time. Pause stops automatic sends, edits and pins; manual viewing still works. Subjects, names and group labels stay as written in the PDF.",
     changed: "Timetable changes", added: "added", removed: "cancelled", on: "on", off: "off", saving: "Automatic updates are temporarily delayed to stay within the free quota. You can view your timetable manually.",
     part: "part", emptyPart: "The updated timetable fits in the preceding parts.", pinned: "Pinned timetable", pilot: "The pilot is currently available to a limited audience." },
@@ -59,6 +59,24 @@ export const informationKeyboard = user => ({ inline_keyboard: [
 export const supportKeyboard = user => ({ inline_keyboard: [
   [{ text: t(user).channel, url: "https://example.com" }], [button(t(user).donate, "donate"), button(t(user).later, "later")],
 ] });
+export function supportDetailsText(user, binding) {
+  const w = t(user);
+  let details;
+  try { details = JSON.parse(binding); } catch { return w.details; }
+  const { mtbankContract, mtbankCard, belarusbankIban, belarusbankCard } = details ?? {};
+  if (![mtbankContract, mtbankCard, belarusbankIban, belarusbankCard].every(value => typeof value === "string")
+    || !/^\d{8}$/u.test(mtbankContract) || !/^\d{16}$/u.test(mtbankCard) || !/^BY\d{2}[A-Z]{4}[A-Z0-9]{20}$/u.test(belarusbankIban)
+    || !/^\d{16}$/u.test(belarusbankCard)) return w.details;
+  const card = value => `<code>${value.match(/\d{4}/gu).join(" ")}</code>`;
+  const erip = "ЕРИП → Банковские, финансовые услуги → Банки, НКФО";
+  const english = user.language === "en";
+  return [
+    w.supportText,
+    `<b>МТБанк</b>\n${erip} → МТБанк → Пополнение карты\n${english ? "Contract number" : "Номер договора"} <code>${mtbankContract}</code>\n${english ? "Card transfer" : "Перевод на карту"} ${card(mtbankCard)}`,
+    `<b>Беларусбанк</b>\n${erip} → Беларусбанк → Пополнение счета\nIBAN <code>${belarusbankIban}</code>\n${english ? "Card transfer" : "Перевод на карту"} ${card(belarusbankCard)}`,
+    english ? "Thank you for your support!" : "Спасибо за поддержку!",
+  ].join("\n\n");
+}
 export function settingsKeyboard(user) {
   const w = t(user);
   return { inline_keyboard: [[button(w.group, "groups:0"), button(w.language, "language")],

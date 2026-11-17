@@ -423,14 +423,17 @@ async function handleMaintenance(request, env, pathname, context) {
   const claim = async () => (await env.DB.prepare("INSERT INTO runtime_locks(name,owner,locked_until) VALUES(?,'maintenance',?) ON CONFLICT(name) DO UPDATE SET locked_until=excluded.locked_until WHERE runtime_locks.locked_until<excluded.locked_until").bind(`maintenance-admission:${lane}`, interval).run()).meta?.changes === 1;
   // Idle probes only read current state and coalesce health. Claim the signed
   // minute only when there is actual work, before its execution lease/API calls.
-  const deferredAdmission = lane === "live" || (lane.startsWith("teacher-") && lane !== "teacher-source");
+  const deferredAdmission = ["live", "queues", "attention"].includes(lane)
+    || (lane.startsWith("teacher-") && lane !== "teacher-source");
   if (!combinedSourceLease && !deferredAdmission && !await claim()) return json({ ok: true, duplicate: true });
   const task = lane === "teacher-source" ? pollTeacherSource(env, configFromEnv(env), createLogger(env.LOG_LEVEL || "info"), interval)
     : lane.startsWith("teacher-") ? teacherMaintenance(env, configFromEnv(env), createLogger(env.LOG_LEVEL || "info"), lane.slice(8), new Date(), null, claim)
     : lane === "attention"
-    ? attentionMaintenance(env, configFromEnv(env), createLogger(env.LOG_LEVEL || "info")).then(() =>
-      patchHealth(env.DB, { lastAttentionSuccessAt: new Date().toISOString(), attentionError: null }, { heartbeatKey: "lastAttentionSuccessAt" }))
-    : scheduled(env, lane, combinedSourceLease ? interval : null, lane === "live" ? claim : null);
+    ? attentionMaintenance(env, configFromEnv(env), createLogger(env.LOG_LEVEL || "info"), claim).then(async result => {
+      if (result?.duplicate) return result;
+      await patchHealth(env.DB, { lastAttentionSuccessAt: new Date().toISOString(), attentionError: null }, { heartbeatKey: "lastAttentionSuccessAt" });
+    })
+    : scheduled(env, lane, combinedSourceLease ? interval : null, deferredAdmission ? claim : null);
   // Keep the claimed work alive if the caller disconnects. Never retry an
   // ambiguous dispatch inside the same tick; durable queues resume next minute.
   context.waitUntil(task.catch(() => {}));
@@ -480,7 +483,7 @@ async function scheduled(env, lane = "all", interval = null, admit = null) {
       return;
     }
   }
-  if (admit && !await admit()) return { duplicate: true };
+  if (lane === "live" && admit && !await admit()) return { duplicate: true };
   const logger = createLogger(env.LOG_LEVEL || "info");
   const errors = [];
   let sourceHealth = {};
@@ -516,8 +519,14 @@ async function scheduled(env, lane = "all", interval = null, admit = null) {
   if (lane === "all") await phase("telegram_inbox", () => drainInbox(env, config, logger));
   }
   if (lane === "queues") {
-    await phase("parser_results", () => drainParserResults(env.DB));
-    await phase("telegram_inbox", () => drainInbox(env, config, logger));
+    const work = await phase("queue_probe", () => env.DB.prepare(
+      "SELECT EXISTS(SELECT 1 FROM parser_results) AS parser, EXISTS(SELECT 1 FROM telegram_inbox) AS inbox",
+    ).first());
+    if (work?.parser || work?.inbox) {
+      if (admit && !await admit()) return { duplicate: true };
+      if (work.parser) await phase("parser_results", () => drainParserResults(env.DB));
+      if (work.inbox) await phase("telegram_inbox", () => drainInbox(env, config, logger));
+    }
   }
 
   // The source lease is independent of Telegram's state lease. Discovery and

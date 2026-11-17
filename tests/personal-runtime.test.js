@@ -166,3 +166,23 @@ test("finished manual work cannot permanently promote later background jobs or r
   await f.store.enqueue(user, "card", "2026-11-12", { priority: 3, due: 5000 });
   const job = await f.store.first("SELECT * FROM jobs"); assert.equal(job.priority, 3); assert.equal(job.due, 5000);
 });
+test("support details render from the private binding without entering the job payload", async t => {
+  const f = await personalFixture();
+  t.after(() => f.close());
+  const details = { mtbankContract: "00000000", mtbankCard: "0000000000000000",
+    belarusbankIban: "BY00TEST" + "0".repeat(20), belarusbankCard: "1111111111111111" };
+  await enqueuePersonalUpdate(f.store, { update_id: 77, userId: 100, action: "donate", messageId: 55, acknowledged: true });
+  await processPersonalInbox(f.store, await f.store.first("SELECT * FROM inbox WHERE update_id=77"));
+  const job = await f.store.first("SELECT payload FROM jobs WHERE kind='reply'");
+  assert.equal(JSON.parse(job.payload).supportDetails, true);
+  assert.ok(!job.payload.includes(details.belarusbankIban));
+  const calls = [];
+  await deliverUser(f.store, { async call(method, body) { calls.push({ method, body }); return true; } }, 100,
+    { supportDetails: JSON.stringify(details), now: new Date(Date.now() + 1000) });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "editMessageText");
+  assert.equal(calls[0].body.message_id, 55);
+  assert.match(calls[0].body.text, /добровольно/u);
+  assert.ok(calls[0].body.text.includes(details.belarusbankIban));
+  assert.equal(calls[0].body.reply_markup.inline_keyboard[0][0].callback_data, "personal:support");
+});

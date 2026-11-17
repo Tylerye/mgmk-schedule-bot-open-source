@@ -74,7 +74,9 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     else if (action === "help") reply(t(user).helpText);
     else if (action === "feedback" || action === "privacy") reply(informationText(user, action), informationKeyboard(user));
     else if (action === "support") reply(t(user).supportText, supportKeyboard(user));
-    else if (action === "donate") reply(t(user).details, supportKeyboard(user), update.messageId);
+    else if (action === "donate") replies.push({
+      supportDetails: true, keyboard: { inline_keyboard: [[button(t(user).back, "support")]] }, editId: update.messageId ?? null,
+    });
     else if (action === "later") reply(t(user).closed, menu(user), update.messageId);
     else if (action === "diagnostics") {
       // Owner-only route is also checked by the Worker. Aggregates, no users.
@@ -127,7 +129,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     // User/card/source state is freshly read under the same lock as delivery.
     // Supersede older navigation even when this latest tap needs no new job.
     const only = replies.length === 1 ? replies[0] : null;
-    const unchanged = only && update.acknowledged && !changed.length && jobs.length === 1
+    const unchanged = only && !only.supportDetails && update.acknowledged && !changed.length && jobs.length === 1
       && await standaloneScreen(store, user.user_id, only.editId, ownerId)
       && await store.setting(`screen-v1:${user.user_id}:${only.editId}`) === screenHash(only.text, only.keyboard);
     if (!unchanged) for (const [index, payload] of replies.entries()) jobs.push(job(user, "reply", payload.editId ? "screen" : `${row.update_id}:${index}`, { priority: -2, payload: { ...payload, manual: true } }));

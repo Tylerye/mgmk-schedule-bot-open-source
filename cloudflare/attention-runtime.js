@@ -28,7 +28,7 @@ export async function drainAttentionInbox(env, config, logger, updateId = null) 
   }
 }
 
-export async function attentionMaintenance(env, config, logger) {
+export async function attentionMaintenance(env, config, logger, admit) {
   const chatId = await configuredChat(env.DB);
   if (!chatId) return;
   const now = Date.now();
@@ -61,6 +61,7 @@ export async function attentionMaintenance(env, config, logger) {
       String(chatId), now, now - 180_000, now - 180_000, String(chatId), now, now - 180_000, now, now,
       String(chatId), now).first();
   if (!due.setup && !due.inbox && !due.reminders && !due.maintenance) return;
+  if (admit && !await admit()) return { duplicate: true };
   const store = new AttentionStore(env.DB);
   const client = new TelegramClient({ token: env.BOT_TOKEN, logger });
   // Time-sensitive reminders use atomic row claims, never the schedule/attention lock.

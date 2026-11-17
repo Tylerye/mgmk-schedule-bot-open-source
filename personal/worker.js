@@ -29,7 +29,7 @@ async function kick(env, { inbox = true, delivery = true, due = false, fanout = 
   // but allow more delivery-only waves after fanout/due work has finished.
   while (calls <= 44 && Date.now() < deadline) {
     let nextDue = null;
-    if (fanout) { fanout = Boolean((await run('/tick/fanout')).pending); delivery = true; }
+    if (fanout) { fanout = Boolean((await run('/fanout')).pending); delivery = true; }
     if (due) { due = Boolean((await run('/tick/due')).pending); delivery = true; }
     if (inbox) inbox = Boolean((await run("/tick/inbox")).pending);
     if (delivery) {
@@ -60,7 +60,8 @@ export default {
   async fetch(request, env, context) {
     if (!env.PERSONAL_SHARED_SECRET || request.headers.get("authorization") !== `Bearer ${env.PERSONAL_SHARED_SECRET}`) return json({ ok: false }, 403);
     if (request.method !== "POST") return json({ ok: false }, 405);
-    const path = new URL(request.url).pathname;
+    const url = new URL(request.url);
+    const path = url.pathname;
     const paused = env.PERSONAL_DELIVERY_ENABLED === "false";
     if (paused && (path.startsWith("/tick") || path.startsWith("/delivery/") || path.startsWith('/due/') || /^\/inbox\/\d+$/u.test(path))) {
       return json({ ok: true, paused: true, pending: false });
@@ -175,16 +176,16 @@ export default {
         if (budget.mode === 'normal') await enqueueDue(store, now.getTime(), Number(path.split('/')[2]));
       }
       else if (path === "/tick/delivery") {
-        const rows = await store.all("SELECT j.user_id FROM (SELECT user_id,priority,due FROM jobs WHERE status='pending' AND due<=?" + manualJobsOnly(budget.mode) + " ORDER BY priority,due LIMIT 128) j JOIN users u ON u.user_id=j.user_id WHERE u.blocked=0 AND u.last_api_at<=? GROUP BY j.user_id ORDER BY MIN(j.priority),MIN(j.due),MIN(u.last_api_at) LIMIT 4", now.getTime(), now.getTime() - 1050);
-        const users = [...new Set(rows.map(r => r.user_id))].slice(0, 4);
+        const rows = await store.all("SELECT j.user_id FROM (SELECT user_id,priority,due FROM jobs WHERE status='pending' AND due<=?" + manualJobsOnly(budget.mode) + " ORDER BY priority,due LIMIT 128) j JOIN users u ON u.user_id=j.user_id WHERE u.blocked=0 AND u.last_api_at<=? GROUP BY j.user_id ORDER BY MIN(j.priority),MIN(j.due),MIN(u.last_api_at) LIMIT 8", now.getTime(), now.getTime() - 1050);
         let lastStart = 0;
-        for (const id of users) {
+        for (const { user_id: id } of rows) {
           // Each user still has an independent HTTP/CPU invocation. Await the
           // previous lane and space starts so D1 latency cannot shuffle four
           // concurrent claims into the same 84ms Telegram slot and waste writes.
+          if (lastStart && Date.now() - now.getTime() >= 2000) break;
           if (lastStart) await wait(Math.max(0, 100 - (Date.now() - lastStart)));
           lastStart = Date.now();
-          await internal(env, `/delivery/${id}`);
+          await internal(env, `/delivery/${id}?background=1`);
         }
         // Skip still-cooling users without allocating their locks, intents and
         // HTTP lanes. Other subscribers can advance immediately; only a wave
@@ -200,7 +201,8 @@ export default {
         const id = Number(path.split("/")[2]);
         if (pilotAllowed(env, id)) {
           const acquired = await deliverUser(store, new TelegramClient({ token: env.BOT_TOKEN, logger, timeoutMs: 8000 }), id,
-            { now, mode: budget.mode, ownerId: env.ADMIN_USER_ID });
+            { now, mode: budget.mode, ownerId: env.ADMIN_USER_ID, supportDetails: env.PERSONAL_SUPPORT_DETAILS });
+          if (url.searchParams.get("background") === "1") return json({ ok: true });
           const next = await store.first("SELECT MIN(due) due FROM jobs WHERE user_id=? AND status='pending'" + manualJobsOnly(budget.mode), id);
           return json({ ok: true, busy: acquired === false, pending: next?.due != null, nextDue: next?.due ?? null });
         }

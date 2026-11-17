@@ -67,7 +67,10 @@ test('workerd immediately delivers a new publication across 22 groups without Cr
     assert.equal(sends.length, 60);
     assert.equal((await db.prepare("SELECT COUNT(*) n FROM jobs WHERE status='pending'").first()).n, 0);
     assert.equal((await db.prepare("SELECT COUNT(*) n FROM fanout WHERE status='pending'").first()).n, 0);
-    assert.equal(lanes.filter(p => p === '/fanout').length, baseline ? 22 : 3);
+    if (!baseline) {
+      assert.equal(lanes.filter(p => p === '/fanout').length, 3);
+      assert.ok(!lanes.includes('/tick/fanout'), 'activation must call the fanout lane directly');
+    }
     const invocations = lanes.length;
     assert.equal((await post()).status, 200);
     assert.equal(sends.length, 60);

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { renderPersonal, t, subjectChanges, choosePersonalPin, nextRenderAt, nextPersonalPinAt, noticeParts } from "./view.js";
+import { renderPersonal, t, subjectChanges, choosePersonalPin, nextRenderAt, nextPersonalPinAt, noticeParts, supportDetailsText } from "./view.js";
 import { manualJobsOnly } from './quota.js';
 import { backgroundPolicy } from '../background-policy.js';
 import { standaloneScreen, screenHash as hashScreen } from './screen-state.js';
@@ -101,7 +101,7 @@ async function pinStatement(store, user, cards, now) {
   return pending ? [] : [store.jobStatement(user, "pin", "", { priority: 1, due: now.getTime() })];
 }
 
-export async function deliverUser(store, client, id, { now = new Date(), mode = "normal", ownerId } = {}) {
+export async function deliverUser(store, client, id, { now = new Date(), mode = "normal", ownerId, supportDetails } = {}) {
   return store.lock(id, now.getTime(), async () => {
     const user = await store.user(id);
     if (!user || user.blocked) return;
@@ -134,6 +134,8 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       if (job.kind === "alert" && payload.pinMessageId) { await finishJob(store, job, "superseded"); return; }
       const partIndex = payload.partIndex ?? 0;
       let text = payload.texts?.[partIndex] ?? payload.text;
+      const details = job.kind === "reply" && payload.supportDetails === true;
+      if (details) text = supportDetailsText(user, supportDetails);
       if (job.kind === "diagnostics") {
         if (String(id) !== String(ownerId)) { await finishJob(store, job, "cancelled"); return; }
         text = await diagnosticText(store, now);
@@ -146,7 +148,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       const standalone = job.kind === "reply" && await standaloneScreen(store, id, payload.editId, ownerId);
       const screenHash = hashScreen(text, payload.keyboard);
       const unchanged = standalone && await store.setting(screenKey) === screenHash;
-      const result = unchanged ? { done: true } : await op(`${job.kind}:${job.date}:${job.revision}:${partIndex}:${digest(body)}`, method, body);
+      const result = unchanged ? { done: true } : await op(`${job.kind}:${job.date}:${job.revision}:${partIndex}:${details ? "support-details" : digest(body)}`, method, body);
       if (result.failed && payload.editId) {
         // The user may have cleared the chat: create one replacement screen
         await store.run("UPDATE jobs SET payload=?,status='pending' WHERE id=? AND revision=?", JSON.stringify({...payload,editId:null}),job.id,job.revision);
