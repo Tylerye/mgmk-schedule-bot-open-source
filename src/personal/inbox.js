@@ -1,5 +1,5 @@
 import { findGroups } from "./catalog.js";
-import { screenHash, standaloneScreen } from './screen-state.js';
+import { screenHash, isTimetableMessage } from './screen-state.js';
 import { t, menu, button, supportKeyboard, settingsKeyboard, groupsKeyboard, initialDates, selectedDate, renderPersonal, informationText, informationKeyboard } from "./view.js";
 
 export { collectPersonalUpdate } from "./update.js";
@@ -20,10 +20,15 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
   return store.lock(row.user_id, now.getTime(), async () => {
     const fresh = await store.first("SELECT status FROM inbox WHERE update_id=?", row.update_id);
     if (fresh?.status !== "pending") return;
-    await store.run("INSERT OR IGNORE INTO users(user_id) VALUES(?)", row.user_id);
-    const user = await store.user(row.user_id);
+    let user = await store.user(row.user_id);
+    if (!user) {
+      await store.run("INSERT OR IGNORE INTO users(user_id) VALUES(?)", row.user_id);
+      user = await store.user(row.user_id);
+    }
     const original = { ...user };
-    const groups = (await store.groups()).sort((a, b) => Number.parseInt(a.id, 10) - Number.parseInt(b.id, 10) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    let catalog;
+    const groups = async () => catalog ??= (await store.groups()).sort((a, b) =>
+      Number.parseInt(a.id, 10) - Number.parseInt(b.id, 10) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     const jobs = [], replies = [];
     const reply = (text, keyboard = menu(user), editId = update.messageId ?? null) => replies.push({ text, keyboard, editId });
     let action = update.action;
@@ -36,15 +41,16 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
       user.language = action.split(":")[1];
       if (user.language !== original.language) user.epoch++;
       user.screen = user.group_id ? "menu" : "groups";
-      reply(user.group_id ? t(user).menu : t(user).choose, user.group_id ? menu(user) : groupsKeyboard(groups, user));
+      reply(user.group_id ? t(user).menu : t(user).choose, user.group_id ? menu(user) : groupsKeyboard(await groups(), user));
       if (user.group_id) for (const s of initialDates(await store.schedules(user.group_id), now)) jobs.push(job(user, "card", s.date, { priority: 0, payload: { manual: true } }));
     } else if (action.startsWith("groups:") || action.startsWith("search:")) {
       user.screen = "groups";
-      const matches = action.startsWith("search:") ? findGroups(groups, action.slice(7)) : groups;
+      const catalog = await groups();
+      const matches = action.startsWith("search:") ? findGroups(catalog, action.slice(7)) : catalog;
       reply(t(user).choose, groupsKeyboard(matches, user, action.startsWith("groups:") ? Number(action.split(":")[1]) : 0));
     } else if (action.startsWith("group:")) {
-      const group = groups.find(g => g.id === action.slice(6));
-      if (!group) reply(t(user).choose, groupsKeyboard(groups, user));
+      const group = (await groups()).find(g => g.id === action.slice(6));
+      if (!group) reply(t(user).choose, groupsKeyboard(await groups(), user));
       else {
         if (user.group_id !== group.id) { user.group_id = group.id; user.epoch++; user.pin_date = null; }
         user.screen = "menu";
@@ -89,7 +95,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
         jobs.push(job(user, "card", date, { priority: 0, payload: { manual: true, history: true } }));
       }
     } else if (["today", "tomorrow", "next", "schedule"].includes(action) || action.startsWith("preview:")) {
-      if (!user.group_id) reply(t(user).choose, groupsKeyboard(groups, user));
+      if (!user.group_id) reply(t(user).choose, groupsKeyboard(await groups(), user));
       else {
         const schedules = await store.schedules(user.group_id);
         const date = action.startsWith("preview:") ? action.split(":")[1] : selectedDate(schedules, action, now);
@@ -121,7 +127,22 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
       }
     }
     if (update.action === "start" && user.group_id) {
-      for (const s of initialDates(await store.schedules(user.group_id), now)) jobs.push(job(user, "card", s.date, { priority: 0, payload: { manual: true } }));
+      for (const s of initialDates(await store.schedules(user.group_id), now)) {
+        // An explicit /start can repair a deleted pin or a card overwritten by
+        // an older bot version, even when the saved render hash still matches.
+        const verifyMessageId = user.pin_date === s.date ? user.pin_message_id : null;
+        if (!verifyMessageId && !original.blocked && original.next_due > now.getTime()) {
+          const card = await store.card(user, s.date);
+          if (card?.schedule_hash === s.hash && card.schedule_payload === JSON.stringify(s)) {
+            const rendered = renderPersonal(s, user, { now, mode: card.mode });
+            const count = Math.max(rendered.parts.length, card.parts.length);
+            const current = Array.from({ length: count }, (_, index) => card.parts[index]?.id
+              && card.parts[index].hash === screenHash(rendered.parts[index] ?? t(user).emptyPart, index ? undefined : rendered.keyboard));
+            if (current.every(Boolean)) continue;
+          }
+        }
+        jobs.push(job(user, "card", s.date, { priority: 0, payload: { manual: true, verifyMessageId } }));
+      }
     }
     const keys = ["language", "group_id", "epoch", "screen", "sound", "changes", "pin", "paused", "blocked", "support_seen", "pin_date", "next_due"];
     const changed = keys.filter(key => user[key] !== original[key]);
@@ -130,7 +151,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     // Supersede older navigation even when this latest tap needs no new job.
     const only = replies.length === 1 ? replies[0] : null;
     const unchanged = only && !only.supportDetails && update.acknowledged && !changed.length && jobs.length === 1
-      && await standaloneScreen(store, user.user_id, only.editId, ownerId)
+      && only.editId && String(user.user_id) !== String(ownerId) && !await isTimetableMessage(store, user, only.editId)
       && await store.setting(`screen-v1:${user.user_id}:${only.editId}`) === screenHash(only.text, only.keyboard);
     if (!unchanged) for (const [index, payload] of replies.entries()) jobs.push(job(user, "reply", payload.editId ? "screen" : `${row.update_id}:${index}`, { priority: -2, payload: { ...payload, manual: true } }));
     // Insert after superseding older navigation jobs. Keep the visible reply

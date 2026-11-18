@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { renderPersonal, t, subjectChanges, choosePersonalPin, nextRenderAt, nextPersonalPinAt, noticeParts, supportDetailsText } from "./view.js";
 import { manualJobsOnly } from './quota.js';
 import { backgroundPolicy } from '../background-policy.js';
-import { standaloneScreen, screenHash as hashScreen } from './screen-state.js';
+import { isTimetableMessage, screenHash as hashScreen } from './screen-state.js';
 
 const digest = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
@@ -68,7 +68,7 @@ export async function telegramOperation(store, client, user, key, method, body, 
       return { retryAt };
     }
     const permanent = error.apiRejected && error.errorCode >= 400 && error.errorCode < 500;
-    const replaceable = method === 'editMessageText' && /message to edit not found|message can't be edited|message can not be edited/iu.test(error.description ?? '');
+    const replaceable = permanent && method === 'editMessageText' && /message to edit not found/iu.test(error.description ?? '');
     const missingPin = permanent && method === 'pinChatMessage' && /message to pin not found/iu.test(error.description ?? '');
     const failure = { replaceable, ...(missingPin ? { missingPin: true } : {}) };
     if (journal) await store.run("UPDATE operations SET status=?,result=? WHERE id=?", permanent ? "failed" : "retry", JSON.stringify(failure), id);
@@ -150,16 +150,20 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
         if (String(id) !== String(ownerId)) { await finishJob(store, job, "cancelled"); return; }
         text = await diagnosticText(store, now);
       }
-      const method = payload.editId ? "editMessageText" : "sendMessage";
-      const body = { ...sendBody(text, payload.keyboard, job.kind !== "alert" || !user.sound), ...(payload.editId ? { message_id: payload.editId } : {}) };
+      // Old queued replies also pass here. Never let navigation edit a
+      // timetable or the current pin, even if the target changed since enqueue.
+      const protectedMessage = job.kind === "reply" && await isTimetableMessage(store, user, payload.editId);
+      const editId = protectedMessage ? null : payload.editId;
+      const method = editId ? "editMessageText" : "sendMessage";
+      const body = { ...sendBody(text, payload.keyboard, job.kind !== "alert" || !user.sound), ...(editId ? { message_id: editId } : {}) };
       // Only standalone screens are cached: automatic cards and the owner's
       // teacher preview can be edited by other delivery paths.
-      const screenKey = `screen-v1:${id}:${payload.editId}`;
-      const standalone = job.kind === "reply" && await standaloneScreen(store, id, payload.editId, ownerId);
+      const screenKey = `screen-v1:${id}:${editId}`;
+      const standalone = job.kind === "reply" && Boolean(editId) && String(id) !== String(ownerId);
       const screenHash = hashScreen(text, payload.keyboard);
       const unchanged = standalone && await store.setting(screenKey) === screenHash;
       const result = unchanged ? { done: true } : await op(`${job.kind}:${job.date}:${job.revision}:${partIndex}:${details ? "support-details" : digest(body)}`, method, body);
-      if (result.failed && payload.editId) {
+      if (result.failed && editId) {
         // The user may have cleared the chat: create one replacement screen
         await store.run("UPDATE jobs SET payload=?,status='pending' WHERE id=? AND revision=?", JSON.stringify({...payload,editId:null}),job.id,job.revision);
         return;
@@ -215,7 +219,8 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
         const text = rendered.parts[index] ?? t(user).emptyPart;
         const keyboard = index === 0 ? rendered.keyboard : { inline_keyboard: [] };
         const hash = digest([text, keyboard]);
-        if (parts[index]?.hash === hash) continue;
+        const verify = index === 0 && Boolean(payload.verifyMessageId) && parts[index]?.id === payload.verifyMessageId;
+        if (parts[index]?.hash === hash && !verify) continue;
         if (changed) {
           // One API operation per lane; persist progress before continuing.
           await store.run("INSERT INTO cards(user_id,group_id,date,parts) VALUES(?,?,?,?) ON CONFLICT(user_id,group_id,date) DO UPDATE SET parts=excluded.parts WHERE cards.parts IS NOT excluded.parts",
@@ -242,6 +247,9 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
             return;
           }
           changed = true;
+          if (verify && count > 1) {
+            await store.run("UPDATE jobs SET payload=? WHERE id=? AND revision=?", JSON.stringify({ ...payload, verifyMessageId: null }), job.id, job.revision);
+          }
         } else return;
       }
       const changes = subjectChanges(card.schedule, schedule, user.language);

@@ -37,3 +37,28 @@ test('automatic pin defaults on and can be disabled independently of pin announc
  assert.equal((await f.store.user(100)).pin_message_id,null);
  assert.ok(await f.store.first("SELECT 1 FROM jobs WHERE kind='unpin'"));
 });
+
+test('opening the menu from a timetable sends a separate message and leaves the pin untouched', async t => {
+ const f = await personalFixture(); t.after(() => f.close());
+ const schedule = await sampleSchedule(); await installSchedules(f.store, [schedule]);
+ await f.store.run("INSERT INTO users(user_id,group_id,pin_message_id,pin_date) VALUES(100,?,88,?)", schedule.canonicalGroup, schedule.date);
+ await f.store.run("INSERT INTO cards(user_id,group_id,date,parts) VALUES(100,?,?,?)",
+   schedule.canonicalGroup, schedule.date, JSON.stringify([{id:88},{id:89}]));
+ const now = new Date('2026-11-12T07:00:00+03:00');
+ const calls = [];
+ const client = { async call(method, body) {
+   calls.push({method,body});
+   return method === 'sendMessage' ? {message_id: 1000 + calls.length} : true;
+ } };
+ for (const [index, messageId] of [88,89,77].entries()) {
+   await enqueuePersonalUpdate(f.store, {update_id:index+1,userId:100,action:'menu',messageId,acknowledged:true});
+   await processPersonalInbox(f.store, await f.store.first('SELECT * FROM inbox WHERE update_id=?',index+1),
+     new Date(+now+index*2000), {ownerId:100});
+   await deliverUser(f.store,client,100,{now:new Date(+now+index*2000),ownerId:100});
+ }
+ assert.deepEqual(calls.map(({method,body})=>[method,body.message_id]), [
+   ['sendMessage',undefined],['sendMessage',undefined],['editMessageText',77],
+ ]);
+ assert.equal((await f.store.user(100)).pin_message_id, 88);
+ assert.deepEqual((await f.store.card({user_id:100,group_id:schedule.canonicalGroup},schedule.date)).parts.map(p=>p.id),[88,89]);
+});

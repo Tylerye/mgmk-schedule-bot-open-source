@@ -18,20 +18,23 @@ export class PersonalStore {
   async run(sql, ...args) { return this.measure(await this.statement(sql, args).run()); }
   async batch(statements) {
     if (!statements.length) return [];
-    const expanded = [];
+    const isJob = sql => sql.startsWith("INSERT INTO jobs(id,user_id,epoch,kind,date,priority,due,payload)");
+    const jobs = statements.filter(([sql]) => isJob(sql)).length;
+    let offset = jobs;
+    // Reserve a unique range once, in the same transaction as all job writes.
+    const batch = jobs ? [this.statement("UPDATE job_revision_sequence SET value=value+? WHERE id=1", [jobs])] : [];
     for (let [sql, ...args] of statements) {
-      if (sql.startsWith("INSERT INTO jobs(id,user_id,epoch,kind,date,priority,due,payload)")) {
-        // Allocate under the same D1 transaction as the job, including after retention.
-        expanded.push(this.statement("UPDATE job_revision_sequence SET value=value+1 WHERE id=1"));
+      if (isJob(sql)) {
         sql = sql.replace("priority,due,payload)", "priority,due,payload,revision)")
-          .replace("VALUES(?,?,?,?,?,?,?,?)", "VALUES(?,?,?,?,?,?,?,?,(SELECT value FROM job_revision_sequence WHERE id=1))")
+          .replace("VALUES(?,?,?,?,?,?,?,?)", "VALUES(?,?,?,?,?,?,?,?,(SELECT value-? FROM job_revision_sequence WHERE id=1))")
           .replace("revision=jobs.revision+1", "revision=excluded.revision");
+        args.push(--offset);
       }
-      expanded.push(this.statement(sql, args));
+      batch.push(this.statement(sql, args));
     }
-    const results = await this.db.batch(expanded);
-    results.forEach(r => this.measure(r));
-    return results;
+    const results = await this.db.batch(batch);
+    results.forEach(result => this.measure(result));
+    return jobs ? results.slice(1) : results;
   }
   async setting(key, fallback = null) {
     const row = await this.first("SELECT value FROM settings WHERE key=?", key);

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { personalFixture, sampleSchedule, installSchedules } from './helpers/personal-fixture.js';
+import { enqueuePersonalUpdate, processPersonalInbox } from '../src/personal/inbox.js';
 import { PersonalStore } from '../src/personal/store.js';
 import { deliverUser, enqueueDue } from '../src/personal/delivery.js';
 import { renderPersonal, nextRenderAt, nextPersonalPinAt } from '../src/personal/view.js';
@@ -217,4 +218,36 @@ test('uneditable card replacement still uses an uncertain-protected send intent'
   assert.deepEqual(methods,['editMessageText','sendMessage']);
   assert.equal((await f.store.first("SELECT status FROM jobs WHERE kind='card'")).status,'uncertain');
   assert.equal((await f.store.first("SELECT status FROM operations WHERE method='sendMessage'")).status,'uncertain');
+});
+
+test('/start verifies and restores a missing pin without requeueing a current second card', async t => {
+  const f = await fixture(t);
+  const now = local('08:59');
+  await enqueuePersonalUpdate(f.store, {update_id:1,userId:100,action:'start'});
+  await processPersonalInbox(f.store,await f.store.first('SELECT * FROM inbox WHERE update_id=1'),now);
+  const jobs = await f.store.all("SELECT date,payload FROM jobs WHERE kind='card'");
+  assert.deepEqual(jobs.map(job=>[job.date,JSON.parse(job.payload).verifyMessageId]),[[f.s.date,88]]);
+  let sequence = 1000;
+  f.client.call = async (method,body) => {
+    f.calls.push({method,body});
+    if (method==='editMessageText' && body.message_id===88)
+      throw Object.assign(Error('missing'),{apiRejected:true,errorCode:400,description:'Bad Request: message to edit not found'});
+    return method==='sendMessage' ? {message_id:++sequence} : true;
+  };
+  await drain(f,now);
+  assert.equal(f.calls.filter(c=>c.method==='sendMessage').length,2);
+  assert.equal((await f.store.user(100)).pin_message_id,1002);
+  assert.equal((await f.store.card(f.user,f.s.date)).parts[0].id,1002);
+  assert.equal((await f.store.card(f.user,f.tomorrow.date)).parts[0].id,98);
+});
+
+test('multiple jobs in one batch consume one revision-counter write and keep ordered distinct revisions', async t => {
+  const f = await fixture(t);
+  f.sqlite.exec('CREATE TABLE revision_writes(n INTEGER); CREATE TRIGGER test_revision_write AFTER UPDATE ON job_revision_sequence BEGIN INSERT INTO revision_writes VALUES(1); END;');
+  const jobs = ['ru','en',''].map(date=>f.store.jobStatement(f.user,'commands',date));
+  await f.store.batch(jobs);
+  assert.equal((await f.store.first('SELECT count(*) n FROM revision_writes')).n,1);
+  const rows=await f.store.all('SELECT date,revision FROM jobs ORDER BY revision');
+  assert.deepEqual(rows.map(r=>r.date),['ru','en','']);
+  assert.deepEqual(rows.map(r=>r.revision-rows[0].revision),[0,1,2]);
 });
