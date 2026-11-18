@@ -8,7 +8,7 @@ const digest = value => createHash("sha256").update(JSON.stringify(value)).diges
 
 // One Telegram operation per user invocation. Every send has a durable intent
 // first. A process dying between intent and receipt leaves it uncertain.
-export async function telegramOperation(store, client, user, key, method, body, now = Date.now(), { queuedEdit = false } = {}) {
+export async function telegramOperation(store, client, user, key, method, body, now = Date.now(), { queuedEdit = false, clock } = {}) {
   const id = `${user.user_id}:${key}`;
   // For queued cards and manual screens the job is already durable intent.
   // An interrupted edit repeats on the same message under the user lock;
@@ -22,13 +22,23 @@ export async function telegramOperation(store, client, user, key, method, body, 
   }
   if (old?.status === "failed") return { failed: true, ...(old.result ? JSON.parse(old.result) : {}) };
   const interval = ["editMessageText", "answerCallbackQuery"].includes(method) ? 120 : 1050;
-  if (user.last_api_at + interval > now) return { retryAt: user.last_api_at + interval };
-  const slot = await store.first("INSERT INTO rate_gate(key,next_at) VALUES('telegram',?) ON CONFLICT(key) DO UPDATE SET next_at=excluded.next_at "
-    + "WHERE rate_gate.next_at<=? RETURNING next_at", now + 84, now);
-  if (!slot) return { retryAt: Math.max(now + 84, (await store.first("SELECT next_at FROM rate_gate WHERE key='telegram'")).next_at) };
+  const claimSql = "INSERT INTO rate_gate(key,next_at) VALUES('telegram',?) ON CONFLICT(key) DO UPDATE SET next_at=excluded.next_at "
+    + "WHERE rate_gate.next_at<=? RETURNING next_at";
+  let claimedAt;
+  for (let attempt = 0; ; attempt++) {
+    claimedAt = clock?.() ?? now;
+    if (user.last_api_at + interval > claimedAt) return { retryAt: user.last_api_at + interval };
+    if (await store.first(claimSql, claimedAt + 84, claimedAt)) break;
+    const retryAt = Math.max(claimedAt + 84, (await store.first("SELECT next_at FROM rate_gate WHERE key='telegram'")).next_at);
+    const delay = retryAt - (clock?.() ?? now);
+    // A neighboring lane can win the same short slot while D1 is busy.
+    // Wait inside this invocation instead of rewriting the job and relaunching it.
+    if (!clock || attempt >= 2 || delay > 170) return { retryAt };
+    await new Promise(resolve => setTimeout(resolve, Math.max(1, delay)));
+  }
   await store.batch([
-    ...(journal ? [["INSERT INTO operations(id,user_id,method,status,started_at) VALUES(?,?,?,'started',?) ON CONFLICT(id) DO UPDATE SET status='started',started_at=excluded.started_at", id, user.user_id, method, now]] : []),
-    ["UPDATE users SET last_api_at=? WHERE user_id=?", now, user.user_id],
+    ...(journal ? [["INSERT INTO operations(id,user_id,method,status,started_at) VALUES(?,?,?,'started',?) ON CONFLICT(id) DO UPDATE SET status='started',started_at=excluded.started_at", id, user.user_id, method, claimedAt]] : []),
+    ["UPDATE users SET last_api_at=? WHERE user_id=?", claimedAt, user.user_id],
   ]);
   try {
     const result = await client.call(method, body);
@@ -51,7 +61,7 @@ export async function telegramOperation(store, client, user, key, method, body, 
       return { blocked: true };
     }
     if (error.errorCode === 429) {
-      const retryAt = now + Math.max(1, Number(error.parameters?.retry_after) || 30) * 1000;
+      const retryAt = (clock?.() ?? now) + Math.max(1, Number(error.parameters?.retry_after) || 30) * 1000;
       await store.batch([["UPDATE rate_gate SET next_at=MAX(next_at,?) WHERE key='telegram'", retryAt], ...(journal ? [["UPDATE operations SET status='retry' WHERE id=?", id]] : [])]);
       const count = await store.setting("429", 0);
       await store.setSetting("429", count + 1);
@@ -101,7 +111,7 @@ async function pinStatement(store, user, cards, now) {
   return pending ? [] : [store.jobStatement(user, "pin", "", { priority: 1, due: now.getTime() })];
 }
 
-export async function deliverUser(store, client, id, { now = new Date(), mode = "normal", ownerId, supportDetails } = {}) {
+export async function deliverUser(store, client, id, { now = new Date(), mode = "normal", ownerId, supportDetails, clock } = {}) {
   return store.lock(id, now.getTime(), async () => {
     const user = await store.user(id);
     if (!user || user.blocked) return;
@@ -110,7 +120,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
     const payload = JSON.parse(job.payload);
     if (job.epoch !== user.epoch || (user.paused && !payload.manual)) { await finishJob(store, job, "cancelled"); return; }
     if (mode === "stopped" || (mode !== "normal" && !payload.manual)) return;
-    const op = (key, method, body) => telegramOperation(store, client, user, key, method, body, now.getTime(), { queuedEdit: job.kind === 'card' || job.kind === 'reply' });
+    const op = (key, method, body) => telegramOperation(store, client, user, key, method, body, now.getTime(), { queuedEdit: job.kind === 'card' || job.kind === 'reply', clock });
     const sendBody = (text, keyboard, silent = true) => ({ chat_id: id, text, parse_mode: "HTML", disable_web_page_preview: true,
       disable_notification: silent, ...(keyboard ? { reply_markup: keyboard } : {}) });
     if (job.kind === "commands") {

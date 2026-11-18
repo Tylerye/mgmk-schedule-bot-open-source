@@ -1,6 +1,6 @@
 import { PersonalStore } from "../src/personal/store.js";
 import { enqueuePersonalUpdate, processPersonalInbox } from "../src/personal/inbox.js";
-import { beginDataset, stageSchedules, finishDataset, fanoutBatch, mergeCatalogObservations } from "../src/personal/ingest.js";
+import { beginDataset, stageSchedules, finishDataset, fanoutBatch, mergeCatalogObservations, MAX_STAGE_BYTES, MAX_STAGE_SCHEDULES } from "../src/personal/ingest.js";
 import { deliverUser, enqueueDue, diagnosticText } from "../src/personal/delivery.js";
 import { TelegramClient } from "../src/telegram.js";
 import { readJson, InputError } from "../cloudflare/request-json.js";
@@ -22,9 +22,22 @@ async function internal(env, path) {
 async function kick(env, { inbox = true, delivery = true, due = false, fanout = false } = {}) {
   // Bounded orchestration: each inbox/user runs in a separate HTTP invocation
   // with its own CPU budget. A minute Cron resumes after isolate termination.
-  const deadline = Date.now() + 20000;
+  const deadline = Date.now() + 24000;
   let calls = 0;
-  const run = path => { calls++; return internal(env, path); };
+  const failedLanes = new Set();
+  const run = async path => {
+    calls++;
+    try {
+      const result = await internal(env, path);
+      failedLanes.delete(path);
+      return result;
+    } catch {
+      const retry = !failedLanes.has(path);
+      if (retry) console.warn(JSON.stringify({ event: "personal_pump_lane_error", lane: path }));
+      failedLanes.add(path);
+      return { pending: retry };
+    }
+  };
   // At most four router calls per wave. Preserve the previous 48-call bound
   // but allow more delivery-only waves after fanout/due work has finished.
   while (calls <= 44 && Date.now() < deadline) {
@@ -125,10 +138,16 @@ export default {
       } else if (path === "/source-status") {
         const body = await readJson(request, 4096);
         return json({ enabled: true, known: await store.setting(`source:${String(body.id).slice(0, 100)}`) });
-      } else if (path === "/catalog") await mergeCatalogObservations(store, (await readJson(request, 8192)).observations);
-      else if (path === "/begin") await beginDataset(store, await readJson(request, 32768));
-      else if (path === "/stage") {
-        const body = await readJson(request, 196608); await stageSchedules(store, body.id, body.schedules);
+      } else if (path === "/catalog") {
+        const body = await readJson(request, 8192);
+        await mergeCatalogObservations(store, body.observations, body.seedVersion);
+      } else if (path === "/begin") {
+        const body = await readJson(request, 32768);
+        await beginDataset(store, body);
+        return json({ ok: true, maxStageSchedules: MAX_STAGE_SCHEDULES,
+          catalogSeedKnown: Boolean(body.seedVersion) && await store.setting("catalog-seed-version") === body.seedVersion });
+      } else if (path === "/stage") {
+        const body = await readJson(request, MAX_STAGE_BYTES); await stageSchedules(store, body.id, body.schedules);
       } else if (path === "/finish") {
         const body = await readJson(request, 4096);
         const activated = await finishDataset(store, body.id);
@@ -177,16 +196,22 @@ export default {
       }
       else if (path === "/tick/delivery") {
         const rows = await store.all("SELECT j.user_id FROM (SELECT user_id,priority,due FROM jobs WHERE status='pending' AND due<=?" + manualJobsOnly(budget.mode) + " ORDER BY priority,due LIMIT 128) j JOIN users u ON u.user_id=j.user_id WHERE u.blocked=0 AND u.last_api_at<=? GROUP BY j.user_id ORDER BY MIN(j.priority),MIN(j.due),MIN(u.last_api_at) LIMIT 8", now.getTime(), now.getTime() - 1050);
+        // Keep independent CPU invocations. Pipeline D1/Telegram I/O across
+        // recipients while spacing starts and enforcing the durable rate gate.
+        const inFlight = new Set();
         let lastStart = 0;
+        let failed = 0;
         for (const { user_id: id } of rows) {
-          // Each user still has an independent HTTP/CPU invocation. Await the
-          // previous lane and space starts so D1 latency cannot shuffle four
-          // concurrent claims into the same 84ms Telegram slot and waste writes.
-          if (lastStart && Date.now() - now.getTime() >= 2000) break;
-          if (lastStart) await wait(Math.max(0, 100 - (Date.now() - lastStart)));
+          if (inFlight.size >= 4) await Promise.race(inFlight);
+          if (lastStart && Date.now() - now.getTime() >= 2200) break;
+          if (lastStart) await wait(Math.max(0, 105 - (Date.now() - lastStart)));
           lastStart = Date.now();
-          await internal(env, `/delivery/${id}?background=1`);
+          const lane = internal(env, `/delivery/${id}?background=1`)
+            .catch(() => { failed++; }).finally(() => inFlight.delete(lane));
+          inFlight.add(lane);
         }
+        await Promise.all(inFlight);
+        if (failed) console.warn(JSON.stringify({ event: "personal_delivery_lane_error", failed }));
         // Skip still-cooling users without allocating their locks, intents and
         // HTTP lanes. Other subscribers can advance immediately; only a wave
         // with no eligible recipient waits for the earliest durable deadline.
@@ -200,9 +225,11 @@ export default {
       } else if (/^\/delivery\/\d+$/u.test(path)) {
         const id = Number(path.split("/")[2]);
         if (pilotAllowed(env, id)) {
+          const background = url.searchParams.get("background") === "1";
           const acquired = await deliverUser(store, new TelegramClient({ token: env.BOT_TOKEN, logger, timeoutMs: 8000 }), id,
-            { now, mode: budget.mode, ownerId: env.ADMIN_USER_ID, supportDetails: env.PERSONAL_SUPPORT_DETAILS });
-          if (url.searchParams.get("background") === "1") return json({ ok: true });
+            { now, mode: budget.mode, ownerId: env.ADMIN_USER_ID, supportDetails: env.PERSONAL_SUPPORT_DETAILS,
+              clock: background ? Date.now : undefined });
+          if (background) return json({ ok: true });
           const next = await store.first("SELECT MIN(due) due FROM jobs WHERE user_id=? AND status='pending'" + manualJobsOnly(budget.mode), id);
           return json({ ok: true, busy: acquired === false, pending: next?.due != null, nextDue: next?.due ?? null });
         }
@@ -215,7 +242,9 @@ export default {
   async scheduled(controller, env, context) {
     if (!backgroundPolicy(new Date(controller.scheduledTime ?? Date.now())).run) return;
     context.waitUntil(internal(env, "/tick").then(async work => {
-      if (work.recover) await internal(env, "/tick/recover");
+      if (work.recover) await internal(env, "/tick/recover").catch(() => {
+        console.warn(JSON.stringify({ event: "personal_source_recovery_lane_error" }));
+      });
       if (work.inbox || work.delivery || work.due || work.fanout) await kick(env, { inbox: Boolean(work.inbox), delivery: true, due: Boolean(work.due), fanout: Boolean(work.fanout) });
     }).catch(() => {}));
   },

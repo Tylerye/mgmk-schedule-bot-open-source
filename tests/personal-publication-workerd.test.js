@@ -31,13 +31,24 @@ test('workerd immediately delivers a new publication across 22 groups without Cr
       });
     } }] : [] })).outputFiles[0].text;
   const lanes = [], sends = [];
+  let failFirstDelivery = !baseline && !process.env.PERSONAL_MEASURE_TELEGRAM_MS;
+  const telegramDelay = Number(process.env.PERSONAL_MEASURE_TELEGRAM_MS ?? 0);
   const mf = new Miniflare(convertV4MiniflareOptions({ name: 'personal', modules: true, script,
     compatibilityDate: '2026-09-14', compatibilityFlags: ['nodejs_compat'], d1Databases: { DB: 'publication-db' },
     bindings: { PERSONAL_SHARED_SECRET: 'local-test', ADMIN_USER_ID: '100', BOT_TOKEN: 'fake', PERSONAL_DELIVERY_ENABLED: 'true', PERSONAL_PUBLIC: 'true' },
-    serviceBindings: { SELF: async (request, runtime) => { lanes.push(new URL(request.url).pathname); return (await runtime.getWorker('personal')).fetch(request); } },
+    serviceBindings: { SELF: async (request, runtime) => {
+      const path = new URL(request.url).pathname;
+      lanes.push(path);
+      if (failFirstDelivery && path.startsWith('/delivery/')) {
+        failFirstDelivery = false;
+        return new Response(null, { status: 503 });
+      }
+      return (await runtime.getWorker('personal')).fetch(request);
+    } },
     outboundService: async request => {
       assert.equal(new URL(request.url).hostname, 'api.telegram.org');
       const body = await request.json();
+      if (telegramDelay > 0) await new Promise(resolve => setTimeout(resolve, telegramDelay));
       if (new URL(request.url).pathname.endsWith('/sendMessage')) sends.push(body.chat_id);
       return new Response(JSON.stringify({ ok: true, result: { message_id: sends.length } }), { headers: { 'content-type': 'application/json' } });
     } }));
@@ -55,7 +66,9 @@ test('workerd immediately delivers a new publication across 22 groups without Cr
     const post = () => mf.dispatchFetch('http://localhost/test-finish', { method: 'POST', headers: { authorization: 'Bearer local-test' }, body: JSON.stringify({ id: input.id }) });
     const started = Date.now();
     assert.equal((await post()).status, 200);
-    if (!baseline) assert.equal(new Set(sends).size, 60, 'Every card must arrive in the activation pump, without Cron');
+    const activationMs = Date.now() - started;
+    const activationRecipients = new Set(sends).size;
+    if (!baseline) assert.equal(activationRecipients, 60, 'Every card must arrive in the activation pump, without Cron');
     // Include follow-up pin operations in both cost measurements. On a slow
     // runner those can use normal Cron recovery after all cards have arrived.
     for (let i = 0; i < 8; i++) {
@@ -75,7 +88,7 @@ test('workerd immediately delivers a new publication across 22 groups without Cr
     assert.equal((await post()).status, 200);
     assert.equal(sends.length, 60);
     assert.equal(lanes.length, invocations);
-    console.log(JSON.stringify({ scenario: 'new-publication-60-users-22-groups', baseline: Boolean(baseline), elapsedMs: Date.now() - started, httpInvocations: invocations, sends: sends.length,
+    console.log(JSON.stringify({ scenario: 'new-publication-60-users-22-groups', baseline: Boolean(baseline), telegramDelay, activationMs, activationRecipients, elapsedMs: Date.now() - started, httpInvocations: invocations, sends: sends.length,
       budget: await db.prepare('SELECT requests,rows_read,rows_written FROM budgets').first() }));
     // Concurrent fanout pumps are serialized in D1, including revision allocation.
     await db.prepare("UPDATE fanout SET status='pending',cursor=0").run();

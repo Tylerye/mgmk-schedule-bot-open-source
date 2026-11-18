@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { personalFixture } from "./helpers/personal-fixture.js";
+import { personalFixture, sampleSchedule } from "./helpers/personal-fixture.js";
 import { mergeCatalogObservations } from "../src/personal/ingest.js";
 import { uploadPersonalResult } from "../scripts/personal-upload.js";
 
@@ -21,4 +21,31 @@ test("an entirely failed timetable still adds its newly discovered group to the 
   assert.equal((await f.store.all("SELECT * FROM jobs")).length, 0);
   assert.equal(calls.at(-1), "/internal/personal/source-error");
   assert.ok(!calls.some(path => /begin|stage|finish/u.test(path)));
+});
+
+test("published PDFs activate before the catalog and use bounded batches", async () => {
+  const schedules = await Promise.all(Array.from({ length: 40 }, (_, i) => sampleSchedule(String(i + 1) + "ТМ")));
+  const result = { publishable: true, date: schedules[0].date, schedules, observations: schedules.map(s => ({ group: s.group, date: s.date })) };
+  const calls = [];
+  await uploadPersonalResult({ result, source: {}, generation: 1, contentHash: "fixture",
+    async request(path, { body }) {
+      calls.push([path.split("/").at(-1), JSON.parse(body)]);
+      return { maxStageSchedules: 12, catalogSeedKnown: true };
+    },
+  });
+  assert.deepEqual(calls.map(([name]) => name), ["begin", "stage", "stage", "stage", "stage", "finish", "catalog", "catalog", "catalog", "catalog"]);
+  assert.deepEqual(calls.filter(([name]) => name === "stage").map(([, { schedules }]) => schedules.length), [12, 12, 12, 4]);
+});
+
+test("overlapping observations preserve both catalog dates and replay writes nothing", async t => {
+  const f = await personalFixture();
+  t.after(() => f.close());
+  await mergeCatalogObservations(f.store, [{ group: "8Са", date: "2026-11-19" }]);
+  await mergeCatalogObservations(f.store, [{ group: "8СА", date: "2026-11-18" }]);
+  const [group] = await f.store.groups();
+  assert.deepEqual(group.dates, ["2026-11-18", "2026-11-19"]);
+  assert.equal(group.sourceLabels.length, 2);
+  const changes = f.sqlite.prepare("SELECT total_changes() AS n").get().n;
+  await mergeCatalogObservations(f.store, [{ group: "8СА", date: "2026-11-18" }]);
+  assert.equal(f.sqlite.prepare("SELECT total_changes() AS n").get().n, changes);
 });

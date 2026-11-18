@@ -2,6 +2,9 @@ import { mergeCatalog, groupKey } from "./catalog.js";
 import { JOB_CONFLICT_UPDATE } from './store.js';
 
 const validDate = v => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(v) && new Date(`${v}T00:00:00Z`).toISOString().slice(0, 10) === v;
+export const MAX_STAGE_SCHEDULES = 12;
+export const MAX_STAGE_BYTES = 196608;
+
 const validHash = v => typeof v === "string" && /^[a-f0-9]{64}$/u.test(v);
 const text = (v, max = 3000) => typeof v === "string" && v.length <= max;
 const time = v => typeof v === "string" && /^(?:[01]\d|2[0-3]):[0-5]\d$/u.test(v);
@@ -29,11 +32,24 @@ export function validSchedule(s, dataset, manifest) {
     && s.lessons.every(l => JSON.stringify(l) === JSON.stringify((({ type, start, end, ...l }) => l)(s.timeline.find(e => e.type === "lesson" && e.number === l.number) ?? {})));
 }
 
-export async function mergeCatalogObservations(store, observations) {
+export async function mergeCatalogObservations(store, observations, seedVersion) {
   if (!Array.isArray(observations) || observations.length > 10 || observations.some(o => !o || !validDate(o.date))) throw new Error("Invalid catalog batch");
-  const catalog = mergeCatalog(await store.groups(), observations);
-  const observed = new Set(observations.map(o => groupKey(o.group)));
-  if (observed.size) await store.batch(catalog.filter(g => observed.has(g.id)).map(group => ["INSERT INTO catalog(id,payload) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload WHERE catalog.payload<>excluded.payload", group.id, JSON.stringify(group)]));
+  const catalog = mergeCatalog([], observations);
+  // Merge only touched groups, under the write transaction. Two simultaneously
+  // uploaded PDFs must not replace one another's dates or aliases.
+  const statements = catalog.map(group => [
+    "INSERT INTO catalog(id,payload) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=json_set(catalog.payload,"
+    + "'$.dates',json((SELECT json_group_array(value) FROM (SELECT value FROM json_each(catalog.payload,'$.dates') UNION SELECT value FROM json_each(excluded.payload,'$.dates') ORDER BY value))),"
+    + "'$.sourceLabels',json((SELECT json_group_array(value) FROM (SELECT value FROM json_each(catalog.payload,'$.sourceLabels') UNION SELECT value FROM json_each(excluded.payload,'$.sourceLabels'))))) "
+    + "WHERE EXISTS(SELECT value FROM json_each(excluded.payload,'$.dates') EXCEPT SELECT value FROM json_each(catalog.payload,'$.dates')) "
+    + "OR EXISTS(SELECT value FROM json_each(excluded.payload,'$.sourceLabels') EXCEPT SELECT value FROM json_each(catalog.payload,'$.sourceLabels'))",
+    group.id, JSON.stringify(group),
+  ]);
+  if (validHash(seedVersion)) statements.push([
+    "INSERT INTO settings(key,value) VALUES('catalog-seed-version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE settings.value<>excluded.value",
+    JSON.stringify(seedVersion),
+  ]);
+  await store.batch(statements);
 }
 
 export async function beginDataset(store, input) {
@@ -53,12 +69,12 @@ export async function beginDataset(store, input) {
 
 export async function stageSchedules(store, id, schedules) {
   const dataset = await store.first("SELECT * FROM datasets WHERE id=?", id);
-  if (!dataset || !Array.isArray(schedules) || schedules.length > 3 || !schedules.length) throw new Error("Invalid staging batch");
+  if (!dataset || !Array.isArray(schedules) || schedules.length > MAX_STAGE_SCHEDULES || !schedules.length) throw new Error("Invalid staging batch");
   const manifest = JSON.parse(dataset.manifest);
   if (schedules.some(s => !validSchedule(s, dataset, manifest))) throw new Error("Invalid staged schedule");
   if (dataset.status === "ready") return;
   await store.batch(schedules.map(s => ["INSERT INTO snapshots(dataset_id,group_id,hash,payload) VALUES(?,?,?,?) "
-    + "ON CONFLICT(dataset_id,group_id) DO UPDATE SET hash=excluded.hash,payload=excluded.payload", id, s.canonicalGroup, s.hash, JSON.stringify(s)]));
+    + "ON CONFLICT(dataset_id,group_id) DO UPDATE SET hash=excluded.hash,payload=excluded.payload WHERE snapshots.payload<>excluded.payload", id, s.canonicalGroup, s.hash, JSON.stringify(s)]));
 }
 
 export async function finishDataset(store, id) {
