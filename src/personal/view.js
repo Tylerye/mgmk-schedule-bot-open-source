@@ -63,9 +63,9 @@ export function supportDetailsText(user, binding) {
   const w = t(user);
   let details;
   try { details = JSON.parse(binding); } catch { return w.details; }
-  const { mtbankContract, mtbankCard, belarusbankIban, belarusbankCard } = details ?? {};
-  if (![mtbankContract, mtbankCard, belarusbankIban, belarusbankCard].every(value => typeof value === "string")
-    || !/^\d{8}$/u.test(mtbankContract) || !/^\d{16}$/u.test(mtbankCard) || !/^BY\d{2}[A-Z]{4}[A-Z0-9]{20}$/u.test(belarusbankIban)
+  const { mtbankContract, mtbankCard, belarusbankCard } = details ?? {};
+  if (![mtbankContract, mtbankCard, belarusbankCard].every(value => typeof value === "string")
+    || !/^\d{8}$/u.test(mtbankContract) || !/^\d{16}$/u.test(mtbankCard)
     || !/^\d{16}$/u.test(belarusbankCard)) return w.details;
   const card = value => `<code>${value.match(/\d{4}/gu).join(" ")}</code>`;
   const erip = "ЕРИП → Банковские, финансовые услуги → Банки, НКФО";
@@ -73,7 +73,7 @@ export function supportDetailsText(user, binding) {
   return [
     w.supportText,
     `<b>МТБанк</b>\n${erip} → МТБанк → Пополнение карты\n${english ? "Contract number" : "Номер договора"} <code>${mtbankContract}</code>\n${english ? "Card transfer" : "Перевод на карту"} ${card(mtbankCard)}`,
-    `<b>Беларусбанк</b>\n${erip} → Беларусбанк → Пополнение счета\nIBAN <code>${belarusbankIban}</code>\n${english ? "Card transfer" : "Перевод на карту"} ${card(belarusbankCard)}`,
+    `<b>Беларусбанк</b>\n${english ? "Card transfer" : "Перевод на карту"} ${card(belarusbankCard)}`,
     english ? "Thank you for your support!" : "Спасибо за поддержку!",
   ].join("\n\n");
 }

@@ -170,12 +170,12 @@ test("support details render from the private binding without entering the job p
   const f = await personalFixture();
   t.after(() => f.close());
   const details = { mtbankContract: "00000000", mtbankCard: "0000000000000000",
-    belarusbankIban: "BY00TEST" + "0".repeat(20), belarusbankCard: "1111111111111111" };
+    belarusbankCard: "1111111111111111" };
   await enqueuePersonalUpdate(f.store, { update_id: 77, userId: 100, action: "donate", messageId: 55, acknowledged: true });
   await processPersonalInbox(f.store, await f.store.first("SELECT * FROM inbox WHERE update_id=77"));
   const job = await f.store.first("SELECT payload FROM jobs WHERE kind='reply'");
   assert.equal(JSON.parse(job.payload).supportDetails, true);
-  assert.ok(!job.payload.includes(details.belarusbankIban));
+  assert.ok(!job.payload.includes(details.belarusbankCard));
   const calls = [];
   await deliverUser(f.store, { async call(method, body) { calls.push({ method, body }); return true; } }, 100,
     { supportDetails: JSON.stringify(details), now: new Date(Date.now() + 1000) });
@@ -183,6 +183,9 @@ test("support details render from the private binding without entering the job p
   assert.equal(calls[0].method, "editMessageText");
   assert.equal(calls[0].body.message_id, 55);
   assert.match(calls[0].body.text, /добровольно/u);
-  assert.ok(calls[0].body.text.includes(details.belarusbankIban));
+  assert.match(calls[0].body.text, /00000000/u);
+  assert.match(calls[0].body.text, /0000 0000 0000 0000/u);
+  assert.match(calls[0].body.text, /1111 1111 1111 1111/u);
+  assert.doesNotMatch(calls[0].body.text, /IBAN|Пополнение счета/u);
   assert.equal(calls[0].body.reply_markup.inline_keyboard[0][0].callback_data, "personal:support");
 });
