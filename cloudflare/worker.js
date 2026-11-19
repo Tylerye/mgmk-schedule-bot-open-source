@@ -392,12 +392,13 @@ function maintenanceLanes(env) {
   return env.TEACHERS_ENABLED === "true" ? [...MAINTENANCE_LANES, "teacher-source", ...TEACHER_ACCOUNTS.map(t => `teacher-${t.id}`)] : MAINTENANCE_LANES;
 }
 
-async function dispatchMaintenance(env) {
+async function dispatchMaintenance(env, tick = new Date()) {
   const maintenanceOrigin = credentialOrigin(env.WORKER_PUBLIC_ORIGIN);
   const logger = createLogger(env.LOG_LEVEL || "info");
   // Public HTTP creates independent invocations/CPU budgets. Equivalent Cron
   // expressions were accepted by the API but did not fire independently.
-  const lanes = maintenanceLanes(env);
+  const lanes = maintenanceLanes(env).filter(lane =>
+    (lane !== "source" && lane !== "teacher-source") || backgroundPolicy(tick).night || tick.getUTCMinutes() % 2 === 0);
   const results = await Promise.allSettled(lanes.map(async lane => {
     const response = await fetch(`${maintenanceOrigin}/internal/maintenance/${lane}`, {
       method: "POST", headers: await maintenanceHeaders(env, `/internal/maintenance/${lane}`),
@@ -657,7 +658,8 @@ export default {
   },
   async scheduled(controller, env, context) {
     if (controller.cron === "* * * * *") {
-      if (backgroundPolicy(new Date(controller.scheduledTime ?? Date.now())).run) context.waitUntil(dispatchMaintenance(env));
+      const tick = new Date(controller.scheduledTime ?? Date.now());
+      if (backgroundPolicy(tick).run) context.waitUntil(dispatchMaintenance(env, tick));
       return;
     }
     // Legacy/local explicit invocation; production has exactly one Cron.

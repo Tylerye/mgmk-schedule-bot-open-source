@@ -231,11 +231,20 @@ test("minute dispatcher starts every bounded lane without database work or blind
     return new Response("{}", { status: String(url).endsWith("source") ? 503 : 200 });
   };
   try {
-    await assert.rejects(dispatchMaintenance({ WORKER_PUBLIC_ORIGIN:"https://worker.audit-fixture.net", MAINTENANCE_SIGNING_SECRET:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", PARSER_SHARED_SECRET: "private", LOG_LEVEL: "error",
-      DB: { prepare() { assert.fail("dispatcher must not load state"); } } }));
+    const env = { WORKER_PUBLIC_ORIGIN:"https://worker.audit-fixture.net", MAINTENANCE_SIGNING_SECRET:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", PARSER_SHARED_SECRET: "private", LOG_LEVEL: "error",
+      DB: { prepare() { assert.fail("dispatcher must not load state"); } } };
+    await assert.rejects(dispatchMaintenance(env, new Date("2026-11-19T09:00:00+03:00")));
     assert.deepEqual(calls.map(c => c.path).sort(), ["live", "source", "queues", "attention"].map(l => `/internal/maintenance/${l}`).sort());
     assert.ok(calls.every(c => c.options.method === "POST" && c.options.redirect === "manual"
       && !c.options.headers.authorization && !!c.options.headers["x-maintenance-signature"] && c.options.signal));
+    calls.length = 0;
+    await dispatchMaintenance({ ...env, TEACHERS_ENABLED: "true" }, new Date("2026-11-19T09:01:00+03:00"));
+    assert.equal(calls.length, 7);
+    assert.ok(calls.every(c => !c.path.endsWith("source")));
+    calls.length = 0;
+    await assert.rejects(dispatchMaintenance({ ...env, TEACHERS_ENABLED: "true" }, new Date("2026-11-19T20:15:00+03:00")));
+    assert.ok(calls.some(c => c.path.endsWith("/source")));
+    assert.ok(calls.some(c => c.path.endsWith("/teacher-source")));
     calls.length = 0;
     await assert.rejects(dispatchMaintenance({}), /origin/);
     assert.equal(calls.length, 0);
