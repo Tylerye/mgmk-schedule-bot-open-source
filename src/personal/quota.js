@@ -1,11 +1,11 @@
 // Per-subsystem allocation, not an increase to Cloudflare's account allowance.
-// Leave at least half the account's 100k writes outside this Worker.
+// Cap this Worker at 65k of the account's 100k writes.
 export function personalQuota(env = {}) {
   const written = Number(env.PERSONAL_DAILY_WRITES ?? 28000);
   const background = Number(env.PERSONAL_BACKGROUND_WRITES ?? 22000);
   const source = Number(env.PERSONAL_SOURCE_WRITES ?? 26000);
   if (![written, background, source].every(Number.isSafeInteger)
-    || background < 1000 || background >= source || source >= written || written > 50000)
+    || background < 1000 || background >= source || source >= written || written > 65000)
     throw new Error('Invalid personal quota allocation');
   return { written, background, source };
 }
