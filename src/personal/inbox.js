@@ -25,6 +25,32 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
       await store.run("INSERT OR IGNORE INTO users(user_id) VALUES(?)", row.user_id);
       user = await store.user(row.user_id);
     }
+    if (/^rating:(?:[1-5]|later)$/u.test(update.action)) {
+      const choice = update.action.slice(7);
+      const key = "rating-20261120-v1";
+      const voteKey = key + ":" + row.user_id;
+      const receipt = await store.first(
+        "SELECT 1 FROM operations WHERE id GLOB ? AND method='sendMessage' AND status='succeeded' AND json_extract(result,'$.message_id')=? LIMIT 1",
+        row.user_id + ":alert:" + key + ":*", update.messageId,
+      );
+      const statements = [];
+      if (receipt && await store.setting(voteKey) === null) {
+        const later = choice === "later";
+        const en = user.language === "en";
+        const low = Number(choice) <= 2;
+        const text = en
+          ? (low ? "💛 Thanks for being honest\n\nTell me what would make the bot better" : choice === "3" ? "🙌 Thanks for rating the bot\n\nI'll keep improving it" : "💛 Thanks for the support\n\nGlad the bot helps")
+          : (low ? "💛 Спасибо за честную оценку\n\nЕсли есть идея, напиши мне, что можно улучшить" : choice === "3" ? "🙌 Спасибо за оценку\n\nБуду дальше улучшать бота" : "💛 Спасибо за поддержку\n\nРад, что бот помогает");
+        statements.push(["INSERT INTO settings(key,value) VALUES(?,?)", voteKey, JSON.stringify(later ? choice : Number(choice))]);
+        statements.push(job(user, "rating-response", String(update.messageId), { priority: -2, payload: {
+          manual: true, messageId: update.messageId, remove: later, text,
+          keyboard: { inline_keyboard: low ? [informationKeyboard(user).inline_keyboard[0]] : [] },
+        } }));
+      }
+      await store.batch([...statements,
+        ["UPDATE inbox SET status='done',payload='{}',completed_at=COALESCE(completed_at,unixepoch()*1000) WHERE update_id=?", row.update_id]]);
+      return;
+    }
     const original = { ...user };
     let catalog;
     const groups = async () => catalog ??= (await store.groups()).sort((a, b) =>

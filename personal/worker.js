@@ -115,7 +115,7 @@ export default {
         const source = ['/source-status', '/catalog', '/begin', '/stage', '/finish', '/source-error', '/tick/recover'].includes(path);
         return json({ok:!source,stopped:true,pending:false}, source ? 503 : 200);
       }
-      if (await store.setting("budget-mode") !== budget.mode) await store.setSetting("budget-mode", budget.mode);
+
       if (path === "/tick") {
         const work = await store.first("SELECT (SELECT COUNT(*) FROM (SELECT 1 FROM inbox WHERE status='pending' LIMIT 1)) inbox,"
           + "(SELECT COUNT(*) FROM (SELECT 1 FROM fanout f JOIN datasets d ON d.id=f.dataset_id WHERE f.status='pending' AND d.status='ready' LIMIT 1)) fanout,"

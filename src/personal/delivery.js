@@ -125,9 +125,9 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
     const job = await store.first("SELECT * FROM jobs WHERE user_id=? AND status='pending' AND due<=?" + manualJobsOnly(mode) + " ORDER BY priority,due,id LIMIT 1", id, now.getTime());
     if (!job) return;
     const payload = JSON.parse(job.payload);
-    if (job.epoch !== user.epoch || (user.paused && !payload.manual)) { await finishJob(store, job, "cancelled"); return; }
+    if ((job.epoch !== user.epoch && job.kind !== "rating-response" && !(job.kind === "alert" && job.date === "rating-20261120-v1")) || (user.paused && !payload.manual)) { await finishJob(store, job, "cancelled"); return; }
     if (mode === "stopped" || (mode !== "normal" && !payload.manual)) return;
-    const op = (key, method, body) => telegramOperation(store, client, user, key, method, body, now.getTime(), { queuedEdit: job.kind === 'card' || job.kind === 'reply', clock });
+    const op = (key, method, body) => telegramOperation(store, client, user, key, method, body, now.getTime(), { queuedEdit: job.kind === 'card' || job.kind === 'reply' || job.kind === 'rating-response', clock });
     const sendBody = (text, keyboard, silent = true) => ({ chat_id: id, text, parse_mode: "HTML", disable_web_page_preview: true,
       disable_notification: silent, ...(keyboard ? { reply_markup: keyboard } : {}) });
     if (job.kind === "commands") {
@@ -142,6 +142,11 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       }
     } else if (job.kind === "callback") {
       const result = await op(`callback:${job.date}`, "answerCallbackQuery", { callback_query_id: payload.callbackId });
+      if (await applyOutcome(store, job, result)) await finishJob(store, job);
+    } else if (job.kind === "rating-response") {
+      const target = { chat_id: id, message_id: payload.messageId };
+      const result = await op("rating-response:" + job.date, payload.remove ? "deleteMessage" : "editMessageText",
+        payload.remove ? target : { ...sendBody(payload.text, payload.keyboard), ...target });
       if (await applyOutcome(store, job, result)) await finishJob(store, job);
     } else if (job.kind === "reply" || job.kind === "alert" || job.kind === "diagnostics") {
       if (job.kind === "alert" && payload.scheduleHash) {
@@ -334,5 +339,7 @@ export async function diagnosticText(store, now = new Date(), delivery = null) {
   const source = await store.setting("source-error", null);
   const budget = await store.first("SELECT * FROM budgets WHERE day=?", now.toISOString().slice(0, 10));
   const policy = backgroundPolicy(now);
-  return `Personal timetable\nQueue: ${queue.count}; lag: ${delivery.jobLagSeconds}s\nDue users: ${delivery.dueUsers}; lag: ${delivery.dueLagSeconds}s\nDelivery: ${delivery.late ? 'delayed' : 'on time'}\nBackground: ${policy.night ? 'night (15 min)' : 'day (1 min)'}\nUncertain: ${uncertain.count}\nFailed: ${failed.count}\n429: ${await store.setting("429", 0)}\nParser: ${source ? 'error (last good version retained)' : 'ok'}\nQuota (D1 meta + accounting reserve): ${JSON.stringify(budget)}\nMode: ${await store.setting("budget-mode", "normal")}`;
+  const [ratings] = await store.all("SELECT COUNT(*) count,ROUND(AVG(value),2) average,SUM(value='1') one,SUM(value='2') two,SUM(value='3') three,SUM(value='4') four,SUM(value='5') five FROM settings WHERE key GLOB 'rating-20261120-v1:*' AND value IN ('1','2','3','4','5')");
+  const mode = budget && store.backgroundPaused(budget) ? 'saving' : 'normal';
+  return `Personal timetable\nQueue: ${queue.count}; lag: ${delivery.jobLagSeconds}s\nDue users: ${delivery.dueUsers}; lag: ${delivery.dueLagSeconds}s\nDelivery: ${delivery.late ? 'delayed' : 'on time'}\nBackground: ${policy.night ? 'night (15 min)' : 'day (1 min)'}\nUncertain: ${uncertain.count}\nFailed: ${failed.count}\n429: ${await store.setting("429", 0)}\nParser: ${source ? 'error (last good version retained)' : 'ok'}\nQuota (D1 meta + accounting reserve): ${JSON.stringify(budget)}\nMode: ${mode}\n⭐ Rating: ${ratings.average ?? "—"} / 5 · ${ratings.count} votes\n1: ${ratings.one ?? 0} · 2: ${ratings.two ?? 0} · 3: ${ratings.three ?? 0} · 4: ${ratings.four ?? 0} · 5: ${ratings.five ?? 0}`;
 }
