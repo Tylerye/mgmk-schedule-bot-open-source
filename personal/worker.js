@@ -1,7 +1,7 @@
 import { PersonalStore } from "../src/personal/store.js";
 import { enqueuePersonalUpdate, processPersonalInbox } from "../src/personal/inbox.js";
 import { beginDataset, stageSchedules, finishDataset, fanoutBatch, mergeCatalogObservations, MAX_STAGE_BYTES, MAX_STAGE_SCHEDULES } from "../src/personal/ingest.js";
-import { deliverUser, enqueueDue, diagnosticText } from "../src/personal/delivery.js";
+import { deliverUser, diagnosticText } from "../src/personal/delivery.js";
 import { TelegramClient } from "../src/telegram.js";
 import { readJson, InputError } from "../cloudflare/request-json.js";
 import { pilotAllowed } from "../cloudflare/personal-relay.js";
@@ -54,6 +54,25 @@ async function kick(env, { inbox = true, delivery = true, due = false, fanout = 
     delivery = true;
     await wait(nextDue === null ? 1100 : Math.max(100, Math.min(1100, nextDue - Date.now())));
   }
+}
+
+async function runUserLanes(env, users, path, startedAt) {
+  // Keep independent CPU invocations. Pipeline D1/Telegram I/O across
+  // recipients while spacing starts and enforcing the durable rate gate.
+  const inFlight = new Set();
+  let lastStart = 0;
+  let failed = 0;
+  for (const { user_id: id } of users) {
+    if (inFlight.size >= 4) await Promise.race(inFlight);
+    if (lastStart && Date.now() - startedAt >= 2200) break;
+    if (lastStart) await wait(Math.max(0, 105 - (Date.now() - lastStart)));
+    lastStart = Date.now();
+    const lane = internal(env, path(id))
+      .catch(() => { failed++; }).finally(() => inFlight.delete(lane));
+    inFlight.add(lane);
+  }
+  await Promise.all(inFlight);
+  if (failed) console.warn(JSON.stringify({ event: "personal_delivery_lane_error", failed }));
 }
 
 async function deliverInteractive(env, id) {
@@ -189,29 +208,19 @@ export default {
       }
       else if (path === "/tick/due") {
         const users = await store.all("SELECT user_id FROM users WHERE paused=0 AND blocked=0 AND next_due<=? ORDER BY next_due,user_id LIMIT 8", now.getTime());
-        await Promise.all(users.map(u => internal(env, `/due/${u.user_id}`)));
+        await runUserLanes(env, users, id => `/due/${id}`, now.getTime());
         return json({ok:true,pending:Boolean(await store.first("SELECT 1 FROM users WHERE paused=0 AND blocked=0 AND next_due<=? LIMIT 1", now.getTime()))});
       } else if (/^\/due\/\d+$/u.test(path)) {
-        if (budget.mode === 'normal') await enqueueDue(store, now.getTime(), Number(path.split('/')[2]));
+        const id = Number(path.split('/')[2]);
+        if (budget.mode === 'normal' && pilotAllowed(env, id)) {
+          await deliverUser(store, new TelegramClient({ token: env.BOT_TOKEN, logger, timeoutMs: 8000 }), id,
+            { now, mode: budget.mode, ownerId: env.ADMIN_USER_ID, supportDetails: env.PERSONAL_SUPPORT_DETAILS,
+              clock: Date.now, catchUp: true });
+        }
       }
       else if (path === "/tick/delivery") {
         const rows = await store.all("SELECT j.user_id FROM (SELECT user_id,priority,due FROM jobs WHERE status='pending' AND due<=?" + manualJobsOnly(budget.mode) + " ORDER BY priority,due LIMIT 128) j JOIN users u ON u.user_id=j.user_id WHERE u.blocked=0 AND u.last_api_at<=? GROUP BY j.user_id ORDER BY MIN(j.priority),MIN(j.due),MIN(u.last_api_at) LIMIT 8", now.getTime(), now.getTime() - 1050);
-        // Keep independent CPU invocations. Pipeline D1/Telegram I/O across
-        // recipients while spacing starts and enforcing the durable rate gate.
-        const inFlight = new Set();
-        let lastStart = 0;
-        let failed = 0;
-        for (const { user_id: id } of rows) {
-          if (inFlight.size >= 4) await Promise.race(inFlight);
-          if (lastStart && Date.now() - now.getTime() >= 2200) break;
-          if (lastStart) await wait(Math.max(0, 105 - (Date.now() - lastStart)));
-          lastStart = Date.now();
-          const lane = internal(env, `/delivery/${id}?background=1`)
-            .catch(() => { failed++; }).finally(() => inFlight.delete(lane));
-          inFlight.add(lane);
-        }
-        await Promise.all(inFlight);
-        if (failed) console.warn(JSON.stringify({ event: "personal_delivery_lane_error", failed }));
+        await runUserLanes(env, rows, id => `/delivery/${id}?background=1`, now.getTime());
         // Skip still-cooling users without allocating their locks, intents and
         // HTTP lanes. Other subscribers can advance immediately; only a wave
         // with no eligible recipient waits for the earliest durable deadline.

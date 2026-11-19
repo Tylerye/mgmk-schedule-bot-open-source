@@ -25,12 +25,12 @@ test('workerd immediately delivers a new publication across 22 groups without Cr
       return worker.fetch(request,env,ctx);
     }};`, resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'neutral', external: ['node:crypto'],
     plugins: baseline ? [{ name: 'baseline-publication', setup(b) {
-      b.onLoad({ filter: /[\\/](?:personal[\\/]worker|src[\\/]personal[\\/](?:ingest|store))\.js$/ }, args => {
+      b.onLoad({ filter: /[\\/](?:personal[\\/]worker|src[\\/]personal[\\/](?:ingest|store|delivery))\.js$/ }, args => {
         const path = args.path.slice(process.cwd().length + 1).replaceAll('\\', '/');
         return { contents: execFileSync('git', ['-c', `safe.directory=${process.cwd()}`, 'show', `${baseline}:${path}`], { encoding: 'utf8' }), loader: 'js' };
       });
     } }] : [] })).outputFiles[0].text;
-  const lanes = [], sends = [];
+  const lanes = [], sends = [], edits = [];
   let failFirstDelivery = !baseline && !process.env.PERSONAL_MEASURE_TELEGRAM_MS;
   const telegramDelay = Number(process.env.PERSONAL_MEASURE_TELEGRAM_MS ?? 0);
   const mf = new Miniflare(convertV4MiniflareOptions({ name: 'personal', modules: true, script,
@@ -50,6 +50,7 @@ test('workerd immediately delivers a new publication across 22 groups without Cr
       const body = await request.json();
       if (telegramDelay > 0) await new Promise(resolve => setTimeout(resolve, telegramDelay));
       if (new URL(request.url).pathname.endsWith('/sendMessage')) sends.push(body.chat_id);
+      if (new URL(request.url).pathname.endsWith('/editMessageText')) edits.push(body.chat_id);
       return new Response(JSON.stringify({ ok: true, result: { message_id: sends.length } }), { headers: { 'content-type': 'application/json' } });
     } }));
   try {
@@ -90,6 +91,24 @@ test('workerd immediately delivers a new publication across 22 groups without Cr
     assert.equal(lanes.length, invocations);
     console.log(JSON.stringify({ scenario: 'new-publication-60-users-22-groups', baseline: Boolean(baseline), telegramDelay, activationMs, activationRecipients, elapsedMs: Date.now() - started, httpInvocations: invocations, sends: sends.length,
       budget: await db.prepare('SELECT requests,rows_read,rows_written FROM budgets').first() }));
+    if (process.env.PERSONAL_MEASURE_DUE) {
+      // Force one visible edit per user without depending on the host's lesson times.
+      await db.prepare("UPDATE cards SET parts=json_set(parts,'$[0].hash','outdated')").run();
+      await db.prepare("UPDATE users SET next_due=0,last_api_at=0").run();
+      const budget = () => db.prepare('SELECT requests,rows_read,rows_written FROM budgets').first();
+      const before = await budget(), offset = lanes.length, dueStarted = Date.now();
+      await mf.dispatchFetch('http://localhost/test-cron');
+      const firstPass = new Set(edits).size;
+      for (let i = 0; i < 6 && new Set(edits).size < 60; i++) await mf.dispatchFetch('http://localhost/test-cron');
+      assert.equal(new Set(edits).size, 60);
+      assert.equal(edits.length, 60);
+      assert.equal(sends.length, 60);
+      assert.equal((await db.prepare("SELECT count(*) n FROM jobs WHERE status='pending'").first()).n, 0);
+      assert.equal((await db.prepare("SELECT count(*) n FROM users WHERE next_due=0").first()).n, 0);
+      const after = await budget();
+      console.log(JSON.stringify({ scenario: 'due-60-card-edits', baseline: Boolean(baseline), firstPass, elapsedMs: Date.now() - dueStarted,
+        httpInvocations: lanes.length - offset, budget: Object.fromEntries(Object.entries(after).map(([key, value]) => [key, value - before[key]])) }));
+    }
     // Concurrent fanout pumps are serialized in D1, including revision allocation.
     await db.prepare("UPDATE fanout SET status='pending',cursor=0").run();
     const before = new PersonalStore(db), after = new PersonalStore(db);

@@ -111,10 +111,17 @@ async function pinStatement(store, user, cards, now) {
   return pending ? [] : [store.jobStatement(user, "pin", "", { priority: 1, due: now.getTime() })];
 }
 
-export async function deliverUser(store, client, id, { now = new Date(), mode = "normal", ownerId, supportDetails, clock } = {}) {
+export async function deliverUser(store, client, id, { now = new Date(), mode = "normal", ownerId, supportDetails, clock, catchUp = false } = {}) {
   return store.lock(id, now.getTime(), async () => {
     const user = await store.user(id);
     if (!user || user.blocked) return;
+    if (catchUp) {
+      if (mode !== "normal" || user.paused || user.next_due === null || user.next_due > now.getTime()) return;
+      user.next_due = await enqueueDueLocked(store, user, now);
+      // Preserve the worker's existing per-user delivery cooldown. The job
+      // remains durable if another pass must deliver it after the cooldown.
+      if (user.last_api_at > now.getTime() - 1050) return;
+    }
     const job = await store.first("SELECT * FROM jobs WHERE user_id=? AND status='pending' AND due<=?" + manualJobsOnly(mode) + " ORDER BY priority,due,id LIMIT 1", id, now.getTime());
     if (!job) return;
     const payload = JSON.parse(job.payload);
@@ -278,6 +285,27 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
   });
 }
 
+async function enqueueDueLocked(store, fresh, date) {
+  const now = date.getTime(), schedules = await store.schedules(fresh.group_id), cards = await loadCards(store, fresh);
+  const statements = [];
+  for (const schedule of schedules) {
+    const card = cards.find(c => c.date === schedule.date);
+    // New publications are queued by durable fanout, never by a clock tick.
+    if (!card) continue;
+    const rendered = renderPersonal(schedule, fresh, { mode: card.mode, now: date });
+    const count = Math.max(card.parts.length, rendered.parts.length);
+    if (!Array.from({ length: count }, (_, i) => card.parts[i]?.hash === digest([rendered.parts[i] ?? t(fresh).emptyPart, i ? { inline_keyboard: [] } : rendered.keyboard])).every(Boolean)) {
+      const pending = await store.first("SELECT 1 FROM jobs WHERE id=? AND status='pending' AND epoch=?", `${fresh.user_id}:card:${schedule.date}`, fresh.epoch);
+      if (!pending) statements.push(store.jobStatement(fresh, "card", schedule.date, { priority: 3, due: now }));
+    }
+  }
+  statements.push(...await pinStatement(store, fresh, cards, date));
+  const next = nextDue(fresh, schedules, cards, date);
+  if (fresh.next_due !== next) statements.push(dueStatement(fresh, next));
+  await store.batch(statements);
+  return next;
+}
+
 export async function enqueueDue(store, now = Date.now(), userId = null) {
   const users = userId === null
     ? await store.all("SELECT * FROM users WHERE paused=0 AND blocked=0 AND next_due IS NOT NULL AND next_due<=? ORDER BY next_due LIMIT 4", now)
@@ -286,23 +314,7 @@ export async function enqueueDue(store, now = Date.now(), userId = null) {
     await store.lock(user.user_id, now, async () => {
       const fresh = await store.user(user.user_id);
       if (!fresh || fresh.paused || fresh.blocked || fresh.next_due === null || fresh.next_due > now) return;
-      const date = new Date(now), schedules = await store.schedules(fresh.group_id), cards = await loadCards(store, fresh);
-      const statements = [];
-      for (const schedule of schedules) {
-        const card = cards.find(c => c.date === schedule.date);
-        // New publications are queued by durable fanout, never by a clock tick.
-        if (!card) continue;
-        const rendered = renderPersonal(schedule, fresh, { mode: card.mode, now: date });
-        const count = Math.max(card.parts.length, rendered.parts.length);
-        if (!Array.from({ length: count }, (_, i) => card.parts[i]?.hash === digest([rendered.parts[i] ?? t(fresh).emptyPart, i ? { inline_keyboard: [] } : rendered.keyboard])).every(Boolean)) {
-          const pending = await store.first("SELECT 1 FROM jobs WHERE id=? AND status='pending' AND epoch=?", `${fresh.user_id}:card:${schedule.date}`, fresh.epoch);
-          if (!pending) statements.push(store.jobStatement(fresh, "card", schedule.date, { priority: 3, due: now }));
-        }
-      }
-      statements.push(...await pinStatement(store, fresh, cards, date));
-      const next = nextDue(fresh, schedules, cards, date);
-      if (fresh.next_due !== next) statements.push(dueStatement(fresh, next));
-      await store.batch(statements);
+      await enqueueDueLocked(store, fresh, new Date(now));
     });
   }
 }

@@ -251,3 +251,16 @@ test('multiple jobs in one batch consume one revision-counter write and keep ord
   assert.deepEqual(rows.map(r=>r.date),['ru','en','']);
   assert.deepEqual(rows.map(r=>r.revision-rows[0].revision),[0,1,2]);
 });
+
+test('clock-driven delivery edits the existing card using one user lease', async t => {
+  const f = await fixture(t);
+  f.sqlite.exec('CREATE TABLE lease_writes(n INTEGER); CREATE TRIGGER test_lease_write AFTER UPDATE ON locks BEGIN INSERT INTO lease_writes VALUES(1); END;');
+  await deliverUser(f.store, f.client, 100, { now: local('09:00'), catchUp: true });
+  assert.deepEqual(f.calls.map(c => [c.method,c.body.message_id]), [['editMessageText',88]]);
+  const job = await f.store.first("SELECT status FROM jobs WHERE kind='card' AND date=?",f.s.date);
+  assert.equal(job.status,'done');
+  assert.equal((await f.store.first("SELECT expires_at FROM locks WHERE user_id=100")).expires_at,0);
+  assert.equal((await f.store.first('SELECT count(*) n FROM lease_writes')).n,1);
+  assert.equal((await f.store.user(100)).pin_message_id,88);
+  assert.equal((await f.store.card(f.user,f.tomorrow.date)).parts[0].id,98);
+});
