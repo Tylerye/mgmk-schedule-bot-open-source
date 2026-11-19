@@ -53,8 +53,8 @@ performed per invocation. A shared 84 ms gate and 1050 ms per-user gate limit th
 new sender to under 12 operations/s. `429` applies a shared `retry_after` cooldown.
 Telegram's limit is shared with the existing bot, so pilot metrics still matter.
 
-Background maintenance runs every minute from 06:00 until 21:30 Minsk time,
-and every 15 minutes from 21:30 until 06:00. Both Workers skip quiet minutes
+Background maintenance runs every minute from 06:30 until 20:00 Minsk time,
+and every 15 minutes from 20:00 until 06:30. Both Workers skip quiet minutes
 before accessing D1 or dispatching HTTP lanes. Midnight and the UTC quota reset
 are included in the night cadence. Webhook commands and manual views remain
 immediate; a persisted retry left after a long Telegram cooldown resumes on a

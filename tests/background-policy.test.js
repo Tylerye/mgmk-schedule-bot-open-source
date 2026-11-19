@@ -7,14 +7,26 @@ import { deliveryHealth, diagnosticText } from '../src/personal/delivery.js';
 import { build } from 'esbuild';
 
 const at = t => new Date(`2026-11-13T${t}:00+03:00`);
-test('Minsk quiet hours include midnight and UTC quota reset, resume at six', () => {
-  for (const t of ['21:29','06:00','16:00','16:30','19:55']) assert.equal(backgroundPolicy(at(t)).night,false,t);
-  for (const t of ['21:30','22:00','00:00','03:00','05:45']) assert.equal(backgroundPolicy(at(t)).run,true,t);
-  for (const t of ['21:31','23:59','00:01','03:01','05:59']) assert.equal(backgroundPolicy(at(t)).run,false,t);
-  assert.equal(backgroundPolicy(at('06:01')).staleAfterMs,1200000);
-  assert.equal(backgroundPolicy(at('06:05')).staleAfterMs,300000);
-  const minutes=Array.from({length:510},(_,i)=>new Date(at('21:30').getTime()+i*60000));
-  assert.equal(minutes.filter(d=>backgroundPolicy(d).run).length,34);
+test('Minsk quiet hours start at 20:00 and end at 06:30', () => {
+  for (const time of ['19:59', '06:30', '06:31', '16:00', '16:30']) {
+    const policy = backgroundPolicy(at(time));
+    assert.equal(policy.night, false, time);
+    assert.equal(policy.intervalMinutes, 1, time);
+    assert.equal(policy.run, true, time);
+  }
+  for (const time of ['20:00', '00:00', '03:00', '06:15']) {
+    const policy = backgroundPolicy(at(time));
+    assert.equal(policy.night, true, time);
+    assert.equal(policy.intervalMinutes, 15, time);
+    assert.equal(policy.run, true, time);
+  }
+  for (const time of ['20:01', '23:59', '00:01', '03:01', '06:29']) {
+    assert.equal(backgroundPolicy(at(time)).run, false, time);
+  }
+  assert.equal(backgroundPolicy(at('06:34')).staleAfterMs, 1200000);
+  assert.equal(backgroundPolicy(at('06:35')).staleAfterMs, 300000);
+  const minutes = Array.from({ length: 630 }, (_, index) => new Date(at('20:00').getTime() + index * 60000));
+  assert.equal(minutes.filter(date => backgroundPolicy(date).run).length, 42);
 });
 
 test('both Cron entrypoints skip D1 and fanout on a quiet minute', async () => {
@@ -22,7 +34,7 @@ test('both Cron entrypoints skip D1 and fanout on a quiet minute', async () => {
   const main=(await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`)).default;
   const env={DB:{prepare(){assert.fail('no database access');}},SELF:{fetch(){assert.fail('no HTTP lane');}}};
   const ctx={waitUntil(){assert.fail('no background work');}};
-  const controller={cron:'* * * * *',scheduledTime:at('22:01').getTime()};
+  const controller={cron:'* * * * *',scheduledTime:at('20:01').getTime()};
   await worker.scheduled(controller,env,ctx);
   await main.scheduled(controller,env,ctx);
 });
