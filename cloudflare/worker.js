@@ -537,7 +537,7 @@ async function scheduled(env, lane = "all", interval = null, admit = null) {
     // Discovery needs document fingerprints and the existence of dates, not
     // the complete lesson bodies and their published copies.
     const row = await env.DB.prepare("SELECT json_object('documents',json_extract(json,'$.documents'),'dates',"
-      + "(SELECT json_group_array(key) FROM json_each(app_state.json,'$.schedules'))) AS json FROM app_state WHERE id=1").first();
+      + "json((SELECT json_group_array(key) FROM json_each(app_state.json,'$.schedules')))) AS json FROM app_state WHERE id=1").first();
     const snapshot = row?.json ? JSON.parse(row.json) : {};
     const store = { state: { documents: snapshot.documents ?? {}, schedules: Object.fromEntries((snapshot.dates ?? []).map(date => [date, true])) } };
     const { ready, health } = await pollSourceAndDispatch(env, store, config, logger, new Date(), candidates);
