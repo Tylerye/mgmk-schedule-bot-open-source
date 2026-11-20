@@ -14,7 +14,7 @@ export async function enqueuePersonalUpdate(store, update, now = Date.now()) {
   return Number(inserted.meta?.changes ?? 0) > 0;
 }
 
-export async function processPersonalInbox(store, row, now = new Date(), { ownerId } = {}) {
+export async function processPersonalInbox(store, row, now = new Date(), { ownerId, widgetEnabled = false } = {}) {
   const update = JSON.parse(row.payload);
   const job = (user, kind, date, options = {}) => store.jobStatement(user, kind, date, { due: now.getTime(), ...options });
   let earlier = null;
@@ -58,7 +58,8 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     const groups = async () => catalog ??= (await store.groups()).sort((a, b) =>
       Number.parseInt(a.id, 10) - Number.parseInt(b.id, 10) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     const jobs = [], replies = [];
-    const reply = (text, keyboard = menu(user), editId = update.messageId ?? null) => replies.push({ text, keyboard, editId });
+    const mainMenu = () => menu(user, widgetEnabled);
+    const reply = (text, keyboard = mainMenu(), editId = update.messageId ?? null) => replies.push({ text, keyboard, editId });
     let action = update.action;
     // Only the latest navigation request should survive rapid taps
     jobs.push(["UPDATE jobs SET status='superseded',completed_at=COALESCE(completed_at,unixepoch()*1000) WHERE user_id=? AND status='pending' AND kind IN ('reply','callback','commands')", user.user_id]);
@@ -69,7 +70,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
       user.language = action.split(":")[1];
       if (user.language !== original.language) user.epoch++;
       user.screen = user.group_id ? "menu" : "groups";
-      reply(user.group_id ? t(user).menu : t(user).choose, user.group_id ? menu(user) : groupsKeyboard(await groups(), user));
+      reply(user.group_id ? t(user).menu : t(user).choose, user.group_id ? mainMenu() : groupsKeyboard(await groups(), user));
       if (user.group_id) for (const s of initialDates(await store.schedules(user.group_id), now)) jobs.push(job(user, "card", s.date, { priority: 0, payload: { manual: true } }));
     } else if (action.startsWith("groups:") || action.startsWith("search:")) {
       user.screen = "groups";
@@ -111,14 +112,18 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     else if (action === "donate") replies.push({
       supportDetails: true, keyboard: { inline_keyboard: [[button(t(user).back, "support")]] }, editId: update.messageId ?? null,
     });
-    else if (action === "later") reply(t(user).closed, menu(user), update.messageId);
+    else if (action === "later") reply(t(user).closed, mainMenu(), update.messageId);
     else if (action === "diagnostics") {
       // Owner-only route is also checked by the Worker. Aggregates, no users.
       jobs.push(job(user, "diagnostics", String(row.update_id), { priority: 0, payload: { manual: true } }));
     } else if (action === "widget" || action.startsWith("widget:")) {
       if (user.group_id === widgetGroup) {
         const w = t(user);
-        if (action === "widget") {
+        if (!widgetEnabled) {
+          reply(user.language === "en"
+            ? "Telegram has paused HTML widgets for regular bots. You can still open the text timetable below."
+            : "Telegram приостановил HTML-виджеты для обычных ботов. Расписание можно открыть кнопками ниже.");
+        } else if (action === "widget") {
           reply(widgetLabel(user), { inline_keyboard: [
             [button(w.today, "widget:today"), button(w.tomorrow, "widget:tomorrow")],
             [button(w.next, "widget:next")], [button(w.back, "menu")],
@@ -144,12 +149,12 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
         if (fromWidget) action = `preview:${action.slice("widget-text:".length)}:full`;
         const schedules = await store.schedules(user.group_id);
         const date = action.startsWith("preview:") ? action.split(":")[1] : selectedDate(schedules, action, now);
-        if (!schedules.some(s => s.date === date)) reply(t(user).missing, menu(user), fromWidget ? null : update.messageId);
+        if (!schedules.some(s => s.date === date)) reply(t(user).missing, mainMenu(), fromWidget ? null : update.messageId);
         else {
           const rendered = renderPersonal(schedules.find(s => s.date === date), user, { now, mode: action.startsWith("preview:") ? action.split(":")[2] : "compact" });
           const keyboard = structuredClone(rendered.keyboard);
           for (const row of keyboard.inline_keyboard) for (const b of row) b.callback_data = b.callback_data.replace('personal:view:', 'personal:preview:');
-          if (user.group_id === widgetGroup) keyboard.inline_keyboard.splice(-1, 0, [button(widgetLabel(user), `widget:${date}`)]);
+          if (widgetEnabled && user.group_id === widgetGroup) keyboard.inline_keyboard.splice(-1, 0, [button(widgetLabel(user), `widget:${date}`)]);
           // A preview is one navigable screen, independent of automatic cards.
           // Paging needs no extra sends, receipts or persisted message IDs.
           const page = Math.max(0, Math.min(Number(action.split(":")[3]) || 0, rendered.parts.length - 1));

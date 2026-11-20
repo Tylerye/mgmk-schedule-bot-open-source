@@ -115,7 +115,7 @@ async function pinStatement(store, user, cards, now) {
   return pending ? [] : [store.jobStatement(user, "pin", "", { priority: 1, due: now.getTime() })];
 }
 
-export async function deliverUser(store, client, id, { now = new Date(), mode = "normal", ownerId, supportDetails, clock, catchUp = false } = {}) {
+export async function deliverUser(store, client, id, { now = new Date(), mode = "normal", ownerId, supportDetails, clock, catchUp = false, widgetEnabled = false } = {}) {
   return store.lock(id, now.getTime(), async token => {
     const user = await store.user(id);
     if (!user || user.blocked) return;
@@ -155,7 +155,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
         payload.remove ? target : { ...sendBody(payload.text, payload.keyboard), ...target });
       if (await applyOutcome(store, job, result)) await finishJob(store, job);
     } else if (job.kind === "reply" && payload.widgetDate) {
-      if (user.group_id !== widgetGroup) { await finishJob(store, job, "cancelled"); return; }
+      if (!widgetEnabled || user.group_id !== widgetGroup) { await finishJob(store, job, "cancelled"); return; }
       const schedule = payload.widgetSchedule;
       const w = t(user);
       const textKeyboard = { inline_keyboard: [[button(w.schedule, `widget-text:${payload.widgetDate}`)]] };
@@ -171,7 +171,8 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
           return;
         }
       }
-      const result = await op(key + ":text", "sendMessage", sendBody(widget ? escapeHtml(widget.caption) : w.missing, schedule ? textKeyboard : undefined));
+      const unavailable = user.language === "en" ? "HTML widget unavailable. Text timetable:" : "HTML-виджет недоступен. Расписание текстом:";
+      const result = await op(key + ":text", "sendMessage", sendBody(widget ? escapeHtml(unavailable + "\n\n" + widget.caption) : w.missing, schedule ? textKeyboard : undefined));
       if (await applyOutcome(store, job, result)) await finishJob(store, job);
     } else if (job.kind === "reply" || job.kind === "alert" || job.kind === "diagnostics") {
       if (job.kind === "alert" && payload.scheduleHash) {

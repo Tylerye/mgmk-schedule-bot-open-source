@@ -96,7 +96,7 @@ async function deliverInteractive(env, id) {
 }
 
 async function processInboxRow(store, env, row, now) {
-  const acquired = await processPersonalInbox(store, row, now, { ownerId: env.ADMIN_USER_ID });
+  const acquired = await processPersonalInbox(store, row, now, { ownerId: env.ADMIN_USER_ID, widgetEnabled: env.PERSONAL_WIDGET_ENABLED === "true" });
   if (acquired?.earlier != null) return { ok:true, busy:true, earlier:acquired.earlier };
   const delivery = acquired !== false && Boolean(await store.first("SELECT 1 FROM jobs WHERE user_id=? AND status='pending' AND json_extract(payload,'$.manual')=1 LIMIT 1", row.user_id));
   return { ok: true, busy: acquired === false, delivery };
@@ -236,7 +236,7 @@ export default {
         if (budget.mode === 'normal' && pilotAllowed(env, id)) {
           await deliverUser(store, new TelegramClient({ token: env.BOT_TOKEN, logger, timeoutMs: 8000 }), id,
             { now, mode: budget.mode, ownerId: env.ADMIN_USER_ID, supportDetails: env.PERSONAL_SUPPORT_DETAILS,
-              clock: Date.now, catchUp: true });
+              clock: Date.now, catchUp: true, widgetEnabled: env.PERSONAL_WIDGET_ENABLED === "true" });
         }
       }
       else if (path === "/tick/delivery") {
@@ -258,7 +258,7 @@ export default {
           const background = url.searchParams.get("background") === "1";
           const acquired = await deliverUser(store, new TelegramClient({ token: env.BOT_TOKEN, logger, timeoutMs: 8000 }), id,
             { now, mode: budget.mode, ownerId: env.ADMIN_USER_ID, supportDetails: env.PERSONAL_SUPPORT_DETAILS,
-              clock: background ? Date.now : undefined });
+              clock: background ? Date.now : undefined, widgetEnabled: env.PERSONAL_WIDGET_ENABLED === "true" });
           if (background) return json({ ok: true });
           const next = await store.first("SELECT MIN(due) due FROM jobs WHERE user_id=? AND status='pending'" + manualJobsOnly(budget.mode), id);
           return json({ ok: true, busy: acquired === false, pending: next?.due != null, nextDue: next?.due ?? null });

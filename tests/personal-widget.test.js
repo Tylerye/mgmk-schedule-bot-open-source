@@ -12,8 +12,10 @@ test("8-Сба can request the widget alongside text; definite rejection falls b
   const schedule = await sampleSchedule();
   await installSchedules(store, [schedule]);
   await store.run("INSERT INTO users(user_id,group_id) VALUES(100,?),(200,'8ТС')", widgetGroup);
-  assert.ok(menu({ group_id: widgetGroup }).inline_keyboard.flat().some(button => button.callback_data === "personal:widget"));
-  assert.ok(menu({ group_id: "8ТС" }).inline_keyboard.flat().every(button => button.callback_data !== "personal:widget"));
+  const hasWidget = keyboard => keyboard.inline_keyboard.flat().some(button => button.callback_data.startsWith("personal:widget"));
+  assert.ok(hasWidget(menu({ group_id: widgetGroup }, true)));
+  assert.ok(!hasWidget(menu({ group_id: widgetGroup })));
+  assert.ok(!hasWidget(menu({ group_id: "8ТС" }, true)));
 
   const calls = [];
   let error;
@@ -24,17 +26,21 @@ test("8-Сба can request the widget alongside text; definite rejection falls b
   } };
   let id = 0;
   let now = Date.parse(schedule.date + "T08:03:00+03:00");
-  const tap = async (userId, action) => {
+  const tap = async (userId, action, widgetEnabled = true) => {
     now += 2000;
     const update = collectPersonalUpdate({ update_id: ++id, callback_query: { id: "tap",
       data: "personal:" + action, from: { id: userId }, message: { message_id: 77, chat: { type: "private", id: userId } } } });
     assert.ok(update);
     await enqueuePersonalUpdate(store, { ...update, acknowledged: true }, now);
-    await processPersonalInbox(store, await store.first("SELECT * FROM inbox WHERE update_id=?", id), new Date(now));
-    await deliverUser(store, client, userId, { now: new Date(now) });
+    await processPersonalInbox(store, await store.first("SELECT * FROM inbox WHERE update_id=?", id), new Date(now), { widgetEnabled });
+    await deliverUser(store, client, userId, { now: new Date(now), widgetEnabled });
   };
   await tap(200, "widget:today");
   assert.equal(calls.length, 0);
+  await tap(100, "widget:today", false);
+  assert.equal(calls.at(-1).method, "editMessageText");
+  assert.match(calls.at(-1).body.text, /Telegram приостановил/u);
+  assert.ok(!hasWidget(calls.at(-1).body.reply_markup));
   await tap(100, "today");
   assert.equal(calls.at(-1).method, "editMessageText");
   await tap(100, "widget:today");
@@ -48,8 +54,9 @@ test("8-Сба can request the widget alongside text; definite rejection falls b
 
   error = Object.assign(new Error("Method unavailable"), { apiRejected: true, errorCode: 404 });
   await tap(100, "widget:today");
-  await deliverUser(store, client, 100, { now: new Date(now + 2000) });
+  await deliverUser(store, client, 100, { now: new Date(now + 2000), widgetEnabled: true });
   assert.deepEqual(calls.slice(-2).map(call => call.method), ["sendWidget", "sendMessage"]);
+  assert.match(calls.at(-1).body.text, /HTML-виджет недоступен/u);
   error = new Error("Connection closed");
   now += 2000;
   await tap(100, "widget:today");
