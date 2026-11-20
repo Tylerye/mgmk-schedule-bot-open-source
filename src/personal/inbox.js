@@ -1,6 +1,6 @@
 import { findGroups } from "./catalog.js";
 import { screenHash, isTimetableMessage } from './screen-state.js';
-import { t, menu, button, supportKeyboard, settingsKeyboard, groupsKeyboard, initialDates, selectedDate, renderPersonal, informationText, informationKeyboard } from "./view.js";
+import { t, menu, button, supportKeyboard, settingsKeyboard, groupsKeyboard, initialDates, selectedDate, renderPersonal, informationText, informationKeyboard, widgetGroup, widgetLabel } from "./view.js";
 
 export { collectPersonalUpdate } from "./update.js";
 
@@ -115,6 +115,21 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     else if (action === "diagnostics") {
       // Owner-only route is also checked by the Worker. Aggregates, no users.
       jobs.push(job(user, "diagnostics", String(row.update_id), { priority: 0, payload: { manual: true } }));
+    } else if (action === "widget" || action.startsWith("widget:")) {
+      if (user.group_id === widgetGroup) {
+        const w = t(user);
+        if (action === "widget") {
+          reply(widgetLabel(user), { inline_keyboard: [
+            [button(w.today, "widget:today"), button(w.tomorrow, "widget:tomorrow")],
+            [button(w.next, "widget:next")], [button(w.back, "menu")],
+          ] });
+        } else {
+          const target = action.slice("widget:".length);
+          const schedules = await store.schedules(widgetGroup);
+          const date = /^\d{4}-\d{2}-\d{2}$/u.test(target) ? target : selectedDate(schedules, target, now);
+          replies.push({ widgetDate: date, widgetSchedule: schedules.find(schedule => schedule.date === date) ?? null, editId: null });
+        }
+      }
     } else if (action.startsWith("view:")) {
       const [, date, mode] = action.split(":");
       const card = user.group_id && await store.card(user, date);
@@ -122,16 +137,19 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
         jobs.push(["UPDATE cards SET mode=? WHERE user_id=? AND group_id=? AND date=?", mode, user.user_id, user.group_id, date]);
         jobs.push(job(user, "card", date, { priority: 0, payload: { manual: true, history: true } }));
       }
-    } else if (["today", "tomorrow", "next", "schedule"].includes(action) || action.startsWith("preview:")) {
+    } else if (["today", "tomorrow", "next", "schedule"].includes(action) || action.startsWith("preview:") || action.startsWith("widget-text:")) {
       if (!user.group_id) reply(t(user).choose, groupsKeyboard(await groups(), user));
       else {
+        const fromWidget = action.startsWith("widget-text:");
+        if (fromWidget) action = `preview:${action.slice("widget-text:".length)}:full`;
         const schedules = await store.schedules(user.group_id);
         const date = action.startsWith("preview:") ? action.split(":")[1] : selectedDate(schedules, action, now);
-        if (!schedules.some(s => s.date === date)) reply(t(user).missing);
+        if (!schedules.some(s => s.date === date)) reply(t(user).missing, menu(user), fromWidget ? null : update.messageId);
         else {
           const rendered = renderPersonal(schedules.find(s => s.date === date), user, { now, mode: action.startsWith("preview:") ? action.split(":")[2] : "compact" });
           const keyboard = structuredClone(rendered.keyboard);
           for (const row of keyboard.inline_keyboard) for (const b of row) b.callback_data = b.callback_data.replace('personal:view:', 'personal:preview:');
+          if (user.group_id === widgetGroup) keyboard.inline_keyboard.splice(-1, 0, [button(widgetLabel(user), `widget:${date}`)]);
           // A preview is one navigable screen, independent of automatic cards.
           // Paging needs no extra sends, receipts or persisted message IDs.
           const page = Math.max(0, Math.min(Number(action.split(":")[3]) || 0, rendered.parts.length - 1));
@@ -142,7 +160,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
             if (page + 1 < rendered.parts.length) pages.push(button("▶️", `preview:${date}:${mode}:${page + 1}`));
             keyboard.inline_keyboard.unshift(pages);
           }
-          reply(rendered.parts[page], keyboard);
+          reply(rendered.parts[page], keyboard, fromWidget ? null : update.messageId);
         }
       }
     } else reply(t(user).menu);

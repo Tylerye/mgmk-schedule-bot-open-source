@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
-import { renderPersonal, t, subjectChanges, choosePersonalPin, nextRenderAt, nextPersonalPinAt, noticeParts, supportDetailsText } from "./view.js";
+import { renderPersonal, t, button, subjectChanges, choosePersonalPin, nextRenderAt, nextPersonalPinAt, noticeParts, supportDetailsText, widgetGroup } from "./view.js";
+import { buildScheduleWidget } from "./widget.js";
+import { escapeHtml } from "../schedule/format.js";
 import { manualJobsOnly } from './quota.js';
 import { backgroundPolicy } from '../background-policy.js';
 import { isTimetableMessage, screenHash as hashScreen } from './screen-state.js';
@@ -10,13 +12,14 @@ const digest = value => createHash("sha256").update(JSON.stringify(value)).diges
 // first. A process dying between intent and receipt leaves it uncertain.
 export async function telegramOperation(store, client, user, key, method, body, now = Date.now(), { queuedEdit = false, clock } = {}) {
   const id = `${user.user_id}:${key}`;
+  const sendsMessage = method === "sendMessage" || method === "sendWidget";
   // For queued cards and manual screens the job is already durable intent.
   // An interrupted edit repeats on the same message under the user lock;
   // completion (and card/screen hash) is the receipt. Sends still need a journal.
   const journal = !(queuedEdit && method === 'editMessageText');
   const old = journal ? await store.first("SELECT * FROM operations WHERE id=?", id) : null;
   if (old?.status === "succeeded") return { done: true, result: JSON.parse(old.result) };
-  if (old?.status === "uncertain" || (old?.status === "started" && method === "sendMessage")) {
+  if (old?.status === "uncertain" || (old?.status === "started" && sendsMessage)) {
     await store.run("UPDATE operations SET status='uncertain' WHERE id=?", id);
     return { uncertain: true };
   }
@@ -42,8 +45,9 @@ export async function telegramOperation(store, client, user, key, method, body, 
   ]);
   try {
     const result = await client.call(method, body);
-    const stable = method === "sendMessage" ? { message_id: result?.message_id, content_hash: digest([body.text, body.reply_markup ?? { inline_keyboard: [] }]) } : true;
-    if (method === "sendMessage" && !Number.isSafeInteger(stable.message_id)) throw new Error("Missing Telegram receipt");
+    const stable = sendsMessage ? { message_id: result?.message_id } : true;
+    if (sendsMessage && !Number.isSafeInteger(stable.message_id)) throw new Error("Missing Telegram receipt");
+    if (method === "sendMessage") stable.content_hash = digest([body.text, body.reply_markup ?? { inline_keyboard: [] }]);
     if (journal) await store.run("UPDATE operations SET status='succeeded',result=? WHERE id=?", JSON.stringify(stable), id);
     return { done: true, result: stable };
   } catch (error) {
@@ -51,7 +55,7 @@ export async function telegramOperation(store, client, user, key, method, body, 
       if (journal) await store.run("UPDATE operations SET status='succeeded',result='true' WHERE id=?", id);
       return { done: true, result: true };
     }
-    const ambiguous = method === "sendMessage" && !error.apiRejected;
+    const ambiguous = sendsMessage && !error.apiRejected;
     if (ambiguous) {
       await store.run("UPDATE operations SET status='uncertain' WHERE id=?", id);
       return { uncertain: true };
@@ -149,6 +153,25 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       const target = { chat_id: id, message_id: payload.messageId };
       const result = await op("rating-response:" + job.date, payload.remove ? "deleteMessage" : "editMessageText",
         payload.remove ? target : { ...sendBody(payload.text, payload.keyboard), ...target });
+      if (await applyOutcome(store, job, result)) await finishJob(store, job);
+    } else if (job.kind === "reply" && payload.widgetDate) {
+      if (user.group_id !== widgetGroup) { await finishJob(store, job, "cancelled"); return; }
+      const schedule = payload.widgetSchedule;
+      const w = t(user);
+      const textKeyboard = { inline_keyboard: [[button(w.schedule, `widget-text:${payload.widgetDate}`)]] };
+      const key = `schedule-widget:${job.date}:${job.revision}`;
+      const widget = schedule && buildScheduleWidget(schedule, user);
+      // Telegram enforces the compressed limit. A definite rejection uses
+      // the text path below, so the Worker does not need to compress the HTML.
+      if (widget && new TextEncoder().encode(widget.html).byteLength <= 32768) {
+        const result = await op(key, "sendWidget", { chat_id: id, html: widget.html, caption: widget.caption,
+          disable_notification: true, reply_markup: textKeyboard });
+        if (!result.failed) {
+          if (await applyOutcome(store, job, result)) await finishJob(store, job);
+          return;
+        }
+      }
+      const result = await op(key + ":text", "sendMessage", sendBody(widget ? escapeHtml(widget.caption) : w.missing, schedule ? textKeyboard : undefined));
       if (await applyOutcome(store, job, result)) await finishJob(store, job);
     } else if (job.kind === "reply" || job.kind === "alert" || job.kind === "diagnostics") {
       if (job.kind === "alert" && payload.scheduleHash) {
@@ -391,7 +414,7 @@ export async function deliveryHealth(store, now = new Date()) {
 export async function diagnosticText(store, now = new Date(), delivery = null) {
   delivery ??= await deliveryHealth(store, now);
   const queue = await store.first("SELECT COUNT(*) count,MIN(due) oldest FROM jobs WHERE status='pending'");
-  const uncertain = await store.first("SELECT COUNT(*) count FROM operations WHERE status='uncertain' OR (status='started' AND method='sendMessage')");
+  const uncertain = await store.first("SELECT COUNT(*) count FROM operations WHERE status='uncertain' OR (status='started' AND method IN ('sendMessage','sendWidget'))");
   const failed = await store.first("SELECT COUNT(*) count FROM jobs WHERE status='failed'");
   const source = await store.setting("source-error", null);
   const budget = await store.first("SELECT * FROM budgets WHERE day=?", now.toISOString().slice(0, 10));

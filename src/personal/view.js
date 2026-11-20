@@ -46,8 +46,11 @@ export const t = user => words[user?.language === "en" ? "en" : "ru"];
 const cohortRenders = new Map();
 const icons = {feedback:'💬',privacy:'ℹ️',schedule:'📚',today:'📅',tomorrow:'🗓',next:'⏭',settings:'⚙️',help:'💡',support:'💛',group:'👥',groups:'👥',language:'🌐',lang:'🌐',back:'◀️',menu:'🏠',sound:'🔊',changes:'🔔',auto_pin:'📌',pin:'📌',paused:'⏸',donate:'💛',later:'👌'};
 export const button = (text, action) => ({ text: (icons[action.split(':')[0]] ? icons[action.split(':')[0]]+' ' : action.startsWith('toggle:') ? (icons[action.split(':')[1]]??'')+' ' : '')+text, callback_data: `personal:${action}` });
+export const widgetGroup = "8СА";
+export const widgetLabel = user => user.language === "en" ? "Day by lesson · HTML" : "День по урокам · HTML";
 export const menu = user => ({ inline_keyboard: [
   [button(t(user).schedule, "schedule")], [button(t(user).today, "today"), button(t(user).tomorrow, "tomorrow")],
+  ...(user.group_id === widgetGroup ? [[button(widgetLabel(user), "widget")]] : []),
   [button(t(user).next, "next"), button(t(user).settings, "settings")], [button(t(user).help, "help"), button(t(user).support, "support")],
   [button(t(user).feedback, "feedback"), button(t(user).privacy, "privacy")],
 ] });
