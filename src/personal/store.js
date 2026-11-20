@@ -79,19 +79,19 @@ export class PersonalStore {
   async accountIdleTick(now) {
     const day = now.toISOString().slice(0, 10), cached = stoppedDays.get(this.db);
     if (cached?.day === day && cached.lane === 'interactive' && cached.until > now.getTime()) return false;
-    // Only point lookups or LIMIT-1 index probes. Any pending job, staged
-    // dataset or source error falls back to the full router (including recovery).
+    // The ready index orders pending jobs by priority before due. Bound this
+    // probe and use the full router if the sample cannot cover the whole queue.
     // Match the normal router admission headroom, even for the last idle tick.
     const estimate = idleReadEstimate.get(this.db) ?? 8;
     const result = await this.run("UPDATE budgets SET requests=requests+2,rows_read=rows_read+?,rows_written=rows_written+2"
       + " WHERE day=? AND requests+2<22000 AND rows_read+2000<800000 AND rows_written+20<?"
       + " AND NOT EXISTS(SELECT 1 FROM inbox WHERE status='pending')"
-      + " AND NOT EXISTS(SELECT 1 FROM jobs WHERE status='pending')"
+      + " AND NOT EXISTS(SELECT count(*) FROM (SELECT due FROM jobs WHERE status='pending' LIMIT 17) HAVING count(*)>16 OR min(due)<=?)"
       + " AND NOT EXISTS(SELECT 1 FROM fanout WHERE status='pending')"
       + " AND NOT EXISTS(SELECT 1 FROM users WHERE paused=0 AND blocked=0 AND next_due<=?)"
       + " AND NOT EXISTS(SELECT 1 FROM datasets WHERE status='staging')"
       + " AND NOT EXISTS(SELECT 1 FROM settings WHERE key='source-error' AND value<>'null')",
-      estimate, day, this.quota.background, now.getTime());
+      estimate, day, this.quota.background, now.getTime(), now.getTime());
     if (!result.meta.changes) return false;
     const measured = this.read + 1;
     if (estimate !== measured || this.written !== 1) {

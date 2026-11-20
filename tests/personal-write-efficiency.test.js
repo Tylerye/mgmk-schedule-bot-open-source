@@ -9,6 +9,21 @@ import { renderPersonal, nextRenderAt, nextPersonalPinAt } from '../src/personal
 
 const local = (time, day='2026-11-12') => new Date(`${day}T${time}:00+03:00`);
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+
+test('idle ticks take the cheap path until the first pending job is due', async t => {
+  const f = await personalFixture();
+  t.after(() => f.close());
+  const now = local('08:00'), due = local('08:05');
+  await f.store.run('INSERT INTO budgets(day) VALUES(?)', now.toISOString().slice(0, 10));
+  await f.store.run('INSERT INTO users(user_id) VALUES(100)');
+  await f.store.enqueue(await f.store.user(100), 'reply', 'screen', { due: +due });
+  assert.equal(await new PersonalStore(f.db).accountIdleTick(now), true);
+  assert.equal((await f.store.first("SELECT status FROM jobs WHERE kind='reply'")).status, 'pending');
+  assert.equal(await new PersonalStore(f.db).accountIdleTick(due), false);
+  const user = await f.store.user(100);
+  await f.store.batch(Array.from({ length: 16 }, (_, i) => f.store.jobStatement(user, 'card', String(i), { due: +due })));
+  assert.equal(await new PersonalStore(f.db).accountIdleTick(now), false);
+});
 async function fixture(t, { cards=true }={}) {
   const f=await personalFixture();t.after(()=>f.close());
   const s=await sampleSchedule(), tomorrow=await sampleSchedule('8Са','2026-11-13');
