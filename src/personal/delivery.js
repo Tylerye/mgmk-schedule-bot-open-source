@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { renderPersonal, t, button, subjectChanges, choosePersonalPin, nextRenderAt, nextPersonalPinAt, noticeParts, supportDetailsText, widgetGroup } from "./view.js";
 import { buildScheduleWidget } from "./widget.js";
+import { lessonDetailsChanges } from "./lesson-summary.js";
 import { escapeHtml } from "../schedule/format.js";
 import { manualJobsOnly } from './quota.js';
 import { backgroundPolicy } from '../background-policy.js';
@@ -226,7 +227,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
         // the old ID in the send key so a crash/timeout cannot duplicate it.
         const card = cards.find(c => c.date === desired.date);
         const parts = JSON.parse(card.parts);
-        parts[0] = { id: null, hash: null, replacementFor: desired.messageId };
+        parts[0] = { ...parts[0], id: null, hash: null, replacementFor: desired.messageId };
         await store.batch([
           ["UPDATE cards SET parts=? WHERE user_id=? AND group_id=? AND date=?", JSON.stringify(parts), id, user.group_id, desired.date],
           store.jobStatement(user, "card", desired.date, { priority: 0, due: now.getTime(), payload: payload.manual ? { manual: true } : {} }),
@@ -249,7 +250,8 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       const schedule = schedules.find(s => s.date === job.date);
       if (!schedule) { await finishJob(store, job, "cancelled"); return; }
       const card = await store.card(user, job.date) ?? { parts: [], mode: "compact", schedule: null };
-      const rendered = renderPersonal(schedule, user, { mode: card.mode, now });
+      const lessonChanges = lessonDetailsChanges(schedule, card);
+      const rendered = renderPersonal(schedule, user, { mode: card.mode, now, lessonChanges });
       const parts = [...card.parts];
       const count = Math.max(parts.length, rendered.parts.length);
       let changed = false;
@@ -271,12 +273,13 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
           : `edit-card:${user.epoch}:${job.revision}:${user.group_id}:${job.date}:${index}:${parts[index].id}:${hash}`;
         const result = await op(key, method, body);
         if (result.failed && result.replaceable && parts[index]?.id) {
-          parts[index]={id:null,hash:null,replacementFor:parts[index].id};
+          parts[index]={...parts[index],id:null,hash:null,replacementFor:parts[index].id};
           await store.run("UPDATE cards SET parts=? WHERE user_id=? AND group_id=? AND date=?", JSON.stringify(parts),id,user.group_id,job.date);
           return;
         }
         if (await applyOutcome(store, job, result)) {
-          parts[index] = { id: parts[index]?.id ?? result.result.message_id, hash: method === "sendMessage" ? result.result.content_hash : hash };
+          const metadata = index === 0 && lessonChanges ? { lessonChanges } : {};
+          parts[index] = { ...metadata, id: parts[index]?.id ?? result.result.message_id, hash: method === "sendMessage" ? result.result.content_hash : hash };
           if (parts[index].hash !== hash) {
             // A recovered receipt may contain an older render. Keep its ID and
             // let the next lane edit it before completing schedule metadata.
@@ -291,6 +294,11 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
         } else return;
       }
       const changes = subjectChanges(card.schedule, schedule, user.language);
+      if (parts[0]?.lessonChanges !== lessonChanges) {
+        if (lessonChanges) parts[0].lessonChanges = lessonChanges;
+        else delete parts[0].lessonChanges;
+        changed = true;
+      }
       const statements = [];
       const serialized = JSON.stringify(schedule);
       if (changed || card.schedule_hash !== schedule.hash || card.schedule_payload !== serialized) {
@@ -342,7 +350,7 @@ async function editDueCard(store, user, candidate, next, date, { client, clock, 
   const statements = [];
   let expectedParts = pending;
   if (result.done || result.replaceable) {
-    const parts = result.done ? [{ ...part, hash }] : [{ id: null, hash: null, replacementFor: part.id }];
+    const parts = result.done ? [{ ...part, hash }] : [{ ...part, id: null, hash: null, replacementFor: part.id }];
     expectedParts = JSON.stringify(parts);
     statements.push([update, expectedParts, id, group, day, pending, ...args]);
   }
@@ -371,7 +379,7 @@ async function enqueueDueLocked(store, fresh, date, direct) {
     const card = cards.find(c => c.date === schedule.date);
     // New publications are queued by durable fanout, never by a clock tick.
     if (!card) continue;
-    const rendered = renderPersonal(schedule, fresh, { mode: card.mode, now: date });
+    const rendered = renderPersonal(schedule, fresh, { mode: card.mode, now: date, lessonChanges: lessonDetailsChanges(schedule, card) });
     const count = Math.max(card.parts.length, rendered.parts.length);
     if (!Array.from({ length: count }, (_, i) => card.parts[i]?.hash === digest([rendered.parts[i] ?? t(fresh).emptyPart, i ? { inline_keyboard: [] } : rendered.keyboard])).every(Boolean)) {
       const pending = await store.first("SELECT 1 FROM jobs WHERE id=? AND status='pending' AND epoch=?", `${fresh.user_id}:card:${schedule.date}`, fresh.epoch);

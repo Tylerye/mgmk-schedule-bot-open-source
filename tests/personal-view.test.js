@@ -37,7 +37,7 @@ test("RU/EN labels preserve PDF names, linked subgroups and notes; classes conti
 });
 
 test("long cards split without losing source text or breaking HTML", async () => {
-  const schedule = await sampleSchedule();
+  const schedule = await sampleSchedule("8ТС");
   const text = "<&>".repeat(800);
   schedule.timeline[0].variants = [{ subject: text, room: "1", teacher: "Преподаватель" }];
   schedule.hash = "test-long-card";

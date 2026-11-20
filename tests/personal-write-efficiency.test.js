@@ -142,14 +142,38 @@ test('pin deadline is independent, switches once at 16:30, remains monotonic at 
   assert.equal((await f.store.user(100)).pin_message_id,98);
 });
 
-test('visible deadlines omit starts and full-view breaks but retain coalescing and midnight',async()=>{
-  const s=await sampleSchedule();
+test('only the pilot includes starts in full-view deadlines',async()=>{
+  const s=await sampleSchedule('8ТС');
   assert.equal(nextRenderAt(s,local('08:16')),local('09:00').getTime());
   const custom={...s,timeline:[{type:'break',start:'08:15',end:'08:19'},{...s.timeline.find(e=>e.type==='lesson'),start:'08:20',end:'08:31'}]};
   assert.equal(nextRenderAt(custom,local('08:16')),local('08:21').getTime());
   assert.equal(nextRenderAt(custom,local('08:16'),{mode:'full'}),local('08:33').getTime());
+  assert.equal(nextRenderAt({...custom,canonicalGroup:'8СА'},local('08:16'),{mode:'full'}),local('08:21').getTime());
   custom.timeline[1].end=null;
   assert.equal(nextRenderAt(custom,local('18:00')),local('00:00','2026-11-13').getTime());
+});
+
+test('8-Сба shows current and next lessons and retains PDF details across clock edits on the same card', async t => {
+  const f = await fixture(t);
+  const revised = structuredClone(f.s);
+  revised.hash = 'e'.repeat(64);
+  const lesson = revised.timeline.find(event => event.type === 'lesson');
+  lesson.variants[0].room = '214';
+  revised.lessons.find(item => item.number === lesson.number).variants[0].room = '214';
+  lesson.end = '09:01';
+  await installSchedules(f.store, [revised], { id: 'b'.repeat(64), generation: 2 });
+  await f.store.enqueue(f.user, 'card', revised.date, { due: local('08:50').getTime() });
+  await drain(f, local('08:50'));
+  const edit = f.calls.find(call => call.method === 'editMessageText' && call.body.message_id === 88);
+  assert.match(edit.body.text, /Сейчас · до 09:01/u);
+  assert.match(edit.body.text, /Дальше · .*ФИЗИКА/u);
+  assert.match(edit.body.text, /Кабинет 245 → 214/u);
+  const card = await f.store.card(f.user, revised.date);
+  assert.ok(card.parts[0].lessonChanges[0].time);
+  const updated = renderPersonal(revised, f.user, { now: local('09:03'), lessonChanges: card.parts[0].lessonChanges });
+  assert.doesNotMatch(updated.parts[0], /245 → 214/u);
+  assert.ok(f.calls.every(call => call.method !== 'sendMessage'));
+  assert.doesNotMatch(renderPersonal({ ...revised, canonicalGroup: '8ТС' }, f.user, { now: local('08:50') }).parts[0], /Сейчас ·|Дальше ·/u);
 });
 
 for(const error of ['429','403','ambiguous']) test(`card delivery preserves durable behavior for ${error}`,async t=>{

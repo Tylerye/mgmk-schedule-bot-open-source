@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { dateInTimezone, timeInTimezone, addDays } from "../dates.js";
 import { escapeHtml, dateTitle } from "../schedule/format.js";
 import { scheduleViewTimeline } from "../schedule/view-timeline.js";
+import { hasLessonSummary, lessonSummary } from "./lesson-summary.js";
 
 // Public contact only, never used to grant access to the bot
 export const AUTHOR_USERNAME = "your_username";
@@ -150,16 +151,28 @@ export function noticeParts(title, lines) {
   if (body) parts.push(`<b>${escapeHtml(title)}</b>\n${body}`);
   return parts;
 }
-export function renderPersonal(schedule, user, { mode = "compact", now = new Date() } = {}) {
+export function renderPersonal(schedule, user, { mode = "compact", now = new Date(), lessonChanges } = {}) {
   const w = t(user), today = dateInTimezone(now, "Europe/Minsk"), time = timeInTimezone(now, "Europe/Minsk");
   const timeline = scheduleViewTimeline(schedule);
   const ended = e => schedule.date < today || (schedule.date === today && e.end && e.end <= time);
-  const cacheKey = JSON.stringify([schedule.hash, schedule.displayGroup, user.language === "en" ? "en" : "ru", mode, timeline.map(ended)]);
+  const summary = hasLessonSummary(schedule) && schedule.date === today ? lessonSummary(timeline, time, user.language === "en") : [];
+  const changes = lessonChanges?.filter(change => schedule.date >= today && !timeline.some(e => e.type === "lesson" && e.number === change.number && ended(e)));
+  const cacheKey = JSON.stringify([schedule.hash, schedule.displayGroup, user.language === "en" ? "en" : "ru", mode, timeline.map(ended), summary, changes]);
   if (cohortRenders.has(cacheKey)) return cohortRenders.get(cacheKey);
   const day = new Date(`${schedule.date}T12:00:00Z`);
   const dateLabel = user.language === "en" ? `${["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][day.getUTCDay()]}, ${day.getUTCDate()} ${["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][day.getUTCMonth()]}` : dateTitle(schedule.date);
   const heading = `<b>📚 ${w.schedule} - ${escapeHtml(schedule.displayGroup)}</b>\n📅 ${dateLabel}`;
-  const lines = [];
+  const lines = summary.map(line => {
+    const chars = Array.from(line);
+    return `<b>${escapeHtml(chars.length > 150 ? chars.slice(0, 149).join("") + "…" : line)}</b>`;
+  });
+  if (changes?.length) {
+    lines.push("", `<b>${w.changed}</b>`);
+    for (const { number, room, time } of changes) {
+      const details = [room && `${w.room} ${room.join(" → ")}`, time && time.join(" → ")].filter(Boolean);
+      lines.push(...textLines(`${number} ${w.lesson} · ${details.join(" · ")}`));
+    }
+  }
   let visible = 0;
   for (const e of timeline) {
     const completed = ended(e);
@@ -199,12 +212,18 @@ export function renderPersonal(schedule, user, { mode = "compact", now = new Dat
 }
 
 export function nextRenderAt(schedule, now = new Date(), { mode = "compact" } = {}) {
-  // Only completion changes this view. Full mode marks completed lessons but
-  // leaves non-lesson rows unchanged. Starts and pin deadlines are independent.
+  // The pilot also renders lesson starts. Pin deadlines remain independent.
   const timeline = scheduleViewTimeline(schedule);
   const boundaries = timeline.filter(e => e.end && (mode !== "full" || e.type === "lesson"))
     .map(e => Date.parse(`${schedule.date}T${e.end}:00+03:00`)).filter(ms => ms > now.getTime());
   const midnight = Date.parse(`${addDays(schedule.date, 1)}T00:00:00+03:00`);
+  if (hasLessonSummary(schedule)) {
+    const lessons = timeline.filter(e => e.type === "lesson" && e.start && e.end);
+    if (lessons.length) {
+      boundaries.push(...[`00:00`, ...lessons.map(e => e.start)]
+        .map(time => Date.parse(`${schedule.date}T${time}:00+03:00`)).filter(ms => ms > now.getTime()));
+    }
+  }
   if (midnight > now.getTime() && timeline.some(e => !e.end && (mode !== "full" || e.type === "lesson"))) boundaries.push(midnight);
   // Coalesce deadlines into three-minute windows.
   return boundaries.length ? Math.ceil(Math.min(...boundaries) / 180000) * 180000 : null;

@@ -1,5 +1,6 @@
 import { findGroups } from "./catalog.js";
 import { screenHash, isTimetableMessage } from './screen-state.js';
+import { hasLessonSummary, lessonDetailsChanges } from "./lesson-summary.js";
 import { t, menu, button, supportKeyboard, settingsKeyboard, groupsKeyboard, initialDates, selectedDate, renderPersonal, informationText, informationKeyboard, widgetGroup, widgetLabel } from "./view.js";
 
 export { collectPersonalUpdate } from "./update.js";
@@ -151,7 +152,10 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
         const date = action.startsWith("preview:") ? action.split(":")[1] : selectedDate(schedules, action, now);
         if (!schedules.some(s => s.date === date)) reply(t(user).missing, mainMenu(), fromWidget ? null : update.messageId);
         else {
-          const rendered = renderPersonal(schedules.find(s => s.date === date), user, { now, mode: action.startsWith("preview:") ? action.split(":")[2] : "compact" });
+          const schedule = schedules.find(s => s.date === date);
+          const card = hasLessonSummary(schedule) ? await store.card(user, date) : null;
+          const rendered = renderPersonal(schedule, user, { now, lessonChanges: lessonDetailsChanges(schedule, card),
+            mode: action.startsWith("preview:") ? action.split(":")[2] : "compact" });
           const keyboard = structuredClone(rendered.keyboard);
           for (const row of keyboard.inline_keyboard) for (const b of row) b.callback_data = b.callback_data.replace('personal:view:', 'personal:preview:');
           if (widgetEnabled && user.group_id === widgetGroup) keyboard.inline_keyboard.splice(-1, 0, [button(widgetLabel(user), `widget:${date}`)]);
@@ -185,7 +189,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
         if (!verifyMessageId && !original.blocked && original.next_due > now.getTime()) {
           const card = await store.card(user, s.date);
           if (card?.schedule_hash === s.hash && card.schedule_payload === JSON.stringify(s)) {
-            const rendered = renderPersonal(s, user, { now, mode: card.mode });
+            const rendered = renderPersonal(s, user, { now, mode: card.mode, lessonChanges: lessonDetailsChanges(s, card) });
             const count = Math.max(rendered.parts.length, card.parts.length);
             const current = Array.from({ length: count }, (_, index) => card.parts[index]?.id
               && card.parts[index].hash === screenHash(rendered.parts[index] ?? t(user).emptyPart, index ? undefined : rendered.keyboard));
