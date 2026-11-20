@@ -61,6 +61,7 @@ async function fixture() {
     async lane(lane, { clearAdmission = true } = {}) {
       const pending = [];
       if (clearAdmission) await db.prepare("DELETE FROM runtime_locks WHERE name LIKE 'maintenance-admission:%'").run();
+      if (clearAdmission && lane === 'live') await db.prepare("UPDATE runtime_locks SET owner='' WHERE name='state' AND locked_until=0").run();
       const response = await worker.fetch(new Request(`https://worker.audit-fixture.net/internal/maintenance/${lane}`, {
         method: "POST", headers: await maintenanceHeaders({WORKER_PUBLIC_ORIGIN:"https://worker.audit-fixture.net",MAINTENANCE_SIGNING_SECRET:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"},`/internal/maintenance/${lane}`),
       }), { ...this.env, WORKER_PUBLIC_ORIGIN:"https://worker.audit-fixture.net", MAINTENANCE_SIGNING_SECRET:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", PARSER_SHARED_SECRET: "test-secret" }, { waitUntil(p) { pending.push(p); } });

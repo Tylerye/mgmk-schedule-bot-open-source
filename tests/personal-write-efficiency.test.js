@@ -258,9 +258,63 @@ test('clock-driven delivery edits the existing card using one user lease', async
   await deliverUser(f.store, f.client, 100, { now: local('09:00'), catchUp: true });
   assert.deepEqual(f.calls.map(c => [c.method,c.body.message_id]), [['editMessageText',88]]);
   const job = await f.store.first("SELECT status FROM jobs WHERE kind='card' AND date=?",f.s.date);
-  assert.equal(job.status,'done');
+  assert.equal(job,null);
   assert.equal((await f.store.first("SELECT expires_at FROM locks WHERE user_id=100")).expires_at,0);
   assert.equal((await f.store.first('SELECT count(*) n FROM lease_writes')).n,1);
   assert.equal((await f.store.user(100)).pin_message_id,88);
   assert.equal((await f.store.card(f.user,f.tomorrow.date)).parts[0].id,98);
+});
+
+test('clock edit retains a durable retry deadline after Telegram 429', async t => {
+  const f = await fixture(t), now = local('09:00');
+  const client = { async call() { throw Object.assign(Error('limited'), { errorCode: 429, parameters: { retry_after: 33 } }); } };
+  await deliverUser(f.store, client, 100, { now, catchUp: true });
+  const job = await f.store.first("SELECT * FROM jobs WHERE status='pending'");
+  assert.equal(job.due, now.getTime() + 33000);
+  await deliverUser(f.store, f.client, 100, { now: local('09:01') });
+  assert.deepEqual(f.calls.map(c => c.body.message_id), [88]);
+});
+
+test('restart after a clock edit repeats only the original message and accepts not-modified', async t => {
+  const f = await fixture(t), now = local('09:00');
+  const client = { async call(method, body) {
+    assert.deepEqual([method, body.message_id], ['editMessageText', 88]);
+    f.sqlite.exec("CREATE TRIGGER interrupt_clock BEFORE UPDATE OF parts ON cards BEGIN SELECT RAISE(ABORT,'clock crash'); END");
+    return true;
+  } };
+  await assert.rejects(deliverUser(f.store, client, 100, { now, catchUp: true }), /clock crash/u);
+  assert.equal((await f.store.user(100)).next_due, now.getTime());
+  f.sqlite.exec("DROP TRIGGER interrupt_clock");
+  const recovered = { async call(method, body) {
+    assert.deepEqual([method, body.message_id], ['editMessageText', 88]);
+    throw Object.assign(Error('already edited'), {description:'message is not modified',errorCode:400,apiRejected:true});
+  } };
+  await deliverUser(new PersonalStore(f.db), recovered, 100, { now:local('09:01'), catchUp:true });
+  assert.ok((await f.store.card(f.user,f.s.date)).parts[0].hash);
+  assert.ok((await f.store.user(100)).next_due > now.getTime());
+  assert.equal(await f.store.first("SELECT 1 FROM jobs"), null);
+});
+
+test('missing clock-edit target recovers through a journalled replacement send', async t => {
+  const f = await fixture(t);
+  const client = { async call() { throw Object.assign(Error('missing'),{errorCode:400,apiRejected:true,description:'message to edit not found'}); } };
+  await deliverUser(f.store,client,100,{now:local('09:00'),catchUp:true});
+  assert.equal((await f.store.card(f.user,f.s.date)).parts[0].replacementFor,88);
+  await deliverUser(f.store,f.client,100,{now:local('09:01')});
+  assert.deepEqual(f.calls.map(c=>c.method),['sendMessage']);
+  assert.equal((await f.store.first("SELECT status FROM operations WHERE method='sendMessage'")).status,'succeeded');
+});
+
+test('publication during clock edit leaves the overdue card recoverable', async t => {
+  const f = await fixture(t), now = local('09:00');
+  const newer = { ...f.s, hash: 'f'.repeat(64) };
+  const client = { async call() {
+    await installSchedules(f.store, [newer], { id: 'd'.repeat(64), generation: 2 });
+    return true;
+  } };
+  await deliverUser(f.store, client, 100, { now, catchUp: true });
+  assert.equal((await f.store.user(100)).next_due, now.getTime());
+  assert.equal((await f.store.card(f.user, f.s.date)).parts[0].hash, null);
+  await deliverUser(f.store, f.client, 100, { now: local('09:01'), catchUp: true });
+  assert.equal((await f.store.card(f.user, f.s.date)).schedule_hash, newer.hash);
 });

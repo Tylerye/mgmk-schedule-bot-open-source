@@ -42,8 +42,14 @@ async function kick(env, { inbox = true, delivery = true, due = false, fanout = 
   // but allow more delivery-only waves after fanout/due work has finished.
   while (calls <= 44 && Date.now() < deadline) {
     let nextDue = null;
+    let dueAdvanced = false;
     if (fanout) { fanout = Boolean((await run('/fanout')).pending); delivery = true; }
-    if (due) { due = Boolean((await run('/tick/due')).pending); delivery = true; }
+    if (due) {
+      const wave = await run('/tick/due');
+      due = Boolean(wave.pending);
+      dueAdvanced = due && wave.advanced;
+      delivery = true;
+    }
     if (inbox) inbox = Boolean((await run("/tick/inbox")).pending);
     if (delivery) {
       const result = await run("/tick/delivery");
@@ -52,7 +58,8 @@ async function kick(env, { inbox = true, delivery = true, due = false, fanout = 
     if (!inbox && !delivery && !due && !fanout) break;
     // Inbox commands may have created delivery work in this wave.
     delivery = true;
-    await wait(nextDue === null ? 1100 : Math.max(100, Math.min(1100, nextDue - Date.now())));
+    if (nextDue !== null) await wait(Math.max(100, Math.min(1100, nextDue - Date.now())));
+    else if (!dueAdvanced) await wait(1100);
   }
 }
 
@@ -88,6 +95,13 @@ async function deliverInteractive(env, id) {
   }
 }
 
+async function processInboxRow(store, env, row, now) {
+  const acquired = await processPersonalInbox(store, row, now, { ownerId: env.ADMIN_USER_ID });
+  if (acquired?.earlier != null) return { ok:true, busy:true, earlier:acquired.earlier };
+  const delivery = acquired !== false && Boolean(await store.first("SELECT 1 FROM jobs WHERE user_id=? AND status='pending' AND json_extract(payload,'$.manual')=1 LIMIT 1", row.user_id));
+  return { ok: true, busy: acquired === false, delivery };
+}
+
 export default {
   async fetch(request, env, context) {
     if (!env.PERSONAL_SHARED_SECRET || request.headers.get("authorization") !== `Bearer ${env.PERSONAL_SHARED_SECRET}`) return json({ ok: false }, 403);
@@ -102,6 +116,8 @@ export default {
     const now = new Date();
     let started = false;
     try {
+      if (path === "/tick" && await store.accountIdleTick(now))
+        return json({ ok: true, inbox: 0, fanout: 0, due: 0, delivery: 0, recover: false });
       const budget = await store.budget(now, path === "/tick" ? 2 : 1, {
         service: path === "/health",
         router: ["/tick", "/tick/inbox", "/tick/delivery", "/tick/due", "/tick/fanout"].includes(path),
@@ -148,9 +164,15 @@ export default {
         const admitted = await enqueuePersonalUpdate(store, update);
         if (!admitted) return json({ ok: true, queued: false });
         if (!paused) {
-          // Process in a separate CPU lane before returning, then start the
-          // user's own delivery chain. Persisted inbox/jobs remain the fallback.
-          const processed = await internal(env, `/inbox/${update.update_id}`);
+          // A settings screen is bounded; heavier actions keep their own CPU lane.
+          let processed = update.action === 'settings' && update.acknowledged === true
+            ? await processInboxRow(store, env, { update_id: update.update_id, user_id: update.userId, payload: JSON.stringify(update) }, now)
+            : await internal(env, `/inbox/${update.update_id}`);
+          for (let i=0; processed.earlier != null && i<4; i++) {
+            const older = await internal(env, `/inbox/${processed.earlier}`);
+            if (older.busy || older.stopped) break;
+            processed = await internal(env, `/inbox/${update.update_id}`);
+          }
           if (!processed.busy && !processed.stopped && processed.delivery !== false)
             context.waitUntil(deliverInteractive(env, update.userId).catch(() => {}));
         }
@@ -195,9 +217,7 @@ export default {
       } else if (/^\/inbox\/\d+$/u.test(path)) {
         const row = await store.first("SELECT * FROM inbox WHERE update_id=? AND status='pending'", Number(path.split("/")[2]));
         if (row && pilotAllowed(env, row.user_id)) {
-          const acquired = await processPersonalInbox(store, row, now, { ownerId: env.ADMIN_USER_ID });
-          const delivery = acquired !== false && Boolean(await store.first("SELECT 1 FROM jobs WHERE user_id=? AND status='pending' AND json_extract(payload,'$.manual')=1 LIMIT 1", row.user_id));
-          return json({ ok: true, busy: acquired === false, delivery });
+          return json(await processInboxRow(store, env, row, now));
         }
       } else if (path === "/tick/fanout") {
         // One batch spans groups while fitting the existing D1 reservation.
@@ -209,7 +229,8 @@ export default {
       else if (path === "/tick/due") {
         const users = await store.all("SELECT user_id FROM users WHERE paused=0 AND blocked=0 AND next_due<=? ORDER BY next_due,user_id LIMIT 8", now.getTime());
         await runUserLanes(env, users, id => `/due/${id}`, now.getTime());
-        return json({ok:true,pending:Boolean(await store.first("SELECT 1 FROM users WHERE paused=0 AND blocked=0 AND next_due<=? LIMIT 1", now.getTime()))});
+        const next = await store.first("SELECT user_id FROM users WHERE paused=0 AND blocked=0 AND next_due<=? ORDER BY next_due,user_id LIMIT 1", now.getTime());
+        return json({ok:true,pending:Boolean(next),advanced:Boolean(next && users.length && next.user_id !== users[0].user_id)});
       } else if (/^\/due\/\d+$/u.test(path)) {
         const id = Number(path.split('/')[2]);
         if (budget.mode === 'normal' && pilotAllowed(env, id)) {

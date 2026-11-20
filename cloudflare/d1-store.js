@@ -89,7 +89,8 @@ export async function patchHealth(database, patch, { heartbeatKey, now = new Dat
 // Telegram work is bounded to 25 seconds. An interrupted invocation must not
 // stall more than the next minute tick; slow discovery has a separate lease.
 export async function withStateLock(database, task, { name = "state", leaseMs = name === "state" ? 60_000 : 180_000, interval = null } = {}) {
-  if (interval !== null && (!['source', 'teacher-source'].includes(name) || !Number.isSafeInteger(interval) || interval < 0)) throw new Error('Invalid maintenance interval');
+  const lane = name === 'state' ? 'live' : name.replace(/^teacher:/u, 'teacher-');
+  if (interval !== null && (!(['state', 'source', 'teacher-source'].includes(name) || name.startsWith('teacher:')) || !Number.isSafeInteger(interval) || interval < 0)) throw new Error('Invalid maintenance interval');
   const token = crypto.randomUUID();
   const owner = interval === null ? token : JSON.stringify({ token, interval });
   const now = Date.now();
@@ -104,7 +105,7 @@ export async function withStateLock(database, task, { name = "state", leaseMs = 
     + (interval === null ? '1' : 'NOT EXISTS(SELECT 1 FROM runtime_locks legacy WHERE legacy.name=? AND legacy.locked_until>=?)')
     + " ON CONFLICT(name) DO UPDATE SET owner=" + nextOwner + ",locked_until=excluded.locked_until WHERE runtime_locks.locked_until<=?"
     + (interval === null ? '' : " AND COALESCE(json_extract(" + saved + ",'$.interval'),-1)<?"),
-  ).bind(name, owner, now + leaseMs, ...(interval === null ? [] : [`maintenance-admission:${name}`, interval]), now, ...(interval === null ? [] : [interval])).run();
+  ).bind(name, owner, now + leaseMs, ...(interval === null ? [] : [`maintenance-admission:${lane}`, interval]), now, ...(interval === null ? [] : [interval])).run();
   if ((acquired.meta?.changes ?? 0) !== 1) return { acquired: false };
   try { return { acquired: true, value: await task() }; }
   finally {

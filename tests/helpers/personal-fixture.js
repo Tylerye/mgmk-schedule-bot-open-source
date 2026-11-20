@@ -8,7 +8,7 @@ import { dayKey } from "../../src/dates.js";
 export async function personalFixture() {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec(await readFile(new URL("../../personal/migrations/0001_personal.sql", import.meta.url), "utf8"));
-  for (const file of ["0002_security_limits.sql", "0003_security_accounting.sql"]) {
+  for (const file of ["0002_security_limits.sql", "0003_security_accounting.sql", "0004_job_retention_index.sql"]) {
     sqlite.exec(await readFile(new URL("../../personal/migrations/" + file, import.meta.url), "utf8"));
   }
   const db = { prepare(sql) {

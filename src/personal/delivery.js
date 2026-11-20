@@ -112,12 +112,14 @@ async function pinStatement(store, user, cards, now) {
 }
 
 export async function deliverUser(store, client, id, { now = new Date(), mode = "normal", ownerId, supportDetails, clock, catchUp = false } = {}) {
-  return store.lock(id, now.getTime(), async () => {
+  return store.lock(id, now.getTime(), async token => {
     const user = await store.user(id);
     if (!user || user.blocked) return;
     if (catchUp) {
       if (mode !== "normal" || user.paused || user.next_due === null || user.next_due > now.getTime()) return;
-      user.next_due = await enqueueDueLocked(store, user, now);
+      const due = await enqueueDueLocked(store, user, now, { client, clock, token });
+      if (due.handled) return;
+      user.next_due = due.next;
       // Preserve the worker's existing per-user delivery cooldown. The job
       // remains durable if another pass must deliver it after the cooldown.
       if (user.last_api_at > now.getTime() - 1050) return;
@@ -290,9 +292,57 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
   });
 }
 
-async function enqueueDueLocked(store, fresh, date) {
+// The overdue deadline survives a crash. Invalidate the old Telegram hash
+// before editing: a new publication could otherwise render the old text and
+// mistake an interrupted edit for an already-correct message.
+async function editDueCard(store, user, candidate, next, date, { client, clock, token }) {
+  const { card, rendered, hash } = candidate;
+  const id = user.user_id, group = user.group_id, day = card.date;
+  const original = JSON.stringify(card.parts);
+  const pending = JSON.stringify([{ ...card.parts[0], hash: null }]);
+  const guard = " AND EXISTS(SELECT 1 FROM locks WHERE user_id=? AND token=?)"
+    + " AND EXISTS(SELECT 1 FROM users WHERE user_id=? AND group_id=? AND epoch=? AND paused=0 AND blocked=0 AND next_due=?)"
+    + " AND EXISTS(SELECT 1 FROM active_versions a JOIN snapshots s ON a.dataset_id=s.dataset_id WHERE a.date=? AND s.group_id=? AND s.hash=?)";
+  const args = [id, token, id, group, user.epoch, user.next_due, day, group, card.schedule_hash];
+  const update = "UPDATE cards SET parts=? WHERE user_id=? AND group_id=? AND date=? AND parts=?" + guard;
+  const marked = await store.run(update + " AND NOT EXISTS(SELECT 1 FROM jobs WHERE user_id=? AND status='pending')"
+    + " AND NOT EXISTS(SELECT 1 FROM inbox WHERE user_id=? AND status='pending')",
+    pending, id, group, day, original, ...args, id, id);
+  if (!marked.meta.changes) return false;
+  const part = card.parts[0];
+  const result = await telegramOperation(store, client, user, "", "editMessageText", {
+    chat_id: id, message_id: part.id, text: rendered.parts[0], parse_mode: "HTML",
+    disable_web_page_preview: true, disable_notification: !user.sound, reply_markup: rendered.keyboard,
+  }, date.getTime(), { queuedEdit: true, clock });
+  if (result.blocked) return true; // telegramOperation already disabled the recipient.
+  const statements = [];
+  let expectedParts = pending;
+  if (result.done || result.replaceable) {
+    const parts = result.done ? [{ ...part, hash }] : [{ id: null, hash: null, replacementFor: part.id }];
+    expectedParts = JSON.stringify(parts);
+    statements.push([update, expectedParts, id, group, day, pending, ...args]);
+  }
+  const cardGuard = " AND EXISTS(SELECT 1 FROM cards WHERE user_id=? AND group_id=? AND date=? AND parts=?)";
+  const cardArgs = [id, group, day, expectedParts];
+  if (!result.done) {
+    // Recheck ownership in the same transaction as the fallback enqueue.
+    const job = store.jobStatement(user, 'card', day, { priority: 3, due: result.retryAt ?? date.getTime() });
+    job[0] = job[0].replace("VALUES(?,?,?,?,?,?,?,?)", "SELECT * FROM (VALUES(?,?,?,?,?,?,?,?)) WHERE 1=1" + guard + cardGuard)
+      + " WHERE jobs.status<>'pending'";
+    job.push(...args, ...cardArgs);
+    statements.push(job);
+    if (result.failed && !result.replaceable)
+      statements.push(["UPDATE jobs SET status='failed' WHERE id=? AND revision=(SELECT value FROM job_revision_sequence WHERE id=1)", job[1]]);
+  }
+  statements.push(["UPDATE users SET next_due=? WHERE user_id=?" + guard + cardGuard, next, id, ...args, ...cardArgs]);
+  await store.batch(statements);
+  return true;
+}
+
+async function enqueueDueLocked(store, fresh, date, direct) {
   const now = date.getTime(), schedules = await store.schedules(fresh.group_id), cards = await loadCards(store, fresh);
   const statements = [];
+  let candidate;
   for (const schedule of schedules) {
     const card = cards.find(c => c.date === schedule.date);
     // New publications are queued by durable fanout, never by a clock tick.
@@ -301,14 +351,21 @@ async function enqueueDueLocked(store, fresh, date) {
     const count = Math.max(card.parts.length, rendered.parts.length);
     if (!Array.from({ length: count }, (_, i) => card.parts[i]?.hash === digest([rendered.parts[i] ?? t(fresh).emptyPart, i ? { inline_keyboard: [] } : rendered.keyboard])).every(Boolean)) {
       const pending = await store.first("SELECT 1 FROM jobs WHERE id=? AND status='pending' AND epoch=?", `${fresh.user_id}:card:${schedule.date}`, fresh.epoch);
-      if (!pending) statements.push(store.jobStatement(fresh, "card", schedule.date, { priority: 3, due: now }));
+      if (!pending) {
+        statements.push(store.jobStatement(fresh, "card", schedule.date, { priority: 3, due: now }));
+        if (direct && count === 1 && card.parts[0]?.id && rendered.parts.length === 1
+          && card.schedule_hash === schedule.hash && card.schedule_payload === JSON.stringify(schedule))
+          candidate = { card, rendered, hash: digest([rendered.parts[0], rendered.keyboard]) };
+      }
     }
   }
   statements.push(...await pinStatement(store, fresh, cards, date));
   const next = nextDue(fresh, schedules, cards, date);
+  if (candidate && statements.length === 1 && fresh.last_api_at <= now - 1050
+    && await editDueCard(store, fresh, candidate, next, date, direct)) return { handled: true };
   if (fresh.next_due !== next) statements.push(dueStatement(fresh, next));
   await store.batch(statements);
-  return next;
+  return { next };
 }
 
 export async function enqueueDue(store, now = Date.now(), userId = null) {

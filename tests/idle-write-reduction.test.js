@@ -90,7 +90,7 @@ test('workerd repeat tap has no delivery invocation and fresh preferences still 
     assert.ok(await db.prepare("SELECT 1 FROM settings WHERE key='screen-v1:200:77'").first());
     const revision=(await db.prepare('SELECT value FROM job_revision_sequence').first()).value;
     lanes.length=0;assert.equal((await post(2)).status,200);
-    assert.deepEqual(lanes,['/inbox/2']);assert.equal(calls.length,1);
+    assert.deepEqual(lanes,[]);assert.equal(calls.length,1);
     assert.equal((await db.prepare('SELECT value FROM job_revision_sequence').first()).value,revision);
     assert.equal((await db.prepare('SELECT status FROM inbox WHERE update_id=2').first()).status,'done');
     await db.prepare('UPDATE users SET sound=0 WHERE user_id=200').run();

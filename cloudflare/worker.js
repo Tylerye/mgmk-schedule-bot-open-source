@@ -428,13 +428,13 @@ async function handleMaintenance(request, env, pathname, context) {
     || (lane.startsWith("teacher-") && lane !== "teacher-source");
   if (!combinedSourceLease && !deferredAdmission && !await claim()) return json({ ok: true, duplicate: true });
   const task = lane === "teacher-source" ? pollTeacherSource(env, configFromEnv(env), createLogger(env.LOG_LEVEL || "info"), interval)
-    : lane.startsWith("teacher-") ? teacherMaintenance(env, configFromEnv(env), createLogger(env.LOG_LEVEL || "info"), lane.slice(8), new Date(), null, claim)
+    : lane.startsWith("teacher-") ? teacherMaintenance(env, configFromEnv(env), createLogger(env.LOG_LEVEL || "info"), lane.slice(8), new Date(), null, interval)
     : lane === "attention"
     ? attentionMaintenance(env, configFromEnv(env), createLogger(env.LOG_LEVEL || "info"), claim).then(async result => {
       if (result?.duplicate) return result;
       await patchHealth(env.DB, { lastAttentionSuccessAt: new Date().toISOString(), attentionError: null }, { heartbeatKey: "lastAttentionSuccessAt" });
     })
-    : scheduled(env, lane, combinedSourceLease ? interval : null, deferredAdmission ? claim : null);
+    : scheduled(env, lane, combinedSourceLease || lane === "live" ? interval : null, lane === "queues" ? claim : null);
   // Keep the claimed work alive if the caller disconnects. Never retry an
   // ambiguous dispatch inside the same tick; durable queues resume next minute.
   context.waitUntil(task.catch(() => {}));
@@ -484,7 +484,6 @@ async function scheduled(env, lane = "all", interval = null, admit = null) {
       return;
     }
   }
-  if (lane === "live" && admit && !await admit()) return { duplicate: true };
   const logger = createLogger(env.LOG_LEVEL || "info");
   const errors = [];
   let sourceHealth = {};
@@ -515,7 +514,8 @@ async function scheduled(env, lane = "all", interval = null, admit = null) {
       }
     }
     finally { await store.save(); }
-  }));
+  }, { interval: lane === "live" ? interval : null }));
+  if (lane === "live" && interval !== null && telegram && !telegram.acquired) return { duplicate: true };
   if (telegram && !telegram.acquired) logger.warn("reconcile_deferred", { reason: "state_lock_busy" });
   if (lane === "all") await phase("telegram_inbox", () => drainInbox(env, config, logger));
   }

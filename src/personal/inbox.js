@@ -17,9 +17,11 @@ export async function enqueuePersonalUpdate(store, update, now = Date.now()) {
 export async function processPersonalInbox(store, row, now = new Date(), { ownerId } = {}) {
   const update = JSON.parse(row.payload);
   const job = (user, kind, date, options = {}) => store.jobStatement(user, kind, date, { due: now.getTime(), ...options });
-  return store.lock(row.user_id, now.getTime(), async () => {
-    const fresh = await store.first("SELECT status FROM inbox WHERE update_id=?", row.update_id);
-    if (fresh?.status !== "pending") return;
+  let earlier = null;
+  const acquired = await store.lock(row.user_id, now.getTime(), async () => {
+    const first = await store.first("SELECT update_id FROM inbox WHERE user_id=? AND status='pending' AND update_id<=? ORDER BY update_id LIMIT 1",row.user_id,row.update_id);
+    if (!first) return;
+    if (first.update_id !== row.update_id) { earlier = first.update_id; return; }
     let user = await store.user(row.user_id);
     if (!user) {
       await store.run("INSERT OR IGNORE INTO users(user_id) VALUES(?)", row.user_id);
@@ -186,4 +188,5 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     await store.batch([...(changed.length ? [[`UPDATE users SET ${changed.map(k => `${k}=?`).join(",")} WHERE user_id=?`, ...changed.map(k => user[k]), user.user_id]] : []), ...jobs,
       ["UPDATE inbox SET status='done',payload='{}',completed_at=COALESCE(completed_at,unixepoch()*1000) WHERE update_id=?", row.update_id]]);
   });
+  return earlier === null ? acquired : { earlier };
 }

@@ -1,5 +1,6 @@
 import { personalQuota } from './quota.js';
 const stoppedDays = new WeakMap();
+const idleReadEstimate = new WeakMap();
 export const JOB_CONFLICT_UPDATE = "ON CONFLICT(id) DO UPDATE SET epoch=excluded.epoch,priority=CASE WHEN jobs.status='pending' AND jobs.epoch=excluded.epoch THEN MIN(jobs.priority,excluded.priority) ELSE excluded.priority END,"
   + "due=CASE WHEN jobs.status='pending' AND jobs.epoch=excluded.epoch THEN MIN(jobs.due,excluded.due) ELSE excluded.due END,"
   + "payload=excluded.payload,revision=excluded.revision,status='pending',completed_at=NULL";
@@ -28,7 +29,7 @@ export class PersonalStore {
         sql = sql.replace("priority,due,payload)", "priority,due,payload,revision)")
           .replace("VALUES(?,?,?,?,?,?,?,?)", "VALUES(?,?,?,?,?,?,?,?,(SELECT value-? FROM job_revision_sequence WHERE id=1))")
           .replace("revision=jobs.revision+1", "revision=excluded.revision");
-        args.push(--offset);
+        args.splice(8, 0, --offset);
       }
       batch.push(this.statement(sql, args));
     }
@@ -63,7 +64,7 @@ export class PersonalStore {
     const row = await this.first("INSERT INTO locks(user_id,token,expires_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET "
       + "token=excluded.token,expires_at=excluded.expires_at WHERE locks.expires_at<=? RETURNING token", id, token, now + 90000, now);
     if (row?.token !== token) return false;
-    try { await action(); return true; }
+    try { await action(token); return true; }
     finally { await this.run("UPDATE locks SET expires_at=0 WHERE user_id=? AND token=?", id, token); }
   }
   backgroundPaused(row) {
@@ -74,6 +75,31 @@ export class PersonalStore {
       : lane === 'background' ? [22000, 800000, this.quota.background]
       : lane === 'source' ? [26000, 900000, this.quota.source]
       : [27900, 948000, this.quota.written - 100];
+  }
+  async accountIdleTick(now) {
+    const day = now.toISOString().slice(0, 10), cached = stoppedDays.get(this.db);
+    if (cached?.day === day && cached.lane === 'interactive' && cached.until > now.getTime()) return false;
+    // Only point lookups or LIMIT-1 index probes. Any pending job, staged
+    // dataset or source error falls back to the full router (including recovery).
+    // Match the normal router admission headroom, even for the last idle tick.
+    const estimate = idleReadEstimate.get(this.db) ?? 8;
+    const result = await this.run("UPDATE budgets SET requests=requests+2,rows_read=rows_read+?,rows_written=rows_written+2"
+      + " WHERE day=? AND requests+2<22000 AND rows_read+2000<800000 AND rows_written+20<?"
+      + " AND NOT EXISTS(SELECT 1 FROM inbox WHERE status='pending')"
+      + " AND NOT EXISTS(SELECT 1 FROM jobs WHERE status='pending')"
+      + " AND NOT EXISTS(SELECT 1 FROM fanout WHERE status='pending')"
+      + " AND NOT EXISTS(SELECT 1 FROM users WHERE paused=0 AND blocked=0 AND next_due<=?)"
+      + " AND NOT EXISTS(SELECT 1 FROM datasets WHERE status='staging')"
+      + " AND NOT EXISTS(SELECT 1 FROM settings WHERE key='source-error' AND value<>'null')",
+      estimate, day, this.quota.background, now.getTime());
+    if (!result.meta.changes) return false;
+    const measured = this.read + 1;
+    if (estimate !== measured || this.written !== 1) {
+      this.reserved = { read: estimate, written: 2 };
+      await this.flushBudget(now);
+      idleReadEstimate.set(this.db, measured);
+    }
+    return true;
   }
   async budget(now = new Date(), requests = 1, { service = false, router = false, userWork = false, lane = service ? 'service' : 'interactive' } = {}) {
     const day = now.toISOString().slice(0, 10); // Account daily quotas use UTC.
