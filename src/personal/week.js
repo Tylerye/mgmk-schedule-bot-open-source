@@ -3,7 +3,7 @@ import { addDays, dateInTimezone, dayKey } from "../dates.js";
 import { escapeHtml } from "../schedule/format.js";
 import { buildScheduleTimeline } from "../schedule/timeline.js";
 import { scheduleViewTimeline } from "../schedule/view-timeline.js";
-import { backToMenu, button, personalDateLabel, screenText, t } from "./view.js";
+import { backToMenu, button, personalDateLabel, personalEventLines, screenText, t } from "./view.js";
 
 export function weekRange(now) {
   const today = dateInTimezone(now, "Europe/Minsk");
@@ -27,21 +27,18 @@ function plannedDay(plan, date) {
   return { date, lessons, timeline: buildScheduleTimeline(lessons, events), notes: [], statuses: [], preliminary: true };
 }
 
-function dayLines(schedule, labels, en) {
-  const lines = scheduleViewTimeline(schedule).map(event => {
-    const time = escapeHtml([event.start, event.end].filter(Boolean).join("–"));
-    if (event.type !== "lesson") return "<i>" + labels[event.type] + (time ? " · " + time : "") + "</i>";
-    const lessons = event.variants.map(variant => {
-      const location = variant.room ? " · " + (en ? "room " : "каб. ") + escapeHtml(variant.room) : "";
-      return "<b>" + escapeHtml(variant.subject) + "</b>" + location
-        + (variant.teacher ? " · " + escapeHtml(variant.teacher) : "");
-    });
-    const slot = time || (en ? "Class " : "Урок ") + event.number;
-    return [slot, ...lessons, ...event.notes.map(note => escapeHtml(note.text))].filter(Boolean).join(" · ");
-  });
-  lines.push(...[...schedule.statuses, ...schedule.notes].map(note => escapeHtml(note.text)));
-  return lines.length ? lines : [en ? "No classes listed" : "Пары не указаны"];
+function dayBlocks(schedule, user, branded) {
+  const en = user.language === "en";
+  if (!schedule) return [[en ? "No timetable yet" : "Пока нет расписания"]];
+  const blocks = scheduleViewTimeline(schedule).map(event => personalEventLines(event, user, { branded }));
+  blocks.push(...[...schedule.statuses, ...schedule.notes].map(note => [escapeHtml(note.text)]));
+  return blocks.length ? blocks : [[en ? "No classes listed" : "Пары не указаны"]];
 }
+
+// Telegram applies the text limit after parsing the HTML entities. Leaving
+// escaped entities in the count keeps the fallback slightly conservative.
+const textLength = html => html.replace(/<[^>]*>/gu, "").length;
+const richDay = day => day.blocks.map(block => "<p>" + block.join("<br>") + "</p>").join("");
 
 export function weekPage({ schedules, plan }, user, range, branded, focus) {
   const en = user.language === "en";
@@ -63,47 +60,48 @@ export function weekPage({ schedules, plan }, user, range, branded, focus) {
     const label = personalDateLabel({ date }, user);
     const origin = schedule?.preliminary ? (en ? "Weekly plan" : "По плану")
       : schedule ? (en ? "Daily PDF" : "Дневной PDF") : "";
-    const lines = schedule ? dayLines(schedule, w, en) : [en ? "No timetable yet" : "Пока нет расписания"];
-    return { date, label, origin, lines, schedule };
+    return { date, label, origin, schedule, blocks: dayBlocks(schedule, user, branded) };
   });
   const dayTitle = day => "<b>" + day.label + "</b>" + (day.origin ? " · " + day.origin : "");
-  const dayText = day => dayTitle(day) + "\n" + day.lines.join("\n");
+  const dayText = day => dayTitle(day) + "\n\n" + day.blocks.map(block => block.join("\n")).join("\n\n");
   const title = screenText("schedule", "<b>" + heading + "</b>", branded);
   const summary = title + "\n" + span + "\n" + intro.join("\n") + "\n" + alert;
   const keyboard = backToMenu(user, branded);
   const focusedDay = days.find(day => day.date === focus);
   if (focusedDay) {
-    keyboard.inline_keyboard.unshift([button(w.week, "week", { plain: true })]);
-    const text = dayText(focusedDay);
-    const richHtml = "<h2>" + focusedDay.label + "</h2><p>" + focusedDay.origin + "</p>"
-      + focusedDay.lines.map(line => "<p>" + line + "</p>").join("");
-    let plain = dayTitle(focusedDay);
-    for (const line of focusedDay.lines) {
-      if (plain.length + line.length > 3800) { plain += "\n…"; break; }
-      plain += "\n" + line;
+    keyboard.inline_keyboard.unshift([button(w.back, "week", { branded, icon: "back" })]);
+    const dayHeading = screenText("schedule", "<b>" + focusedDay.label + "</b>", branded);
+    const origin = focusedDay.origin ? "<i>" + focusedDay.origin + "</i>" : "";
+    const richHtml = "<h2>" + dayHeading + "</h2>" + (origin ? "<p>" + origin + "</p>" : "") + richDay(focusedDay);
+    let text = [dayHeading, origin].filter(Boolean).join("\n");
+    for (const block of focusedDay.blocks) {
+      const next = text + "\n\n" + block.join("\n");
+      if (textLength(next) > 3895) { text += "\n…"; break; }
+      text = next;
     }
-    return { text: text.length <= 3900 ? text : plain, richHtml, keyboard };
+    return { text, richHtml, keyboard };
   }
   const full = summary + "\n\n" + days.map(dayText).join("\n\n");
-  const rows = days.reduce((count, day) => count + day.lines.length + 1, 0);
-  const richHtml = "<h2>" + heading + "</h2><p>" + span + "</p><p>" + [...intro, alert].join("<br>") + "</p>"
+  const rows = days.reduce((count, day) => count + day.blocks.length + 1, 0);
+  const richHtml = "<h2>" + title + "</h2><p>" + span + "</p><p>" + [...intro, alert].join("<br>") + "</p>"
     + days.map(day => day.schedule
       ? "<details" + (day.date === range.today ? " open" : "") + "><summary>" + day.label + " · " + day.origin + "</summary>"
-        + day.lines.map(line => "<p>" + line + "</p>").join("") + "</details>"
-      : "<p>" + dayTitle(day) + "<br>" + day.lines[0] + "</p>").join("");
+        + richDay(day) + "</details>"
+      : "<p>" + dayTitle(day) + "<br>" + day.blocks[0][0] + "</p>").join("");
   const available = days.filter(day => day.schedule);
   const brief = days.map(day => dayTitle(day) + "\n" + (day.schedule
     ? (en ? "Classes: " : "Пар: ") + day.schedule.lessons.length
-    : day.lines[0])).join("\n\n");
+    : day.blocks[0][0])).join("\n\n");
   const fallback = summary + "\n\n" + brief;
-  if (full.length > 3900) {
+  const fitsInText = textLength(full) <= 3900;
+  if (!fitsInText) {
     for (let i = 0; i < available.length; i += 3) {
       keyboard.inline_keyboard.splice(-1, 0, available.slice(i, i + 3)
         .map(day => button(shortDate(day.date), "week:" + day.date, { plain: true })));
     }
   }
   return {
-    text: full.length <= 3900 ? full : fallback,
+    text: fitsInText ? full : fallback,
     ...(available.length && rows < 400 && richHtml.length < 28_000 && { richHtml }),
     keyboard,
   };

@@ -4,7 +4,8 @@ import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { build } from 'esbuild';
 import { readFile, readdir } from 'node:fs/promises';
 import { sampleSchedule } from './helpers/personal-fixture.js';
-import { dateInTimezone, dayKey } from '../src/dates.js';
+import { addDays, dateInTimezone, dayKey } from '../src/dates.js';
+import { weekRange } from '../src/personal/week.js';
 import { relayPersonalUpdate } from '../cloudflare/personal-relay.js';
 
 test('a real D1 trigger admits a tap and delivers its timetable without Cron or other users', async () => {
@@ -120,10 +121,12 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
     assert.equal(switches.find(button=>button.callback_data==='personal:toggle:sound').style,'danger');
     assert.match(switches.find(button=>button.callback_data==='personal:toggle:auto_pin').text,/🟢 вкл/u);
     assert.match(switches.find(button=>button.callback_data==='personal:toggle:sound').text,/🔴 выкл/u);
+    const monday = weekRange(new Date()).start;
+    const planDate = date === monday ? addDays(monday, 1) : monday;
     const baseline = { effectiveFrom:'2020-01-01', fingerprint:'a'.repeat(64), previous:null,
       groups:{'8СА':{label:'8-Сба',days:{
         [dayKey(date)]:{lessons:[[1,'УСТАРЕВШИЙ ПРЕДМЕТ','111']],hours:[]},
-        [dayKey(date) === 'monday' ? 'tuesday' : 'monday']:{lessons:[[1,'ПРАКТИКА / Петров И И','321']],hours:[]},
+        [dayKey(planDate)]:{lessons:[[1,'ПРАКТИКА / Петров И И','321'],[2,'ФИЗИКА','112']],hours:[]},
       }}} };
     const publish = body => mf.dispatchFetch('http://localhost/week-source',{
       method:'POST',headers:{authorization:'Bearer local-test'},body:JSON.stringify(body),
@@ -142,19 +145,29 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
     assert.match(week.rich_message.html,/раз в 3–4 дня/u);
     assert.match(week.rich_message.html,/Дневной PDF/u);
     assert.match(week.rich_message.html,/По плану/u);
-    assert.match(week.rich_message.html,/ПРАКТИКА.*321.*Петров/u);
+    assert.match(week.rich_message.html,/<p><b>1-й урок<\/b> · 08:15–09:00<br><b>ПРАКТИКА<\/b><br><i>Кабинет 321 · Петров И И<\/i><\/p>/u);
+    assert.match(week.rich_message.html,/<p><u><i>Перемена · 09:00–09:10<\/i><\/u><\/p>/u);
+    assert.match(week.rich_message.html,/<h2><tg-emoji/u);
     assert.doesNotMatch(week.rich_message.html,/УСТАРЕВШИЙ ПРЕДМЕТ/u);
     assert.match(week.rich_message.html,/<details open><summary>/u);
     assert.match(week.rich_message.html,/МАТЕМАТИКА/u);
-    assert.match(week.rich_message.html,/каб\. 245/u);
+    assert.match(week.rich_message.html,/Кабинет 245/u);
     assert.match(week.rich_message.html,/Пока нет расписания/u);
     assert.deepEqual(week.reply_markup.inline_keyboard.flat().map(button=>button.callback_data),['personal:menu']);
+    await tap('week:'+planDate,10,13);
+    const focused = calls[12].body;
+    assert.equal(focused.message_id,77);
+    assert.match(focused.rich_message.html,/ПРАКТИКА<\/b><br><i>Кабинет 321 · Петров И И/u);
+    assert.deepEqual(focused.reply_markup.inline_keyboard[0][0],{
+      text:'Назад',callback_data:'personal:week',icon_custom_emoji_id:'5195318936618449178',
+    });
     rejectRich = true;
-    await tap('week',10,14);
-    assert.equal(calls[13].body.message_id,77);
-    assert.match(calls[13].body.text,/МАТЕМАТИКА/u);
-    assert.match(calls[13].body.text,/Пока нет расписания/u);
-    assert.equal(calls[13].body.rich_message,undefined);
+    await tap('week',11,15);
+    assert.equal(calls[14].body.message_id,77);
+    assert.match(calls[14].body.text,/МАТЕМАТИКА/u);
+    assert.match(calls[14].body.text,/<\/b>\n<i>Кабинет 245/u);
+    assert.match(calls[14].body.text,/Пока нет расписания/u);
+    assert.equal(calls[14].body.rich_message,undefined);
     await db.prepare('UPDATE budgets SET rows_written=36000').run();
     assert.equal((await route('/source-status')).status,503,'uncommitted upload cannot be acknowledged as successful');
   } finally {await mf.dispose();}

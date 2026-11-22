@@ -187,6 +187,29 @@ export function personalDateLabel(schedule, user) {
   return user.language === "en" ? `${["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][day.getUTCDay()]}, ${day.getUTCDate()} ${["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][day.getUTCMonth()]}` : dateTitle(schedule.date);
 }
 
+export function personalEventLines(event, user, { branded = false, completed = false } = {}) {
+  const w = t(user);
+  const time = event.start && event.end ? " · " + event.start + "–" + event.end : "";
+  if (event.type !== "lesson") {
+    const label = w[event.type] + time;
+    if (event.type === "break") return ["<u><i>" + label + "</i></u>"];
+    if (event.type === "lunch" || event.type === "large_break")
+      return [heading(event.type, "<u>" + label + "</u>", branded)];
+    return [heading("view", label, branded)];
+  }
+
+  const number = user.language === "en" ? event.number : event.number + "-й";
+  const marker = completed ? "  " + themeIcon("completed", branded) : "";
+  const lines = ["<b>" + number + " " + w.lesson + "</b>" + time + marker];
+  for (const variant of event.variants) {
+    lines.push(...textLines(variant.subject).map(line => `<b>${line}</b>`));
+    const metadata = [variant.room && `${w.room} ${variant.room}`, variant.teacher].filter(Boolean).join(" · ");
+    if (metadata) lines.push(...textLines(metadata).map(line => `<i>${line}</i>`));
+  }
+  for (const note of event.notes) lines.push(...textLines(note.text).map(line => `<i>${line}</i>`));
+  return lines;
+}
+
 export function renderPersonal(schedule, user, { mode = "compact", now = new Date(), lessonChanges, branded = false, previewTimer = false } = {}) {
   const w = t(user), today = dateInTimezone(now, "Europe/Minsk"), time = timeInTimezone(now, "Europe/Minsk");
   const timeline = scheduleViewTimeline(schedule);
@@ -230,24 +253,8 @@ export function renderPersonal(schedule, user, { mode = "compact", now = new Dat
         lines.push("", "<b>" + w.remaining + "</b>");
         showedRemaining = true;
       }
-      const marker = completed ? "  " + themeIcon("completed", branded) : "";
-      const lessonNumber = user.language === "en" ? e.number : e.number + "-й";
-      lines.push("", "<b>" + lessonNumber + " " + w.lesson + "</b> · " + e.start + "–" + e.end + marker);
-      for (const v of e.variants) {
-        lines.push(...textLines(v.subject).map(line => `<b>${line}</b>`));
-        const metadata = [v.room && `${w.room} ${v.room}`, v.teacher].filter(Boolean).join(" · ");
-        if (metadata) lines.push(...textLines(metadata).map(line => `<i>${line}</i>`));
-      }
-      for (const n of e.notes) lines.push(...textLines(n.text).map(line => `<i>${line}</i>`));
-    } else {
-      // The shared bell grid is reused. There is deliberately no room-329
-      // fallback in the personal formatter.
-      const label = `${w[e.type]} · ${e.start}–${e.end}`;
-      if (e.type === "break") lines.push("", "<u><i>" + label + "</i></u>");
-      else if (e.type === "lunch" || e.type === "large_break")
-        lines.push("", heading(e.type, "<u>" + label + "</u>", branded));
-      else lines.push("", heading("view", label, branded));
     }
+    lines.push("", ...personalEventLines(e, user, { branded, completed }));
   }
   for (const n of [...schedule.statuses, ...schedule.notes]) lines.push("", ...textLines(n.text));
   if (!visible && schedule.lessons.length) lines.push("", `<i>${w.ended}</i>`);
