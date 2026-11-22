@@ -111,7 +111,7 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
     assert.equal(calls[9].method,'editMessageText');
     assert.equal(calls[9].body.message_id,77);
     assert.match(calls[9].body.text,/МАТЕМАТИКА/u);
-    assert.match(calls[9].body.text,/<b>08:15–09:00<\/b>/u);
+    assert.match(calls[9].body.text,/<b>1-й урок<\/b> · 08:15–09:00/u);
     assert.equal(calls[9].body.rich_message,undefined);
     await tap('settings',8,11);
     const switches = calls[10].body.reply_markup.inline_keyboard.flat();

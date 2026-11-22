@@ -231,7 +231,8 @@ export function renderPersonal(schedule, user, { mode = "compact", now = new Dat
         showedRemaining = true;
       }
       const marker = completed ? "  " + themeIcon("completed", branded) : "";
-      lines.push("", "<b>" + e.start + "–" + e.end + "</b>  ·  " + e.number + " " + w.lesson + marker);
+      const lessonNumber = user.language === "en" ? e.number : e.number + "-й";
+      lines.push("", "<b>" + lessonNumber + " " + w.lesson + "</b> · " + e.start + "–" + e.end + marker);
       for (const v of e.variants) {
         lines.push(...textLines(v.subject).map(line => `<b>${line}</b>`));
         const metadata = [v.room && `${w.room} ${v.room}`, v.teacher].filter(Boolean).join(" · ");
