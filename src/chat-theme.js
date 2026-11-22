@@ -43,6 +43,11 @@ export function themeIcon(key, branded) {
 
 export const heading = (key, title, branded) => themeIcon(key, branded) + " <b>" + title + "</b>";
 
+export function lessonHeading({ number, start, end }, english = false) {
+  const label = english ? number + " lesson" : number + "-й урок";
+  return "<b>" + label + "</b>" + (start && end ? " · " + start + "–" + end : "");
+}
+
 export function themedButton(text, target, key, { branded = false, style, plain = false } = {}) {
   const id = branded && themeEmoji[key];
   const label = !id && !plain && fallback[key] ? fallback[key] + " " + text : text;

@@ -1,5 +1,6 @@
-import { heading, themedButton, sendWithThemeFallback } from "../src/chat-theme.js";
+import { heading, lessonHeading, themeIcon, themedButton, sendWithThemeFallback } from "../src/chat-theme.js";
 import { TEACHERS, escapeHtml } from "../src/teachers.js";
+import { dateTitle } from "../src/schedule/format.js";
 import { addDays, dateInTimezone, timeInTimezone } from "../src/dates.js";
 import { withStateLock } from "./d1-store.js";
 import { createHash } from "node:crypto";
@@ -59,11 +60,11 @@ export function teacherKeyboard(user, date, full = false) {
   const key = (label, action, icon, style) => themedButton(label, { callback_data: "teacher:" + action }, icon, { branded, style });
   const suffix = date ? ":" + date : "";
   return { inline_keyboard: [
-    [key("Сегодня", "today", "today", "primary"), key("Ближайший день", "next", "next", "primary")],
-    [key("Раньше", "previous" + suffix, "back"),
-      key(full ? "Оставшиеся уроки" : "Весь день", (full ? "compact" : "full") + suffix, "view", "primary")],
+    [key("Сегодня", "today", "today", "success"), key("Завтра", "tomorrow", "tomorrow", "success")],
+    [key("Раньше", "previous" + suffix, "back"), key("Ближайший день", "next", "next", "success")],
+    [key(full ? "Оставшиеся пары" : "Показать все пары", (full ? "compact" : "full") + suffix, "view", "primary")],
     user.previewManual
-      ? [themedButton("Личное расписание", { callback_data: "personal:menu" }, "menu", { branded })]
+      ? [themedButton("Личное расписание", { callback_data: "personal:menu" }, "menu", { branded, style: "success" })]
       : [key("Автообновления: " + (user.notifications ? "вкл" : "выкл"), user.notifications ? "pause" : "resume",
         "changes", user.notifications ? "success" : "danger")],
   ] };
@@ -71,18 +72,28 @@ export function teacherKeyboard(user, date, full = false) {
 
 export function formatTeacherSchedule(schedule, teacher, { now = new Date(), full = false, timezone = "Europe/Minsk", corrected = false, branded = false } = {}) {
   const today = dateInTimezone(now, timezone), time = timeInTimezone(now, timezone);
-  const date = schedule.date.split("-").reverse().join(".");
-  const weekday = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"][new Date(schedule.date + "T12:00:00Z").getUTCDay()];
-  const lines = [heading("schedule", escapeHtml(teacher.name), branded), weekday + ", " + date];
+  const lines = [heading("schedule", "Расписание · " + escapeHtml(teacher.name), branded), dateTitle(schedule.date)];
   if (teacher.sourceTeacherId) lines.push("<i>Тестовый кабинет</i>");
   if (corrected) lines.push("", heading("changes", "В расписании есть правки", branded));
   if (schedule.status) lines.push("", escapeHtml(schedule.status));
-  const lessons = schedule.lessons.filter(lesson => full || schedule.date > today || (schedule.date === today && lesson.end > time));
-  if (schedule.lessons.length && !lessons.length) lines.push("", "Все уроки уже прошли", "Чтобы посмотреть их, нажмите «Весь день»");
+  const ended = lesson => schedule.date < today || (schedule.date === today && lesson.end <= time);
+  const lessons = full ? schedule.lessons : schedule.lessons.filter(lesson => !ended(lesson));
+  if (schedule.lessons.length && !lessons.length) {
+    lines.push("", "<i>На сегодня все</i>", "Чтобы посмотреть прошедшие, нажмите «Показать все пары»");
+  }
+  let showedPast = false, showedRemaining = false;
   for (const lesson of lessons) {
+    const completed = ended(lesson);
+    if (completed && !showedPast) {
+      lines.push("", "<b>Прошедшие пары</b>");
+      showedPast = true;
+    } else if (!completed && showedPast && !showedRemaining) {
+      lines.push("", "<b>Оставшиеся пары</b>");
+      showedRemaining = true;
+    }
     const active = schedule.date === today && lesson.start <= time && lesson.end > time;
-    lines.push("", "<b>" + lesson.start + "–" + lesson.end + "</b>  ·  " + lesson.number + " урок" + (active ? "  ·  Сейчас" : ""),
-      "Группа <b>" + escapeHtml(lesson.group) + "</b>");
+    const marker = completed ? "  " + themeIcon("completed", branded) : active ? " · Сейчас" : "";
+    lines.push("", lessonHeading(lesson) + marker, "<b>Группа " + escapeHtml(lesson.group) + "</b>");
   }
   return lines.join("\n");
 }
@@ -211,12 +222,12 @@ async function publishTeacherDate({ database, client, teacher, user, row, now, c
   const schedule = JSON.parse(selected?.payload ?? row.payload);
   const text = formatTeacherSchedule(schedule, teacher, { now, timezone: config.timezone, full: view.full, branded: user.branded,
     corrected: !selected && Boolean(publication.hash && publication.hash !== row.hash) });
-  const renderHash = JSON.stringify([text, user.notifications]);
+  const replyMarkup = teacherKeyboard(user, schedule.date, view.full);
+  const renderHash = JSON.stringify([text, replyMarkup]);
   // Render text changes only at lesson boundaries or when the source changes.
   const cached = await database.prepare("SELECT value FROM teacher_settings WHERE key=?").bind(`render:${teacher.id}:${row.date}`).first();
   if (publication.message_id && publication.hash === row.hash && cached?.value === renderHash) return;
   let messageId = publication.message_id;
-  const replyMarkup = teacherKeyboard(user, schedule.date, view.full);
   const correction = publication.hash && publication.hash !== row.hash;
   const revision = publication.revision + (correction ? 1 : 0);
   if (correction) await database.prepare("INSERT INTO teacher_notices(teacher_id,date,revision,hash) VALUES(?,?,?,?) "
@@ -291,7 +302,7 @@ async function teacherCheck(env, config, teacher, now) {
   const inbox = await env.DB.prepare("SELECT MIN(retry_at) due FROM teacher_inbox WHERE teacher_id=? AND status='pending'").bind(teacher.id).first();
   const schedules = await rowsFor(env.DB, teacher.id);
   const signature = createHash("sha256").update(JSON.stringify([user, schedules.map(s => [s.date,s.hash]), config.timezone, config.pinSwitchTime,
-    env.CF_VERSION_METADATA?.id, env.PERSONAL_ENABLED, env.OWNER_PREVIEW_ENABLED, env.ADMIN_USER_ID])).digest("hex");
+    env.CF_VERSION_METADATA?.id, env.TEACHER_BRANDED_MENU, env.PERSONAL_ENABLED, env.OWNER_PREVIEW_ENABLED, env.ADMIN_USER_ID])).digest("hex");
   return { user, inboxDue: inbox?.due ?? null, schedules, signature };
 }
 async function saveTeacherCheck(env, config, teacher, now, processedSchedules) {

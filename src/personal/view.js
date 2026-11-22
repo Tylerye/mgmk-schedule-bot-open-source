@@ -1,4 +1,4 @@
-import { heading, themedButton, themeIcon } from "../chat-theme.js";
+import { heading, lessonHeading, themedButton, themeIcon } from "../chat-theme.js";
 import { createHash } from "node:crypto";
 import { dateInTimezone, timeInTimezone, addDays } from "../dates.js";
 import { escapeHtml, dateTitle } from "../schedule/format.js";
@@ -198,9 +198,8 @@ export function personalEventLines(event, user, { branded = false, completed = f
     return [heading("view", label, branded)];
   }
 
-  const number = user.language === "en" ? event.number : event.number + "-й";
   const marker = completed ? "  " + themeIcon("completed", branded) : "";
-  const lines = ["<b>" + number + " " + w.lesson + "</b>" + time + marker];
+  const lines = [lessonHeading(event, user.language === "en") + marker];
   for (const variant of event.variants) {
     lines.push(...textLines(variant.subject).map(line => `<b>${line}</b>`));
     const metadata = [variant.room && `${w.room} ${variant.room}`, variant.teacher].filter(Boolean).join(" · ");
