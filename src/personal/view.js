@@ -8,35 +8,35 @@ import { hasLessonSummary, lessonSummary } from "./lesson-summary.js";
 export const AUTHOR_USERNAME = "your_username";
 
 export const words = {
-  ru: { menu: "🏠 Твоё расписание МГМК\n\nВыбирай нужный день кнопками ниже\nНовые расписания и замены придут автоматически\n\n📌 Расписание закрепляется само\nЕсли закреп не нужен, отключи его в настройках", schedule: "Расписание", today: "Сегодня", tomorrow: "Завтра", next: "Ближайший день",
+  ru: { menu: "<b>МГМК · Расписание</b>\n\nВыбери день. Новое расписание и замены придут сюда автоматически.", updates: "Обновления", table: "Таблица", textView: "Обычный текст", main: "Главное меню", schedule: "Расписание", today: "Сегодня", tomorrow: "Завтра", next: "Ближайший день",
     settings: "Настройки", help: "Как пользоваться", support: "Поддержать автора", group: "Группа", language: "Язык",
     feedback: "Обратная связь", privacy: "О боте и данных", contact: "Написать автору",
-    feedbackText: "💬 Есть идея или что-то работает не так?\n\nНапиши автору - @{contact}\nМожно предложить улучшение, сообщить об ошибке или просто задать вопрос\n\nЕсли проблема с расписанием, укажи группу и дату и по возможности приложи скриншот\nТак будет проще разобраться 👇",
-    privacyText: "ℹ️ Откуда берётся расписание\n\nБот читает PDF из Google Диска колледжа и обновляет карточки при изменениях источника\nПо времени Минска прошедшие уроки скрываются в актуальном виде, а закреп переключается автоматически\n\n🌙 С 20:00 до 06:30 по Минску автообновления идут раз в 15 минут\nКнопки расписания доступны в любое время\n\n⚠️ Расписание может измениться\n\nПравки от куратора или преподавателя могут появиться в чате раньше, чем в PDF, или вообще не попасть в него\nВозможны задержки обновления и ошибки разбора\n\nСверяй важные изменения с сообщениями куратора и преподавателей\nНе полагайся только на бота - запись в нём не подтверждает отмену или перенос занятия\n\n🔐 Что сохраняется\n\nДля работы нужны твой Telegram ID, выбранная группа, язык, настройки и технические записи доставки\nЕсли оценишь бота, оценка сохраняется один раз\nПереписка и юзернейм в личном кабинете не сохраняются\nБот использует Telegram и Cloudflare, публичные PDF обрабатываются через GitHub Actions\n\nВопросы или просьба удалить данные - @{contact}",
+    feedbackText: "<b>Обратная связь</b>\n\nЕсть идея или нашли ошибку? Напиши @{contact}.\n\nЕсли вопрос о расписании, укажи группу и дату. Скриншот поможет разобраться.",
+    privacyText: "<b>О боте и данных</b>\n\nБот читает PDF колледжа из Google Диска. С 20:00 до 06:30 по Минску автообновления идут раз в 15 минут. Открыть расписание вручную можно в любое время.\n\nВажные изменения сверяй с куратором или преподавателем: их сообщения могут появиться раньше PDF. Не полагайся только на бота при отмене или переносе пары.\n\n<blockquote expandable><b>Какие данные сохраняются?</b>\nTelegram ID, группа, язык, настройки и технические записи доставки. Если оставишь оценку, бот сохранит её один раз. Переписка и юзернейм в личном кабинете не сохраняются.\n\nБот работает в Telegram и Cloudflare, публичные PDF обрабатываются через GitHub Actions. Вопросы и удаление данных: @{contact}.</blockquote>",
     sound: "Звук новых карточек", changes: "Уведомления о заменах", auto_pin: "Автоматический закреп", pin: "Сообщение о закрепе", pause: "Пауза автообновлений",
-    resume: "Возобновить автообновления", back: "Назад", more: "Далее", choose: "👥 Какая у тебя группа?\n\nВыбери её ниже или отправь обозначение сообщением",
+    resume: "Возобновить автообновления", back: "Назад", more: "Далее", choose: "<b>Выбери группу</b>\n\nНайди свою группу в списке или отправь её обозначение сообщением.",
     missing: "Расписание пока не опубликовано или ещё не прочитано. Это не означает, что занятий нет.",
     full: "Прошедшие уроки", compact: "Только актуальное", ended: "Учебный день завершён", lesson: "урок", room: "Кабинет",
     break: "Перемена", large_break: "Большая перемена", lunch: "ОБЕД", curator_hour: "Кураторский час", information_hour: "Информационный час",
-    supportText: "💛 Если бот тебе помогает, можешь добровольно поддержать автора. Расписание доступно бесплатно.",
-    channel: "ТГК автора", donate: "Реквизиты", later: "Позже", details: "Реквизиты сейчас недоступны.", closed: "👌 Хорошо, возвращаемся к расписанию",
-    helpText: "👋 Привет, это твоё расписание МГМК\n\n👥 Выбери свою группу — дальше бот сам пришлёт новые расписания и предупредит о заменах\n\n📅 Сегодня и Завтра открывают нужный день\n⏭ Ближайший день поможет заглянуть вперёд, даже если впереди выходные\n🕘 Прошедшие уроки можно вернуть кнопкой под карточкой\n\n📌 До 16:30 в закрепе остаётся сегодняшний день, а потом — ближайший опубликованный будущий\nЗанятия после 16:30 продолжают отображаться до своего окончания\n\n⚙️ В настройках можно сменить группу и язык, отключить звук или поставить автообновления на паузу\nНа паузе расписание по кнопкам всё равно доступно\n\n📌 Автоматический закреп уже включён\nЕсли он тебе не нужен, отключи его в настройках",
-    settingsText: "⚙️ Настроим под тебя\n\n👥 Группу и язык можно поменять в любой момент\n🔊 Звук — для новых карточек\n🔔 Замены — отдельные сообщения об изменении предметов\n📌 Автоматический закреп включён\nЕсли он не нужен, отключи его кнопкой ниже\n⏸ Пауза останавливает автоматические обновления, но кнопки расписания продолжают работать",
+    supportText: "<b>Поддержать автора</b>\n\nРасписание доступно бесплатно. Если бот экономит тебе время, можешь добровольно поддержать его работу.",
+    channel: "ТГК автора", donate: "Реквизиты", later: "Позже", details: "Реквизиты сейчас недоступны.", closed: "Ты в меню расписания.",
+    helpText: "<b>Как пользоваться</b>\n\n<b>Открыть расписание</b>\n«Сегодня» и «Завтра» открывают нужный день. «Ближайший день» найдёт следующее опубликованное расписание.\n\n<b>Посмотреть весь день</b>\n«Таблица» показывает время, предметы и кабинеты. Между опубликованными днями можно переключаться стрелками.\n\n<blockquote expandable><b>Автообновления и закреп</b>\nЗамены приходят автоматически. С 16:30 по Минску закреп выбирает ближайший опубликованный будущий день. Занятия после 16:30 видны до окончания.\n\nЗакреп, звук, уведомления о заменах и паузу можно настроить. Ручные кнопки работают и на паузе.</blockquote>",
+    settingsText: "<b>Настройки</b>\n\nЗдесь можно сменить группу и язык, настроить закреп и уведомления.\n\n<blockquote expandable><b>Что меняют переключатели?</b>\nЗвук относится к новым карточкам, а уведомления о заменах приходят отдельно. Автоматический закреп включён по умолчанию. На паузе кнопки расписания продолжают работать.</blockquote>",
     changed: "Изменения в расписании", added: "добавлен", removed: "отменён", on: "вкл", off: "выкл", saving: "Автообновления временно отложены для сохранения бесплатного лимита. Расписание можно открыть вручную.",
     part: "часть", emptyPart: "Расписание теперь помещается в предыдущих частях.", pinned: "Закреплено расписание", pilot: "Пилот пока доступен ограниченной аудитории." },
-  en: { settingsText: "⚙️ Make it yours\n\nChange your group and language below\nSound applies to new cards, change alerts report lesson replacements\nAutomatic pinning is on by default - turn it off below if you do not need it\nPause stops automatic updates, manual viewing remains available", menu: "Personal timetable", schedule: "Timetable", today: "Today", tomorrow: "Tomorrow", next: "Next school day",
+  en: { settingsText: "<b>Settings</b>\n\nChoose your group, language, pin and notifications.\n\n<blockquote expandable><b>How the switches work</b>\nSound applies to new cards. Lesson changes arrive as separate alerts. Automatic pinning is on by default. Pausing leaves manual navigation available.</blockquote>", menu: "<b>МГМК · Timetable</b>\n\nChoose a day. New timetables and lesson changes arrive here automatically.", updates: "What’s new", table: "Table", textView: "Plain text", main: "Main menu", schedule: "Timetable", today: "Today", tomorrow: "Tomorrow", next: "Next school day",
     settings: "Settings", help: "How to use", support: "Support the author", group: "Group", language: "Language",
     feedback: "Feedback", privacy: "About and privacy", contact: "Message the author",
-    feedbackText: "💬 Have an idea or noticed something wrong?\n\nMessage the author - @{contact}\nSuggest an improvement, report a bug or ask a question\n\nFor timetable issues, include your group, date and a screenshot if possible\nThis helps us look into it 👇",
-    privacyText: "ℹ️ Where the timetable comes from\n\nThe bot reads PDFs from the college Google Drive and updates cards when the source changes\nCompleted lessons are hidden in the current view using Minsk time and pins switch automatically\n\n🌙 Automatic updates run every 15 minutes from 20:00 to 06:30 Minsk time\nTimetable buttons remain available at any time\n\n⚠️ Timetables can change\n\nYour tutor or teacher may post changes before the PDF is updated, or those changes may never reach the PDF\nUpdates can be delayed and parsing errors are possible\n\nCheck important changes with your tutor and teachers\nDo not rely only on the bot - its timetable does not confirm that a lesson was cancelled or moved\n\n🔐 Stored data\n\nThe bot stores your Telegram ID, selected group, language, preferences and technical delivery records\nIf you rate the bot, your rating is saved once\nPrivate chat history and usernames are not stored in the personal service\nThe bot uses Telegram and Cloudflare, public PDFs are processed through GitHub Actions\n\nQuestions or data deletion requests - @{contact}",
+    feedbackText: "<b>Feedback</b>\n\nHave an idea or found a problem? Message @{contact}.\n\nFor timetable issues, include your group and date. A screenshot helps.",
+    privacyText: "<b>About and privacy</b>\n\nThe bot reads the college PDFs from Google Drive. From 20:00 to 06:30 Minsk time, it checks for updates every 15 minutes. Manual navigation works anytime.\n\nCheck important changes with your tutor or teacher. Their notices may appear before an updated PDF. A timetable entry does not confirm a cancellation or a move.\n\n<blockquote expandable><b>What is stored?</b>\nYour Telegram ID, group, language, preferences and technical delivery records. A rating is stored once if you leave one. Private chat history and usernames are not stored by the personal service.\n\nThe bot runs on Telegram and Cloudflare. GitHub Actions processes public PDFs. Questions or deletion requests: @{contact}.</blockquote>",
     sound: "Sound for new timetables", changes: "Lesson change alerts", auto_pin: "Automatic pin", pin: "Pin announcement", pause: "Pause automatic updates",
-    resume: "Resume automatic updates", back: "Back", more: "Next", choose: "Choose a group or enter its name:",
+    resume: "Resume automatic updates", back: "Back", more: "Next", choose: "<b>Choose your group</b>\n\nPick it from the list or send the group name.",
     missing: "The timetable has not been published or read yet. This does not mean there are no lessons.",
     full: "Past lessons", compact: "Current lessons only", ended: "The school day is over", lesson: "lesson", room: "Room",
     break: "Break", large_break: "Long break", lunch: "LUNCH", curator_hour: "Tutor period", information_hour: "Information period",
-    supportText: "💛 If the bot helps you, you can support the author with a voluntary contribution. Timetables are free.",
-    channel: "Author's channel", donate: "Payment details", later: "Later", details: "Payment details are currently unavailable.", closed: "Offer closed. Your timetable is available from the menu.",
-    helpText: "Choose one group. New timetables and lesson changes arrive automatically. Future timetables may arrive early; pins switch from 16:30 Minsk time. Pause stops automatic sends, edits and pins; manual viewing still works. Subjects, names and group labels stay as written in the PDF.",
+    supportText: "<b>Support the author</b>\n\nThe timetable is free. If the bot saves you time, you can make a voluntary contribution.",
+    channel: "Author's channel", donate: "Payment details", later: "Later", details: "Payment details are currently unavailable.", closed: "You are back at the timetable menu.",
+    helpText: "<b>How to use the timetable</b>\n\n<b>Find a day</b>\nToday and Tomorrow open those dates. Next school day finds the next published timetable.\n\n<b>See the whole day</b>\nTable shows times, subjects and rooms. Use the arrows to browse published days.\n\n<blockquote expandable><b>Automatic updates and pinning</b>\nLesson changes arrive automatically. From 16:30 Minsk time, the pin moves to the next published future day. Later classes stay visible until they finish.\n\nOpen Settings to change pinning, sound, change alerts or pause. You can still open the timetable while paused.</blockquote>",
     changed: "Timetable changes", added: "added", removed: "cancelled", on: "on", off: "off", saving: "Automatic updates are temporarily delayed to stay within the free quota. You can view your timetable manually.",
     part: "part", emptyPart: "The updated timetable fits in the preceding parts.", pinned: "Pinned timetable", pilot: "The pilot is currently available to a limited audience." },
 };
@@ -45,8 +45,7 @@ export const t = user => words[user?.language === "en" ? "en" : "ru"];
 // Cohorts share immutable rendering in a warm isolate. This bounded cache is
 // optional: correctness never depends on which isolate serves the next user.
 const cohortRenders = new Map();
-const icons = {feedback:'💬',privacy:'ℹ️',schedule:'📚',today:'📅',tomorrow:'🗓',next:'⏭',settings:'⚙️',help:'💡',support:'💛',group:'👥',groups:'👥',language:'🌐',lang:'🌐',back:'◀️',menu:'🏠',sound:'🔊',changes:'🔔',auto_pin:'📌',pin:'📌',paused:'⏸',donate:'💛',later:'👌'};
-export const button = (text, action) => ({ text: (icons[action.split(':')[0]] ? icons[action.split(':')[0]]+' ' : action.startsWith('toggle:') ? (icons[action.split(':')[1]]??'')+' ' : '')+text, callback_data: `personal:${action}` });
+const icons = {back:"↩️",updates:"✨",table:"📋",view:"🕘",preview:"🕘",feedback:'💬',privacy:'ℹ️',schedule:'📚',today:'📅',tomorrow:'🗓',next:'⏭',settings:'⚙️',help:'💡',support:'💛',group:'👥',groups:'👥',language:'🌐',lang:'🌐',menu:'🏠',sound:'🔊',changes:'🔔',auto_pin:'📌',pin:'📌',paused:'⏸',donate:'💛',later:'👌'};
 export const widgetGroup = "8СА";
 export const widgetLabel = user => user.language === "en" ? "Day by lesson · HTML" : "День по урокам · HTML";
 const menuEmoji = {
@@ -55,16 +54,30 @@ const menuEmoji = {
   settings: "5197388333466041903",
   next: "5195169072324589074",
   schedule: "5195345685674768707",
+  help: "5194981468153098754",
+  support: "5195026432165724121",
+  feedback: "5195418511140237268",
+  privacy: "5195285569017523087",
+  updates: "5197289295815159555",
+  menu: "5195147176581313146",
+  table: "5197713793202829678",
+  view: "5195052549861848434",
+  group: "5197402489678243789",
+  language: "5195156775833218565",
+  sound: "5195066426901183518",
+  changes: "5195143336880550013",
+  paused: "5194911670639570898",
+  auto_pin: "5197244563730772418",
+  back: "5195318936618449178",
 };
 
-function menuButton(text, action, branded, style) {
-  const result = button(text, action);
-  if (style) result.style = style;
-  if (branded) {
-    result.text = text;
-    result.icon_custom_emoji_id = menuEmoji[action];
-  }
-  return result;
+export function button(text, action, { branded = false, plain = false, style } = {}) {
+  const [kind, option] = action.split(":");
+  const icon = kind === "toggle" ? (option === "pin" ? "auto_pin" : option)
+    : ({ groups: "group", lang: "language", donate: "support", preview: "view", later: "back" })[kind] ?? kind;
+  const emoji = branded && kind !== "group" && menuEmoji[icon];
+  const label = !emoji && !plain && kind !== "group" && icons[icon] ? `${icons[icon]} ${text}` : text;
+  return { text: label, callback_data: `personal:${action}`, ...(style && { style }), ...(emoji && { icon_custom_emoji_id: emoji }) };
 }
 
 export function withoutMenuEmoji(keyboard) {
@@ -78,20 +91,29 @@ export function withoutMenuEmoji(keyboard) {
   })) };
 }
 
-export const menu = (user, widgetEnabled = false, branded = false) => ({ inline_keyboard: [
-  [menuButton(t(user).today, "today", branded, "primary"), menuButton(t(user).tomorrow, "tomorrow", branded, "success")],
-  [menuButton(t(user).schedule, "schedule", branded)],
-  ...(widgetEnabled && user.group_id === widgetGroup ? [[button(widgetLabel(user), "widget")]] : []),
-  [menuButton(t(user).next, "next", branded), menuButton(t(user).settings, "settings", branded)], [button(t(user).help, "help"), button(t(user).support, "support")],
-  [button(t(user).feedback, "feedback"), button(t(user).privacy, "privacy")],
-] });
+export function menu(user, widgetEnabled = false, branded = false) {
+  const w = t(user);
+  return { inline_keyboard: [
+    [button(w.today, "today", { branded, style: "primary" }), button(w.tomorrow, "tomorrow", { branded, style: "success" })],
+    [button(w.schedule, "schedule", { branded, style: "primary" }), button(w.next, "next", { branded, style: "success" })],
+    ...(widgetEnabled && user.group_id === widgetGroup ? [[button(widgetLabel(user), "widget")]] : []),
+    [button(w.settings, "settings", { branded }), button(w.help, "help", { branded })],
+    [button(w.updates, "updates:0", { branded, style: "primary" })],
+    [button(w.feedback, "feedback", { branded }), button(w.privacy, "privacy", { branded })],
+    [button(w.support, "support", { branded, style: "success" })],
+  ] };
+}
+
+export const backToMenu = (user, branded) => ({ inline_keyboard: [[button(t(user).main, "menu", { branded })]] });
 export const informationText = (user, action) => t(user)[`${action}Text`].replaceAll('{contact}', escapeHtml(AUTHOR_USERNAME));
-export const informationKeyboard = user => ({ inline_keyboard: [
-  [{ text: `✉️ ${t(user).contact}`, url: `https://t.me/${AUTHOR_USERNAME}` }],
-  [button(t(user).back, "menu")],
+export const informationKeyboard = (user, branded) => ({ inline_keyboard: [
+  [{ text: t(user).contact, url: `https://t.me/${AUTHOR_USERNAME}`, style: "primary" }],
+  ...backToMenu(user, branded).inline_keyboard,
 ] });
-export const supportKeyboard = user => ({ inline_keyboard: [
-  [{ text: t(user).channel, url: "https://example.com" }], [button(t(user).donate, "donate"), button(t(user).later, "later")],
+export const supportKeyboard = (user, branded) => ({ inline_keyboard: [
+  [button(t(user).donate, "donate", { branded, style: "success" })],
+  [{ text: t(user).channel, url: "https://example.com" }],
+  ...backToMenu(user, branded).inline_keyboard,
 ] });
 export function supportDetailsText(user, binding) {
   const w = t(user);
@@ -106,18 +128,18 @@ export function supportDetailsText(user, binding) {
   const english = user.language === "en";
   return [
     w.supportText,
-    `<b>МТБанк</b>\n${erip} → МТБанк → Пополнение карты\n${english ? "Contract number" : "Номер договора"} <code>${mtbankContract}</code>\n${english ? "Card transfer" : "Перевод на карту"} ${card(mtbankCard)}`,
-    `<b>Беларусбанк</b>\n${english ? "Card transfer" : "Перевод на карту"} ${card(belarusbankCard)}`,
-    english ? "Thank you for your support!" : "Спасибо за поддержку!",
+    `<blockquote expandable><b>МТБанк · ЕРИП и карта</b>\n${erip} → МТБанк → Пополнение карты\n${english ? "Contract number" : "Номер договора"} <code>${mtbankContract}</code>\n${english ? "Card transfer" : "Перевод на карту"} ${card(mtbankCard)}</blockquote>`,
+    `<blockquote expandable><b>Беларусбанк · ${english ? "Card" : "Карта"}</b>\n${english ? "Card transfer" : "Перевод на карту"} ${card(belarusbankCard)}</blockquote>`,
+    english ? "<i>Thank you for your support.</i>" : "<i>Спасибо за поддержку.</i>",
   ].join("\n\n");
 }
-export function settingsKeyboard(user) {
+export function settingsKeyboard(user, branded) {
   const w = t(user);
-  return { inline_keyboard: [[button(w.group, "groups:0"), button(w.language, "language")],
-    ...["auto_pin", "sound", "changes"].map(key => [button(`${w[key]}: ${user[key] ? w.on : w.off}`, `toggle:${key}`)]),
-    [button(user.paused ? w.resume : w.pause, "toggle:paused")], [button(w.back, "menu")]] };
+  return { inline_keyboard: [[button(w.group, "groups:0", { branded }), button(w.language, "language", { branded })],
+    ...["auto_pin", "sound", "changes"].map(key => [button(`${w[key]}: ${user[key] ? w.on : w.off}`, `toggle:${key}`, { branded, style: user[key] ? "success" : undefined })]),
+    [button(user.paused ? w.resume : w.pause, "toggle:paused", { branded, style: user.paused ? "success" : undefined })], ...backToMenu(user, branded).inline_keyboard] };
 }
-export function groupsKeyboard(groups, user, page = 0) {
+export function groupsKeyboard(groups, user, page = 0, branded) {
   const pages = Math.max(1, Math.ceil(groups.length / 10));
   page = Math.max(0, Math.min(pages - 1, page));
   const items = groups.slice(page * 10, (page + 1) * 10);
@@ -125,7 +147,7 @@ export function groupsKeyboard(groups, user, page = 0) {
   for (let i = 0; i < items.length; i += 2) rows.push(items.slice(i, i + 2).map(g => button(g.displayName, `group:${g.id}`)));
   rows.push([...(page ? [button(t(user).back, `groups:${page - 1}`)] : []), button(`${page + 1}/${pages}`, `groups:${page}`),
     ...(page + 1 < pages ? [button(t(user).more, `groups:${page + 1}`)] : [])]);
-  rows.push([button(t(user).back, "menu")]);
+  rows.push(...backToMenu(user, branded).inline_keyboard);
   return { inline_keyboard: rows };
 }
 
@@ -181,6 +203,11 @@ export function noticeParts(title, lines) {
   if (body) parts.push(`<b>${escapeHtml(title)}</b>\n${body}`);
   return parts;
 }
+export function personalDateLabel(schedule, user) {
+  const day = new Date(`${schedule.date}T12:00:00Z`);
+  return user.language === "en" ? `${["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][day.getUTCDay()]}, ${day.getUTCDate()} ${["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][day.getUTCMonth()]}` : dateTitle(schedule.date);
+}
+
 export function renderPersonal(schedule, user, { mode = "compact", now = new Date(), lessonChanges } = {}) {
   const w = t(user), today = dateInTimezone(now, "Europe/Minsk"), time = timeInTimezone(now, "Europe/Minsk");
   const timeline = scheduleViewTimeline(schedule);
@@ -189,9 +216,7 @@ export function renderPersonal(schedule, user, { mode = "compact", now = new Dat
   const changes = lessonChanges?.filter(change => schedule.date >= today && !timeline.some(e => e.type === "lesson" && e.number === change.number && ended(e)));
   const cacheKey = JSON.stringify([schedule.hash, schedule.displayGroup, user.language === "en" ? "en" : "ru", mode, timeline.map(ended), summary, changes]);
   if (cohortRenders.has(cacheKey)) return cohortRenders.get(cacheKey);
-  const day = new Date(`${schedule.date}T12:00:00Z`);
-  const dateLabel = user.language === "en" ? `${["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][day.getUTCDay()]}, ${day.getUTCDate()} ${["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][day.getUTCMonth()]}` : dateTitle(schedule.date);
-  const heading = `<b>📚 ${w.schedule} - ${escapeHtml(schedule.displayGroup)}</b>\n📅 ${dateLabel}`;
+  const heading = `<b>${w.schedule} · ${escapeHtml(schedule.displayGroup)}</b>\n<i>${personalDateLabel(schedule, user)}</i>`;
   const lines = summary.map(line => {
     const chars = Array.from(line);
     return `<b>${escapeHtml(chars.length > 150 ? chars.slice(0, 149).join("") + "…" : line)}</b>`;
@@ -209,22 +234,22 @@ export function renderPersonal(schedule, user, { mode = "compact", now = new Dat
     if (mode === "compact" && completed) continue;
     visible++;
     if (e.type === "lesson") {
-      lines.push("", `<b>${completed ? "✅ " : ""}${e.number} ${w.lesson} · ${e.start}-${e.end}</b>`);
+      lines.push("", `<b>${e.number} ${w.lesson}</b>  ·  <code>${e.start}–${e.end}</code>${completed ? "  ✓" : ""}`);
       for (const v of e.variants) {
-        lines.push(...textLines(`📖 ${v.subject}`));
-        if (v.room) lines.push(...textLines(`🚪 ${w.room}: ${v.room}`));
-        if (v.teacher) lines.push(...textLines(`👤 ${v.teacher}`));
+        lines.push(...textLines(v.subject).map(line => `<b>${line}</b>`));
+        const metadata = [v.room && `${w.room} ${v.room}`, v.teacher].filter(Boolean).join(" · ");
+        if (metadata) lines.push(...textLines(metadata).map(line => `<i>${line}</i>`));
       }
-      for (const n of e.notes) lines.push(...textLines(`ℹ️ ${n.text}`));
+      for (const n of e.notes) lines.push(...textLines(n.text).map(line => `<i>${line}</i>`));
     } else {
       // The shared bell grid is reused. There is deliberately no room-329
       // fallback in the personal formatter.
       const label = `${w[e.type]} · ${e.start}–${e.end}`;
-      lines.push("", ["break", "large_break", "lunch"].includes(e.type) ? `<u>${label}</u>` : label);
+      lines.push("", ["break", "large_break", "lunch"].includes(e.type) ? `<i>${label}</i>` : `<b>${label}</b>`);
     }
   }
   for (const n of [...schedule.statuses, ...schedule.notes]) lines.push("", ...textLines(n.text));
-  if (!visible && schedule.lessons.length) lines.push("", `✅ ${w.ended}`);
+  if (!visible && schedule.lessons.length) lines.push("", `<i>${w.ended}</i>`);
   const bodies = []; let body = "";
   for (const line of lines) {
     if (body.length + line.length + 1 > 3300) { bodies.push(body); body = ""; }
@@ -232,8 +257,11 @@ export function renderPersonal(schedule, user, { mode = "compact", now = new Dat
   }
   bodies.push(body);
   const parts = bodies.map((body, index) => `${heading}${bodies.length > 1 ? ` · ${w.part} ${index + 1}/${bodies.length}` : ""}\n\n${body}`);
-  const keyboard = { inline_keyboard: [[button(mode === "full" ? w.compact : w.full, `view:${schedule.date}:${mode === "full" ? "compact" : "full"}`)],
-    [button(user.language === "en" ? "Menu" : "Главное меню", "menu")]] };
+  const keyboard = { inline_keyboard: [
+    [button(mode === "full" ? w.compact : w.full, `view:${schedule.date}:${mode === "full" ? "compact" : "full"}`, { plain: true }),
+      button(w.table, `table:${schedule.date}`, { plain: true, style: "primary" })],
+    [button(w.main, "menu", { plain: true })],
+  ] };
   const hashes = parts.map((text, i) => createHash("sha256").update(JSON.stringify([text, i ? null : keyboard])).digest("hex"));
   const result = { parts, keyboard, hashes };
   if (cohortRenders.size >= 64) cohortRenders.delete(cohortRenders.keys().next().value);

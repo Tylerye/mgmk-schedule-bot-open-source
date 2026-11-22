@@ -25,15 +25,15 @@ test("RU/EN labels preserve PDF names, linked subgroups and notes; classes conti
   schedule.hash = "test-linked-subgroups";
   const ru = renderPersonal(schedule, { language: "ru" }, { now: new Date("2026-11-12T16:31:00+03:00") });
   assert.ok(ru.parts[0].includes("8 урок"));
-  assert.ok(ru.parts[0].includes("ФИЗИКА\n🚪 Кабинет: 210\n👤 Петров Б.Б."));
+  assert.ok(ru.parts[0].includes("<b>ФИЗИКА</b>\n<i>Кабинет 210 · Петров Б.Б.</i>"));
   assert.ok(ru.parts[0].includes("подгруппа 2"));
   const en = renderPersonal(schedule, { language: "en" }, { mode: "full", now: new Date("2026-11-12T16:31:00+03:00") });
   assert.match(en.parts[0], /Thursday, 12 November/u);
-  assert.match(en.parts[0], /✅ 1 lesson/u);
+  assert.match(en.parts[0], /<b>1 lesson<\/b>.*✓/u);
   assert.match(en.parts[0], /МАТЕМАТИКА/u);
   assert.ok(!en.parts[0].includes("329"));
   assert.match(en.parts[0], /Information period/u);
-  assert.match(en.parts[0], /<u>.*LUNCH/u);
+  assert.match(en.parts[0], /<i>.*LUNCH/u);
 });
 
 test("long cards split without losing source text or breaking HTML", async () => {

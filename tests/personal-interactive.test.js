@@ -10,12 +10,14 @@ import { relayPersonalUpdate } from '../cloudflare/personal-relay.js';
 test('a real D1 trigger admits a tap and delivers its timetable without Cron or other users', async () => {
   const script = (await build({entryPoints:['personal/worker.js'],bundle:true,write:false,format:'esm',platform:'neutral',external:['node:crypto']})).outputFiles[0].text;
   const lanes=[], calls=[];
+  let rejectEmoji = false, rejectRich = false;
   const mf=new Miniflare(convertV4MiniflareOptions({name:'personal',modules:true,script,compatibilityDate:'2026-09-14',compatibilityFlags:['nodejs_compat'],
     d1Databases:{DB:'interactive'},bindings:{PERSONAL_SHARED_SECRET:'local-test',ADMIN_USER_ID:'100',BOT_TOKEN:'fake',PERSONAL_PUBLIC:'true',PERSONAL_BRANDED_MENU:'true',
       PERSONAL_DAILY_WRITES:'45000',PERSONAL_BACKGROUND_WRITES:'30000',PERSONAL_SOURCE_WRITES:'35000'},
     serviceBindings:{SELF:async(request,runtime)=>{lanes.push(new URL(request.url).pathname);return (await runtime.getWorker('personal')).fetch(request);}},
     outboundService:async request=>{calls.push({method:new URL(request.url).pathname.split('/').at(-1),body:await request.json()});
-      if (calls.at(-1).body.reply_markup?.inline_keyboard.flat().some(button => button.icon_custom_emoji_id)) {
+      if (rejectRich && calls.at(-1).body.rich_message) return Response.json({ok:false,error_code:400,description:"Bad Request: RICH_MESSAGE_INVALID"},{status:400});
+      if (rejectEmoji && calls.at(-1).body.reply_markup?.inline_keyboard.flat().some(button => button.icon_custom_emoji_id)) {
         return Response.json({ok:false,error_code:400,description:'Bad Request: BUTTON_CUSTOM_EMOJI_INVALID'},{status:400});
       }
       return new Response(JSON.stringify({ok:true,result:{message_id:700}}),{headers:{'content-type':'application/json'}});}}));
@@ -65,6 +67,7 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
     for(let i=0;i<20 && calls.length<4;i++) {await new Promise(resolve=>setTimeout(resolve,100));await route('/tick/delivery');}
     assert.equal(calls.length,4);assert.equal(calls[3].body.text,'manual retry');
     assert.equal((await db.prepare("SELECT status FROM jobs WHERE id='other'").first()).status,'pending');
+    rejectEmoji = true;
     const menuTap = {update_id:3,userId:100,action:'menu',messageId:77};
     assert.equal((await post(menuTap)).status,200);
     for(let i=0;i<20 && calls.length<6;i++) {await new Promise(resolve=>setTimeout(resolve,100));await route('/tick/delivery');}
@@ -78,6 +81,35 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
     assert.deepEqual(fallback.map(button=>button.text), ['📅 Сегодня','🗓 Завтра']);
     assert.deepEqual(fallback.map(button=>button.style), ['primary','success']);
     assert.ok(fallback.every(button=>!Object.hasOwn(button,'icon_custom_emoji_id')));
+    assert.ok(calls[4].body.reply_markup.inline_keyboard.flat().some(button => button.callback_data === 'personal:updates:0'));
+
+    rejectEmoji = false;
+    async function tap(action, update_id, expectedCalls) {
+      const response = await relayPersonalUpdate({PERSONAL_ENABLED:'true',ADMIN_USER_ID:'100',PERSONAL_SHARED_SECRET:'local-test',
+        PERSONAL:{fetch:(url,options)=>mf.dispatchFetch('http://localhost/inbox',options)}},
+        {update_id,callback_query:{id:'tap'+update_id,from:{id:100},data:'personal:'+action,
+          message:{message_id:77,chat:{type:'private',id:100}}}});
+      assert.deepEqual(await response.json(),{method:'answerCallbackQuery',callback_query_id:'tap'+update_id});
+      for(let i=0;i<25 && calls.length<expectedCalls;i++) {
+        await new Promise(resolve=>setTimeout(resolve,100));
+        await route('/tick/delivery');
+      }
+      assert.equal(calls.length,expectedCalls);
+    }
+    await tap('updates:0',4,7);
+    assert.match(calls[6].body.text,/V1\.0.*<\/b>/u);
+    assert.equal(calls[6].body.message_id,77);
+    await tap('table:'+date,5,8);
+    assert.equal(calls[7].method,'editMessageText');
+    assert.equal(calls[7].body.message_id,77);
+    assert.match(calls[7].body.rich_message.html,/<table bordered striped compact>/u);
+    assert.match(calls[7].body.rich_message.html,/МАТЕМАТИКА/u);
+    rejectRich = true;
+    await tap('table:'+date,6,10);
+    assert.equal(calls[9].method,'editMessageText');
+    assert.equal(calls[9].body.message_id,77);
+    assert.match(calls[9].body.text,/МАТЕМАТИКА/u);
+    assert.equal(calls[9].body.rich_message,undefined);
     await db.prepare('UPDATE budgets SET rows_written=36000').run();
     assert.equal((await route('/source-status')).status,503,'uncommitted upload cannot be acknowledged as successful');
   } finally {await mf.dispose();}

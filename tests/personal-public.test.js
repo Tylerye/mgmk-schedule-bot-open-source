@@ -12,7 +12,7 @@ test('public access is explicit, accepts valid IDs and still reserves teacher ac
 });
 test('header has a blank line and service copy has no long dashes or pin announcement control',async()=>{
  const s=await sampleSchedule();const r=renderPersonal(s,{language:'ru'},{now:new Date('2026-11-12T07:00:00+03:00')});
- assert.match(r.parts[0],/ноября\n\n<b>/u);
+ assert.match(r.parts[0],/ноября<\/i>\n\n<b>/u);
  assert.ok(Object.values(words.ru).every(text=>!/[—–;]/u.test(text)));
  assert.ok(!settingsKeyboard({auto_pin:true}).inline_keyboard.flat().some(b=>b.callback_data==='personal:toggle:pin'));
 });

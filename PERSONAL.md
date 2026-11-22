@@ -146,3 +146,16 @@ teachers stay in Cloudflare. Exactly one sender may own the migrated queue.
 Pausing the personal sender retains incoming updates durably without processing
 them. A bounded warm-isolate cache shares timetable renders across users with the
 same group, language, mode and completed events; cold isolates remain correct.
+
+## Оформление и история версий
+
+«Таблица» открывает нативное форматированное сообщение Telegram на выбранный
+день. Стрелки ведут к опубликованным дням группы. Прошедшие занятия раскрываются
+отдельно. При отказе Bot API бот показывает текст с переходом к полной версии.
+
+Для пользовательского выпуска добавьте первую запись в массив `releases` в
+`src/personal/releases.js`. Укажите версию, дату и изменения на русском и
+английском. Предыдущие записи доступны стрелками в разделе «Обновления».
+
+`PERSONAL_BRANDED_MENU=true` включает фирменные иконки МГМК в ручных экранах.
+При подтверждённом отказе Telegram кнопки показывают обычные эмодзи.

@@ -13,7 +13,7 @@ const digest = value => createHash("sha256").update(JSON.stringify(value)).diges
 // first. A process dying between intent and receipt leaves it uncertain.
 export async function telegramOperation(store, client, user, key, method, body, now = Date.now(), { queuedEdit = false, clock } = {}) {
   const id = `${user.user_id}:${key}`;
-  const sendsMessage = method === "sendMessage" || method === "sendWidget";
+  const sendsMessage = ["sendMessage", "sendRichMessage", "sendWidget"].includes(method);
   // For queued cards and manual screens the job is already durable intent.
   // An interrupted edit repeats on the same message under the user lock;
   // completion (and card/screen hash) is the receipt. Sends still need a journal.
@@ -194,13 +194,17 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       // timetable or the current pin, even if the target changed since enqueue.
       const protectedMessage = job.kind === "reply" && await isTimetableMessage(store, user, payload.editId);
       const editId = protectedMessage ? null : payload.editId;
-      const method = editId ? "editMessageText" : "sendMessage";
-      const body = { ...sendBody(text, payload.keyboard, job.kind !== "alert" || !user.sound), ...(editId ? { message_id: editId } : {}) };
+      const rich = job.kind === "reply" && payload.richHtml ? { html: payload.richHtml, skip_entity_detection: true } : null;
+      const method = editId ? "editMessageText" : rich ? "sendRichMessage" : "sendMessage";
+      const content = rich
+        ? { chat_id: id, rich_message: rich, reply_markup: payload.keyboard, ...(editId ? {} : { disable_notification: true }) }
+        : sendBody(text, payload.keyboard, job.kind !== "alert" || !user.sound);
+      const body = { ...content, ...(editId ? { message_id: editId } : {}) };
       // Only standalone screens are cached: automatic cards and the owner's
       // teacher preview can be edited by other delivery paths.
       const screenKey = `screen-v1:${id}:${editId}`;
       const standalone = job.kind === "reply" && Boolean(editId) && String(id) !== String(ownerId);
-      const screenHash = hashScreen(text, payload.keyboard);
+      const screenHash = hashScreen(rich ?? text, payload.keyboard);
       const unchanged = standalone && await store.setting(screenKey) === screenHash;
       const result = unchanged ? { done: true } : await op(`${job.kind}:${job.date}:${job.revision}:${partIndex}:${details ? "support-details" : digest(body)}`, method, body);
       if (job.kind === "reply" && result.emojiRejected) {
@@ -210,6 +214,13 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
             JSON.stringify({ ...payload, keyboard: fallback }), job.id, job.revision);
           return;
         }
+      }
+      if (rich && result.failed && !result.replaceable) {
+        // A definitive Rich Message rejection can fall back to text at the
+        // same target. An ambiguous send remains uncertain in its journal.
+        await store.run("UPDATE jobs SET payload=? WHERE id=? AND revision=?",
+          JSON.stringify({ ...payload, richHtml: null }), job.id, job.revision);
+        return;
       }
       if (result.failed && editId) {
         // The user may have cleared the chat: create one replacement screen
@@ -432,7 +443,7 @@ export async function deliveryHealth(store, now = new Date()) {
 export async function diagnosticText(store, now = new Date(), delivery = null) {
   delivery ??= await deliveryHealth(store, now);
   const queue = await store.first("SELECT COUNT(*) count,MIN(due) oldest FROM jobs WHERE status='pending'");
-  const uncertain = await store.first("SELECT COUNT(*) count FROM operations WHERE status='uncertain' OR (status='started' AND method IN ('sendMessage','sendWidget'))");
+  const uncertain = await store.first("SELECT COUNT(*) count FROM operations WHERE status='uncertain' OR (status='started' AND method IN ('sendMessage','sendRichMessage','sendWidget'))");
   const failed = await store.first("SELECT COUNT(*) count FROM jobs WHERE status='failed'");
   const source = await store.setting("source-error", null);
   const budget = await store.first("SELECT * FROM budgets WHERE day=?", now.toISOString().slice(0, 10));

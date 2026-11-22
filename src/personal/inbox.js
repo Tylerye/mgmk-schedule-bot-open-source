@@ -1,7 +1,9 @@
+import { timetableTable } from "./timetable-table.js";
+import { releasePage } from "./releases.js";
 import { findGroups } from "./catalog.js";
 import { screenHash, isTimetableMessage } from './screen-state.js';
 import { hasLessonSummary, lessonDetailsChanges } from "./lesson-summary.js";
-import { t, menu, button, supportKeyboard, settingsKeyboard, groupsKeyboard, initialDates, selectedDate, renderPersonal, informationText, informationKeyboard, widgetGroup, widgetLabel } from "./view.js";
+import { t, menu, button, backToMenu, supportKeyboard, settingsKeyboard, groupsKeyboard, initialDates, selectedDate, renderPersonal, informationText, informationKeyboard, widgetGroup, widgetLabel } from "./view.js";
 
 export { collectPersonalUpdate } from "./update.js";
 
@@ -47,7 +49,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
         statements.push(["INSERT INTO settings(key,value) VALUES(?,?)", voteKey, JSON.stringify(later ? choice : Number(choice))]);
         statements.push(job(user, "rating-response", String(update.messageId), { priority: -2, payload: {
           manual: true, messageId: update.messageId, remove: later, text,
-          keyboard: { inline_keyboard: low ? [informationKeyboard(user).inline_keyboard[0]] : [] },
+          keyboard: { inline_keyboard: low ? [informationKeyboard(user, brandedMenu).inline_keyboard[0]] : [] },
         } }));
       }
       await store.batch([...statements,
@@ -66,31 +68,31 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     jobs.push(["UPDATE jobs SET status='superseded',completed_at=COALESCE(completed_at,unixepoch()*1000) WHERE user_id=? AND status='pending' AND kind IN ('reply','callback','commands')", user.user_id]);
     if (action === "start") action = user.group_id ? "menu" : "language";
     if (action === "language") {
-      reply("Русский / English", { inline_keyboard: [[button("Русский", "lang:ru"), button("English", "lang:en")]] });
+      reply("Русский / English", { inline_keyboard: [[button("Русский", "lang:ru", { branded: brandedMenu, style: "primary" }), button("English", "lang:en", { branded: brandedMenu })]] });
     } else if (action.startsWith("lang:")) {
       user.language = action.split(":")[1];
       if (user.language !== original.language) user.epoch++;
       user.screen = user.group_id ? "menu" : "groups";
-      reply(user.group_id ? t(user).menu : t(user).choose, user.group_id ? mainMenu() : groupsKeyboard(await groups(), user));
+      reply(user.group_id ? t(user).menu : t(user).choose, user.group_id ? mainMenu() : groupsKeyboard(await groups(), user, 0, brandedMenu));
       if (user.group_id) for (const s of initialDates(await store.schedules(user.group_id), now)) jobs.push(job(user, "card", s.date, { priority: 0, payload: { manual: true } }));
     } else if (action.startsWith("groups:") || action.startsWith("search:")) {
       user.screen = "groups";
       const catalog = await groups();
       const matches = action.startsWith("search:") ? findGroups(catalog, action.slice(7)) : catalog;
-      reply(t(user).choose, groupsKeyboard(matches, user, action.startsWith("groups:") ? Number(action.split(":")[1]) : 0));
+      reply(t(user).choose, groupsKeyboard(matches, user, action.startsWith("groups:") ? Number(action.split(":")[1]) : 0, brandedMenu));
     } else if (action.startsWith("group:")) {
       const group = (await groups()).find(g => g.id === action.slice(6));
-      if (!group) reply(t(user).choose, groupsKeyboard(await groups(), user));
+      if (!group) reply(t(user).choose, groupsKeyboard(await groups(), user, 0, brandedMenu));
       else {
         if (user.group_id !== group.id) { user.group_id = group.id; user.epoch++; user.pin_date = null; }
         user.screen = "menu";
         reply(`${t(user).group}: ${group.displayName}`);
-        if (!user.support_seen) { reply(t(user).supportText, supportKeyboard(user)); user.support_seen = 1; }
+        if (!user.support_seen) { reply(t(user).supportText, supportKeyboard(user, brandedMenu)); user.support_seen = 1; }
         const schedules = initialDates(await store.schedules(user.group_id), now);
         if (!schedules.length) reply(t(user).missing);
         for (const s of schedules) jobs.push(job(user, "card", s.date, { priority: 0, payload: { manual: true } }));
       }
-    } else if (action === "pause") { user.paused = 1; user.next_due = null; reply(t(user).settingsText, settingsKeyboard(user));
+    } else if (action === "pause") { user.paused = 1; user.next_due = null; reply(t(user).settingsText, settingsKeyboard(user, brandedMenu));
     } else if (action.startsWith("toggle:")) {
       const key = action.split(":")[1]; user[key] = user[key] ? 0 : 1;
       if (key === 'auto_pin') {
@@ -105,13 +107,25 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
         user.epoch++; user.next_due = null;
         if (!user.paused && user.group_id) for (const s of initialDates(await store.schedules(user.group_id), now)) jobs.push(job(user, "card", s.date, { priority: 0, payload: { manual: true } }));
       }
-      reply(t(user).settings, settingsKeyboard(user));
-    } else if (action === "settings") reply(t(user).settings, settingsKeyboard(user));
-    else if (action === "help") reply(t(user).helpText);
-    else if (action === "feedback" || action === "privacy") reply(informationText(user, action), informationKeyboard(user));
-    else if (action === "support") reply(t(user).supportText, supportKeyboard(user));
+      reply(t(user).settingsText, settingsKeyboard(user, brandedMenu));
+    } else if (action === "settings") reply(t(user).settingsText, settingsKeyboard(user, brandedMenu));
+    else if (action === "help") reply(t(user).helpText, backToMenu(user, brandedMenu));
+    else if (action === "feedback" || action === "privacy") reply(informationText(user, action), informationKeyboard(user, brandedMenu));
+    else if (action.startsWith("updates:")) {
+      const page = releasePage(user, Number(action.split(":")[1]), brandedMenu);
+      reply(page.text, page.keyboard);
+    } else if (action.startsWith("table:")) {
+      const date = action.slice("table:".length);
+      if (!user.group_id) reply(t(user).choose, groupsKeyboard(await groups(), user, 0, brandedMenu));
+      else {
+        const schedules = await store.schedules(user.group_id);
+        const schedule = schedules.find(item => item.date === date);
+        if (!schedule) reply(t(user).missing, mainMenu());
+        else replies.push({ ...timetableTable(schedule, schedules, user, now, brandedMenu), editId: update.messageId ?? null });
+      }
+    } else if (action === "support") reply(t(user).supportText, supportKeyboard(user, brandedMenu));
     else if (action === "donate") replies.push({
-      supportDetails: true, keyboard: { inline_keyboard: [[button(t(user).back, "support")]] }, editId: update.messageId ?? null,
+      supportDetails: true, keyboard: { inline_keyboard: [[button(t(user).back, "support", { branded: brandedMenu })]] }, editId: update.messageId ?? null,
     });
     else if (action === "later") reply(t(user).closed, mainMenu(), update.messageId);
     else if (action === "diagnostics") {
@@ -144,7 +158,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
         jobs.push(job(user, "card", date, { priority: 0, payload: { manual: true, history: true } }));
       }
     } else if (["today", "tomorrow", "next", "schedule"].includes(action) || action.startsWith("preview:") || action.startsWith("widget-text:")) {
-      if (!user.group_id) reply(t(user).choose, groupsKeyboard(await groups(), user));
+      if (!user.group_id) reply(t(user).choose, groupsKeyboard(await groups(), user, 0, brandedMenu));
       else {
         const fromWidget = action.startsWith("widget-text:");
         if (fromWidget) action = `preview:${action.slice("widget-text:".length)}:full`;
@@ -157,7 +171,10 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
           const rendered = renderPersonal(schedule, user, { now, lessonChanges: lessonDetailsChanges(schedule, card),
             mode: action.startsWith("preview:") ? action.split(":")[2] : "compact" });
           const keyboard = structuredClone(rendered.keyboard);
-          for (const row of keyboard.inline_keyboard) for (const b of row) b.callback_data = b.callback_data.replace('personal:view:', 'personal:preview:');
+          for (const row of keyboard.inline_keyboard) for (const item of row) {
+            const target = item.callback_data.slice("personal:".length).replace(/^view:/u, "preview:");
+            Object.assign(item, button(item.text, target, { branded: brandedMenu, style: item.style }));
+          }
           if (widgetEnabled && user.group_id === widgetGroup) keyboard.inline_keyboard.splice(-1, 0, [button(widgetLabel(user), `widget:${date}`)]);
           // A preview is one navigable screen, independent of automatic cards.
           // Paging needs no extra sends, receipts or persisted message IDs.
@@ -205,7 +222,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     // User/card/source state is freshly read under the same lock as delivery.
     // Supersede older navigation even when this latest tap needs no new job.
     const only = replies.length === 1 ? replies[0] : null;
-    const unchanged = only && !only.supportDetails && update.acknowledged && !changed.length && jobs.length === 1
+    const unchanged = only && !only.supportDetails && !only.richHtml && update.acknowledged && !changed.length && jobs.length === 1
       && only.editId && String(user.user_id) !== String(ownerId) && !await isTimetableMessage(store, user, only.editId)
       && await store.setting(`screen-v1:${user.user_id}:${only.editId}`) === screenHash(only.text, only.keyboard);
     if (!unchanged) for (const [index, payload] of replies.entries()) jobs.push(job(user, "reply", payload.editId ? "screen" : `${row.update_id}:${index}`, { priority: -2, payload: { ...payload, manual: true } }));
