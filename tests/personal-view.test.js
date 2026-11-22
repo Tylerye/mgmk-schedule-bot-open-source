@@ -29,11 +29,11 @@ test("RU/EN labels preserve PDF names, linked subgroups and notes; classes conti
   assert.ok(ru.parts[0].includes("подгруппа 2"));
   const en = renderPersonal(schedule, { language: "en" }, { mode: "full", now: new Date("2026-11-12T16:31:00+03:00") });
   assert.match(en.parts[0], /Thursday, 12 November/u);
-  assert.match(en.parts[0], /<b>08:15–09:00<\/b>.*1 lesson.*✓/u);
+  assert.match(en.parts[0], /<b>08:15–09:00<\/b>.*1 lesson.*✅/u);
   assert.match(en.parts[0], /МАТЕМАТИКА/u);
   assert.ok(!en.parts[0].includes("329"));
   assert.match(en.parts[0], /Information period/u);
-  assert.match(en.parts[0], /🍴 <b>Lunch/u);
+  assert.match(en.parts[0], /🍴 <b><u>Lunch/u);
 });
 
 test("long cards split without losing source text or breaking HTML", async () => {
@@ -87,4 +87,16 @@ test("same group/language/mode cohort shares a render, while lesson end and lang
   assert.equal(renderPersonal(s, { language: "ru", sound: 0 }, { now: at }), first);
   assert.notEqual(renderPersonal(s, { language: "en" }, { now: at }), first);
   assert.notEqual(renderPersonal(s, { language: "ru" }, { now: new Date("2026-11-12T09:00:00+03:00") }), first);
+});
+
+test("current lesson countdown uses the same preview payload throughout the class", async () => {
+  const schedule = await sampleSchedule();
+  const user = { language: "ru" };
+  const local = time => new Date(schedule.date + "T" + time + ":00+03:00");
+  const open = time => renderPersonal(schedule, user, { now: local(time), previewTimer: true, branded: true });
+  const first = open("08:20");
+  assert.match(first.parts[0], /До конца пары · <tg-time unix="\d+" format="r">09:00<\/tg-time>/u);
+  assert.deepEqual(first.hashes, open("08:47").hashes);
+  assert.doesNotMatch(open("09:05").parts[0], /<tg-time/u);
+  assert.doesNotMatch(renderPersonal(schedule, user, { now: local("08:20") }).parts[0], /<tg-time/u);
 });

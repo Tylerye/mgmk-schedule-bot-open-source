@@ -4,6 +4,19 @@ import { backToMenu, button, screenText, t } from "./view.js";
 // Add new releases at the top. Keep the version IDs stable for old buttons.
 const releases = [
   {
+    version: "V1.2", date: "23.11.2026",
+    ru: ["В расписании проще ориентироваться", [
+      "Перемены и обед отделены от пар",
+      "Прошедшие пары отмечены галочкой и собраны под своим заголовком",
+      "Для 8-Сба в личке можно посмотреть, сколько осталось до конца текущей пары",
+    ]],
+    en: ["An easier timetable to scan", [
+      "Breaks and lunch stand out between classes",
+      "Finished classes have a check mark and their own heading",
+      "The 8-Сба personal timetable can show how long the current class has left",
+    ]],
+  },
+  {
     version: "V1.1", date: "22.11.2026",
     ru: ["Бот стал проще", [
       "Все пары теперь в одном формате — время видно сразу",
@@ -107,8 +120,8 @@ export function releasePage(user, target, branded) {
   const [title, notes] = release[language];
   const status = page === 0 ? (en ? "Stable release" : "Свежая версия") : (en ? "Archive milestone" : "Из архива");
   const navigation = [];
-  if (page > 0) navigation.push(button("← " + releases[page - 1].version, actionFor(releases[page - 1])));
-  if (page + 1 < releases.length) navigation.push(button(releases[page + 1].version + " →", actionFor(releases[page + 1])));
+  if (page > 0) navigation.push(button("← " + releases[page - 1].version, actionFor(releases[page - 1]), { branded }));
+  if (page + 1 < releases.length) navigation.push(button(releases[page + 1].version + " →", actionFor(releases[page + 1]), { branded }));
   return {
     text: screenText("updates", `<b>${w.updates} · ${release.version}</b>\n<i>${status} · ${release.date}</i>\n\n<b>${title}</b>\n\n${notes.map(note => "• " + note).join("\n\n")}`, branded),
     keyboard: { inline_keyboard: [

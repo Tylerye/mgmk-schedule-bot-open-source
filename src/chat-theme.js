@@ -1,4 +1,6 @@
 const themeEmoji = {
+  completed: "5195043813898370122",
+  live: "5195090654811697547",
   github: "5195296753112363722",
   lunch: "5197633344170405759",
   large_break: "5195319567978637499",
@@ -25,6 +27,7 @@ const themeEmoji = {
 };
 
 const fallback = {
+  completed: "✅", live: "🟠",
   github: "💻", lunch: "🍴", large_break: "☕",
   today: "📅", tomorrow: "🗓", next: "⏭", schedule: "📚", settings: "⚙️",
   help: "💡", support: "💛", feedback: "💬", privacy: "ℹ️", updates: "✨",
@@ -61,7 +64,8 @@ export async function sendWithThemeFallback(send, text, keyboard) {
   try { return await send(text, keyboard); }
   catch (error) {
     if (!error.apiRejected || error.errorCode !== 400 || !/emoji|entities|reply markup|button.type.invalid/iu.test(error.description ?? "")) throw error;
-    const plain = text?.replace(/<tg-emoji emoji-id="\d+">([^<]*)<\/tg-emoji>/gu, "$1");
+    const plain = text?.replace(/<tg-emoji emoji-id="\d+">([^<]*)<\/tg-emoji>/gu, "$1")
+      .replace(/<tg-time unix="\d+" format="r">([^<]*)<\/tg-time>/gu, "$1");
     const markup = plainKeyboard(keyboard);
     if (plain === text && markup === keyboard) throw error;
     return send(plain, markup);

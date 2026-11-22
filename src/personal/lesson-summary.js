@@ -25,9 +25,11 @@ export function lessonDetailsChanges(schedule, card) {
   return changes.length ? changes : undefined;
 }
 
+export const currentLesson = (timeline, time) => timeline.find(e => e.type === "lesson" && e.start && e.end && e.start <= time && time < e.end);
+
 export function lessonSummary(timeline, time, english) {
   const lessons = timeline.filter(e => e.type === "lesson" && e.start && e.end);
-  const current = lessons.find(e => e.start <= time && time < e.end);
+  const current = currentLesson(lessons, time);
   const next = lessons.find(e => e.start > time);
   const line = (lesson, label, timing) => {
     const places = [...new Set(lesson.variants.map(v => v.room ? `${v.subject} · ${english ? "room" : "каб."} ${v.room}` : v.subject))];

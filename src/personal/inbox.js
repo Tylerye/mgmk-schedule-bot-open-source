@@ -75,8 +75,8 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     if (action === "language") {
       const en = user.language === "en";
       reply(titled("language", en ? "<b>Pick a language</b>" : "<b>На каком языке будем общаться?</b>"), {
-        inline_keyboard: [[button("Русский", "lang:ru", { branded: brandedMenu, style: !en ? "primary" : undefined }),
-          button("English", "lang:en", { branded: brandedMenu, style: en ? "primary" : undefined })],
+        inline_keyboard: [[button(en ? "Русский" : "Русский ✓", "lang:ru", { branded: brandedMenu, style: "primary" }),
+          button(en ? "English ✓" : "English", "lang:en", { branded: brandedMenu, style: "primary" })],
           ...(user.group_id ? backToMenu(user, brandedMenu).inline_keyboard : [])],
       });
     } else if (action.startsWith("lang:")) {
@@ -169,7 +169,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
         else {
           const schedule = schedules.find(s => s.date === date);
           const card = hasLessonSummary(schedule) ? await store.card(user, date) : null;
-          const rendered = renderPersonal(schedule, user, { now, branded: brandedMenu, lessonChanges: lessonDetailsChanges(schedule, card),
+          const rendered = renderPersonal(schedule, user, { now, branded: brandedMenu, previewTimer: true, lessonChanges: lessonDetailsChanges(schedule, card),
             mode: action.startsWith("preview:") ? action.split(":")[2] : "compact" });
           const keyboard = structuredClone(rendered.keyboard);
           for (const row of keyboard.inline_keyboard) for (const item of row) {

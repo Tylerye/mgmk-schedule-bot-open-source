@@ -101,7 +101,7 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
       assert.equal(calls.length,expectedCalls);
     }
     await tap('updates:0',4,7);
-    assert.match(calls[6].body.text,/V1\.1.*<\/b>/u);
+    assert.match(calls[6].body.text,/V1\.2.*<\/b>/u);
     assert.equal(calls[6].body.message_id,77);
     await tap('updates:history',5,8);
     assert.match(calls[7].body.text,/V0\.1[\s\S]*11\.11\.2026[\s\S]*V1\.0/u);
