@@ -30,8 +30,13 @@ export async function collectTeacherUpdate(database, update, config = {}) {
   const callback = update.callback_query, message = update.message ?? callback?.message;
   const from = callback?.from ?? message?.from;
   if (message?.chat?.type !== "private" || from?.is_bot || !Number.isSafeInteger(from?.id) || from.id <= 0 || message.chat.id !== from.id) return null;
-  const action = callback ? String(callback.data ?? "").split(":")[1] : commands.get(String(message.text ?? "").trim().split(/\s/u)[0].split("@")[0].toLowerCase());
-  if (!actions.has(action) || (callback && !/^teacher:(today|tomorrow|next|previous|full|compact|pause|resume)(?::\d{4}-\d{2}-\d{2})?$/.test(callback.data ?? ""))) return null;
+  const route = callback && /^teacher:(today|tomorrow|next|previous|full|compact|pause|resume|list)(?::(\d{4}-\d{2}-\d{2}))?(?::([a-z]+))?$/u.exec(callback.data ?? "");
+  const action = callback ? route?.[1] : commands.get(String(message.text ?? "").trim().split(/\s/u)[0].split("@")[0].toLowerCase());
+  const target = route?.[3];
+  if (target && ["pause", "resume", "list"].includes(action)) return null;
+  if ((!actions.has(action) && action !== "list") || (target && !TEACHERS.some(teacher => teacher.id === target))) return null;
+  if ((target || action === "list") && (config.OWNER_PREVIEW_ENABLED !== "true"
+    || numeric(config.ADMIN_USER_ID) !== from.id)) return null;
 
   // Persisted numeric enrollment survives username changes and absent optional configuration.
   const enrolled = await database.prepare("SELECT * FROM teacher_users WHERE user_id=?").bind(from.id).first();
@@ -45,11 +50,12 @@ export async function collectTeacherUpdate(database, update, config = {}) {
     const seat = await database.prepare("SELECT * FROM teacher_users WHERE teacher_id=?").bind(teacher.id).first();
     if (seat?.user_id !== from.id) return null;
   }
+  if ((target || action === "list") && !teacher.sourceTeacherId) return null;
   if (teacher.sourceTeacherId && (!teacher.userId || teacher.userId !== from.id)) return null;
   if (teacher.userId && teacher.userId !== from.id) return null;
   return { update_id: update.update_id, teacherId: teacher.id, action, userId: from.id,
     ...(!callback && /^\/start(?:@\w+)?(?:\s|$)/iu.test(message.text ?? "") ? { welcome: true } : {}),
-    ...(callback ? { callbackId: String(callback.id).slice(0, 256), messageId: message.message_id, date: callback.data.split(":")[2] ?? null } : {}) };
+    ...(callback ? { callbackId: String(callback.id).slice(0, 256), messageId: message.message_id, date: route[2] ?? null, ...(target ? { target } : {}) } : {}) };
 }
 
 export async function enqueueTeacherUpdate(database, update) {
@@ -57,14 +63,15 @@ export async function enqueueTeacherUpdate(database, update) {
     .bind(update.update_id, update.teacherId, JSON.stringify(update)).run();
 }
 
-export function teacherKeyboard(user, date, full = false) {
+export function teacherKeyboard(user, date, full = false, target) {
   const branded = user.branded;
-  const key = (label, action, icon, style) => themedButton(label, { callback_data: "teacher:" + action }, icon, { branded, style, plain: true });
+  const key = (label, action, icon, style) => themedButton(label, { callback_data: "teacher:" + action + (target ? ":" + target : "") }, icon, { branded, style, plain: true });
   const suffix = date ? ":" + date : "";
   return { inline_keyboard: [
     [key("Сегодня", "today", "today", "success"), key("Завтра", "tomorrow", "tomorrow", "success")],
     [key("Раньше", "previous" + suffix, "back"), key("Ближайший день", "next", "next", "success")],
     [key(full ? "Оставшиеся пары" : "Показать все пары", (full ? "compact" : "full") + suffix, "view", "primary")],
+    ...(user.ownerPreview ? [[themedButton("Выбрать преподавателя", { callback_data: "teacher:list" }, "group", { branded, style: "success", plain: true })]] : []),
     user.previewManual
       ? [themedButton("Личное расписание", { callback_data: "personal:menu" }, "menu", { branded, style: "success", plain: true })]
       : [key("Автообновления: " + (user.notifications ? "вкл" : "выкл"), user.notifications ? "pause" : "resume",
@@ -176,22 +183,29 @@ async function drainTeacherInbox({ database, client, teacher, user, config, now 
       user.notifications = action.action === "resume" ? 1 : 0;
       await database.prepare("UPDATE teacher_users SET notifications=? WHERE teacher_id=? AND user_id=?").bind(user.notifications, teacher.id, user.user_id).run();
     }
-    const schedules = await rowsFor(database, teacher.id);
+    const ownerPreview = Boolean(teacher.sourceTeacherId) && user.ownerPreview;
+    if ((action.target || action.action === "list") && !ownerPreview) continue;
+    const target = ownerPreview && TEACHERS.find(item => item.id === action.target);
+    const shownTeacher = target ? { ...target, sourceTeacherId: target.id } : teacher;
+    const list = action.action === "list";
+    const schedules = list ? [] : await rowsFor(database, target?.id ?? teacher.id);
     const today = dateInTimezone(now, config.timezone);
     const selected = chooseTeacherDate(schedules, action.action, today, action.date);
     const full = action.action === "full" || (action.action !== "compact" && selected?.date < today);
-    const formatted = selected && formatTeacherSchedule(JSON.parse(selected.payload), teacher, {
+    const formatted = selected && formatTeacherSchedule(JSON.parse(selected.payload), shownTeacher, {
       now, timezone: config.timezone, full, branded: user.branded,
     });
-    const text = action.welcome
+    const text = list ? teacherHeading("group", "Выберите преподавателя", user.branded) : action.welcome
       ? teacherHeading("menu", "Здравствуйте! Это ваш кабинет МГМК", user.branded) + "\n\nВыберите день, чтобы посмотреть уроки\nНовое расписание и правки придут сюда"
       : ["pause", "resume"].includes(action.action)
         ? (formatted || teacherHeading("settings", "Настройки", user.branded)) + (user.notifications
           ? "\n\nБуду присылать новое расписание и правки"
           : "\n\nАвтообновления на паузе\nУроки можно посмотреть кнопками")
         : formatted || teacherHeading("view", action.action === "previous" ? "Предыдущего расписания пока нет" : "Расписания на этот день пока нет", user.branded);
-    const replyMarkup = teacherKeyboard(user, selected?.date, full);
-    if (action.callbackId && selected && !["pause", "resume"].includes(action.action)) {
+    const replyMarkup = list ? { inline_keyboard: TEACHERS.map(item => [themedButton(item.name,
+      { callback_data: "teacher:next:" + item.id }, "group", { branded: user.branded, style: "success", plain: true })]) }
+      : teacherKeyboard(user, selected?.date, full, target?.id);
+    if (action.callbackId && selected && !target && !["pause", "resume"].includes(action.action)) {
       await database.prepare("INSERT INTO teacher_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
         .bind(`view:${teacher.id}:${action.messageId}`, JSON.stringify({ date: selected.date, full })).run();
     }
@@ -350,6 +364,7 @@ export async function teacherMaintenance(env, config, logger, teacherId, now = n
     if (!user) return;
     if (teacher.sourceTeacherId && String(user.user_id) !== String(env.ADMIN_USER_ID)) throw new Error("Preview account identity mismatch");
     if (teacher.userId && teacher.userId !== user.user_id) throw new Error("Preview account identity mismatch");
+    user.ownerPreview = Boolean(teacher.sourceTeacherId);
     user.previewManual = env.PERSONAL_ENABLED === "true" && Boolean(teacher.sourceTeacherId);
     user.branded = env.TEACHER_BRANDED_MENU === "true";
     const client = suppliedClient ?? clientFor(env, logger);
