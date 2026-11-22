@@ -11,10 +11,13 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
   const script = (await build({entryPoints:['personal/worker.js'],bundle:true,write:false,format:'esm',platform:'neutral',external:['node:crypto']})).outputFiles[0].text;
   const lanes=[], calls=[];
   const mf=new Miniflare(convertV4MiniflareOptions({name:'personal',modules:true,script,compatibilityDate:'2026-09-14',compatibilityFlags:['nodejs_compat'],
-    d1Databases:{DB:'interactive'},bindings:{PERSONAL_SHARED_SECRET:'local-test',ADMIN_USER_ID:'100',BOT_TOKEN:'fake',PERSONAL_PUBLIC:'true',
+    d1Databases:{DB:'interactive'},bindings:{PERSONAL_SHARED_SECRET:'local-test',ADMIN_USER_ID:'100',BOT_TOKEN:'fake',PERSONAL_PUBLIC:'true',PERSONAL_BRANDED_MENU:'true',
       PERSONAL_DAILY_WRITES:'45000',PERSONAL_BACKGROUND_WRITES:'30000',PERSONAL_SOURCE_WRITES:'35000'},
     serviceBindings:{SELF:async(request,runtime)=>{lanes.push(new URL(request.url).pathname);return (await runtime.getWorker('personal')).fetch(request);}},
     outboundService:async request=>{calls.push({method:new URL(request.url).pathname.split('/').at(-1),body:await request.json()});
+      if (calls.at(-1).body.reply_markup?.inline_keyboard.flat().some(button => button.icon_custom_emoji_id)) {
+        return Response.json({ok:false,error_code:400,description:'Bad Request: BUTTON_CUSTOM_EMOJI_INVALID'},{status:400});
+      }
       return new Response(JSON.stringify({ok:true,result:{message_id:700}}),{headers:{'content-type':'application/json'}});}}));
   try {
     const db=await mf.getD1Database('DB');
@@ -62,6 +65,19 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
     for(let i=0;i<20 && calls.length<4;i++) {await new Promise(resolve=>setTimeout(resolve,100));await route('/tick/delivery');}
     assert.equal(calls.length,4);assert.equal(calls[3].body.text,'manual retry');
     assert.equal((await db.prepare("SELECT status FROM jobs WHERE id='other'").first()).status,'pending');
+    const menuTap = {update_id:3,userId:100,action:'menu',messageId:77};
+    assert.equal((await post(menuTap)).status,200);
+    for(let i=0;i<20 && calls.length<6;i++) {await new Promise(resolve=>setTimeout(resolve,100));await route('/tick/delivery');}
+    assert.deepEqual(calls.slice(4).map(call=>[call.method,call.body.message_id]),[
+      ['editMessageText',77], ['editMessageText',77],
+    ]);
+    const [branded, fallback] = calls.slice(4).map(call=>call.body.reply_markup.inline_keyboard[0]);
+    assert.deepEqual(branded.map(button=>button.style), ['primary','success']);
+    assert.deepEqual(branded.map(button=>button.callback_data), ['personal:today','personal:tomorrow']);
+    assert.ok(branded.every(button=>/^\d+$/.test(button.icon_custom_emoji_id)));
+    assert.deepEqual(fallback.map(button=>button.text), ['📅 Сегодня','🗓 Завтра']);
+    assert.deepEqual(fallback.map(button=>button.style), ['primary','success']);
+    assert.ok(fallback.every(button=>!Object.hasOwn(button,'icon_custom_emoji_id')));
     await db.prepare('UPDATE budgets SET rows_written=36000').run();
     assert.equal((await route('/source-status')).status,503,'uncommitted upload cannot be acknowledged as successful');
   } finally {await mf.dispose();}

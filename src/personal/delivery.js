@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { renderPersonal, t, button, subjectChanges, choosePersonalPin, nextRenderAt, nextPersonalPinAt, noticeParts, supportDetailsText, widgetGroup } from "./view.js";
+import { renderPersonal, t, button, subjectChanges, choosePersonalPin, nextRenderAt, nextPersonalPinAt, noticeParts, supportDetailsText, widgetGroup, withoutMenuEmoji } from "./view.js";
 import { buildScheduleWidget } from "./widget.js";
 import { lessonDetailsChanges } from "./lesson-summary.js";
 import { escapeHtml } from "../schedule/format.js";
@@ -75,7 +75,8 @@ export async function telegramOperation(store, client, user, key, method, body, 
     const permanent = error.apiRejected && error.errorCode >= 400 && error.errorCode < 500;
     const replaceable = permanent && method === 'editMessageText' && /message to edit not found/iu.test(error.description ?? '');
     const missingPin = permanent && method === 'pinChatMessage' && /message to pin not found/iu.test(error.description ?? '');
-    const failure = { replaceable, ...(missingPin ? { missingPin: true } : {}) };
+    const emojiRejected = permanent && error.errorCode === 400 && /emoji|reply markup|button.type.invalid/iu.test(error.description ?? '');
+    const failure = { replaceable, ...(missingPin ? { missingPin: true } : {}), ...(emojiRejected ? { emojiRejected: true } : {}) };
     if (journal) await store.run("UPDATE operations SET status=?,result=? WHERE id=?", permanent ? "failed" : "retry", JSON.stringify(failure), id);
     return permanent ? { failed: true, ...failure } : { retryAt: now + 5000 };
   }
@@ -202,6 +203,14 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       const screenHash = hashScreen(text, payload.keyboard);
       const unchanged = standalone && await store.setting(screenKey) === screenHash;
       const result = unchanged ? { done: true } : await op(`${job.kind}:${job.date}:${job.revision}:${partIndex}:${details ? "support-details" : digest(body)}`, method, body);
+      if (job.kind === "reply" && result.emojiRejected) {
+        const fallback = withoutMenuEmoji(payload.keyboard);
+        if (fallback) {
+          await store.run("UPDATE jobs SET payload=? WHERE id=? AND revision=?",
+            JSON.stringify({ ...payload, keyboard: fallback }), job.id, job.revision);
+          return;
+        }
+      }
       if (result.failed && editId) {
         // The user may have cleared the chat: create one replacement screen
         await store.run("UPDATE jobs SET payload=?,status='pending' WHERE id=? AND revision=?", JSON.stringify({...payload,editId:null}),job.id,job.revision);

@@ -96,7 +96,11 @@ async function deliverInteractive(env, id) {
 }
 
 async function processInboxRow(store, env, row, now) {
-  const acquired = await processPersonalInbox(store, row, now, { ownerId: env.ADMIN_USER_ID, widgetEnabled: env.PERSONAL_WIDGET_ENABLED === "true" });
+  const acquired = await processPersonalInbox(store, row, now, {
+    ownerId: env.ADMIN_USER_ID,
+    widgetEnabled: env.PERSONAL_WIDGET_ENABLED === "true",
+    brandedMenu: env.PERSONAL_BRANDED_MENU === "true",
+  });
   if (acquired?.earlier != null) return { ok:true, busy:true, earlier:acquired.earlier };
   const delivery = acquired !== false && Boolean(await store.first("SELECT 1 FROM jobs WHERE user_id=? AND status='pending' AND json_extract(payload,'$.manual')=1 LIMIT 1", row.user_id));
   return { ok: true, busy: acquired === false, delivery };

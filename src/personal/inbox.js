@@ -15,7 +15,7 @@ export async function enqueuePersonalUpdate(store, update, now = Date.now()) {
   return Number(inserted.meta?.changes ?? 0) > 0;
 }
 
-export async function processPersonalInbox(store, row, now = new Date(), { ownerId, widgetEnabled = false } = {}) {
+export async function processPersonalInbox(store, row, now = new Date(), { ownerId, widgetEnabled = false, brandedMenu = false } = {}) {
   const update = JSON.parse(row.payload);
   const job = (user, kind, date, options = {}) => store.jobStatement(user, kind, date, { due: now.getTime(), ...options });
   let earlier = null;
@@ -59,7 +59,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     const groups = async () => catalog ??= (await store.groups()).sort((a, b) =>
       Number.parseInt(a.id, 10) - Number.parseInt(b.id, 10) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     const jobs = [], replies = [];
-    const mainMenu = () => menu(user, widgetEnabled);
+    const mainMenu = () => menu(user, widgetEnabled, brandedMenu);
     const reply = (text, keyboard = mainMenu(), editId = update.messageId ?? null) => replies.push({ text, keyboard, editId });
     let action = update.action;
     // Only the latest navigation request should survive rapid taps

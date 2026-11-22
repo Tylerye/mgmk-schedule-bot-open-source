@@ -49,10 +49,40 @@ const icons = {feedback:'💬',privacy:'ℹ️',schedule:'📚',today:'📅',tom
 export const button = (text, action) => ({ text: (icons[action.split(':')[0]] ? icons[action.split(':')[0]]+' ' : action.startsWith('toggle:') ? (icons[action.split(':')[1]]??'')+' ' : '')+text, callback_data: `personal:${action}` });
 export const widgetGroup = "8СА";
 export const widgetLabel = user => user.language === "en" ? "Day by lesson · HTML" : "День по урокам · HTML";
-export const menu = (user, widgetEnabled = false) => ({ inline_keyboard: [
-  [button(t(user).schedule, "schedule")], [button(t(user).today, "today"), button(t(user).tomorrow, "tomorrow")],
+const menuEmoji = {
+  today: "5197680953882883689",
+  tomorrow: "5197618530828202500",
+  settings: "5197388333466041903",
+  next: "5195169072324589074",
+  schedule: "5195345685674768707",
+};
+
+function menuButton(text, action, branded, style) {
+  const result = button(text, action);
+  if (style) result.style = style;
+  if (branded) {
+    result.text = text;
+    result.icon_custom_emoji_id = menuEmoji[action];
+  }
+  return result;
+}
+
+export function withoutMenuEmoji(keyboard) {
+  const rows = keyboard?.inline_keyboard;
+  if (!rows?.some(row => row.some(item => item.icon_custom_emoji_id))) return null;
+  return { inline_keyboard: rows.map(row => row.map(item => {
+    const { icon_custom_emoji_id: emoji, ...fallback } = item;
+    if (!emoji) return item;
+    const action = fallback.callback_data.slice("personal:".length);
+    return { ...fallback, text: button(fallback.text, action).text };
+  })) };
+}
+
+export const menu = (user, widgetEnabled = false, branded = false) => ({ inline_keyboard: [
+  [menuButton(t(user).today, "today", branded, "primary"), menuButton(t(user).tomorrow, "tomorrow", branded, "success")],
+  [menuButton(t(user).schedule, "schedule", branded)],
   ...(widgetEnabled && user.group_id === widgetGroup ? [[button(widgetLabel(user), "widget")]] : []),
-  [button(t(user).next, "next"), button(t(user).settings, "settings")], [button(t(user).help, "help"), button(t(user).support, "support")],
+  [menuButton(t(user).next, "next", branded), menuButton(t(user).settings, "settings", branded)], [button(t(user).help, "help"), button(t(user).support, "support")],
   [button(t(user).feedback, "feedback"), button(t(user).privacy, "privacy")],
 ] });
 export const informationText = (user, action) => t(user)[`${action}Text`].replaceAll('{contact}', escapeHtml(AUTHOR_USERNAME));
