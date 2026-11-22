@@ -65,14 +65,14 @@ function plainKeyboard(markup, textOnly = false) {
 
 // Retry once after a definitive format rejection. A timeout may already
 // have delivered the original message, so it must go to the caller unchanged.
-export async function sendWithThemeFallback(send, text, keyboard, { keepKeyboard = false } = {}) {
+export async function sendWithThemeFallback(send, text, keyboard, { customEmojiOnly = false } = {}) {
   try { return await send(text, keyboard); }
   catch (error) {
     if (!error.apiRejected || error.errorCode !== 400 || !/emoji|entities|reply markup|button.type.invalid/iu.test(error.description ?? "")) throw error;
-    const plain = text?.replace(/<tg-emoji emoji-id="\d+">([^<]*)<\/tg-emoji>/gu, "$1")
+    const plain = text?.replace(/<tg-emoji emoji-id="\d+">([^<]*)<\/tg-emoji> ?/gu, customEmojiOnly ? "" : "$1")
       .replace(/<tg-time unix="\d+" format="r">([^<]*)<\/tg-time>/gu, "$1");
-    const markup = plainKeyboard(keyboard, keepKeyboard);
-    if (keepKeyboard && plain !== text && markup !== keyboard) {
+    const markup = plainKeyboard(keyboard, customEmojiOnly);
+    if (customEmojiOnly && plain !== text && markup !== keyboard) {
       try {
         return await send(plain, keyboard);
       } catch (retry) {

@@ -1,4 +1,4 @@
-import { heading, lessonHeading, themeIcon, themedButton, sendWithThemeFallback } from "../src/chat-theme.js";
+import { lessonHeading, themeIcon, themedButton, sendWithThemeFallback } from "../src/chat-theme.js";
 import { TEACHERS, escapeHtml } from "../src/teachers.js";
 import { dateTitle } from "../src/schedule/format.js";
 import { addDays, dateInTimezone, timeInTimezone } from "../src/dates.js";
@@ -15,6 +15,8 @@ export const TEACHER_ACCOUNTS = [...TEACHERS, {
 function sourceTeacherId(id) { return TEACHER_ACCOUNTS.find(t => t.id === id)?.sourceTeacherId ?? id; }
 
 const commands = new Map([["/start", "next"], ["/today", "today"], ["/tomorrow", "tomorrow"], ["/latest", "next"], ["/previous", "previous"], ["/stop", "pause"]]);
+const teacherIcon = (key, branded) => branded ? themeIcon(key, true) + " " : "";
+const teacherHeading = (key, title, branded) => teacherIcon(key, branded) + "<b>" + title + "</b>";
 const actions = new Set(["today", "tomorrow", "next", "previous", "full", "compact", "pause", "resume"]);
 function clientFor(env, logger) { return new TelegramClient({ token: env.BOT_TOKEN, logger, timeoutMs: 8000, abortSignal: AbortSignal.timeout(25000) }); }
 
@@ -64,7 +66,7 @@ export function teacherKeyboard(user, date, full = false) {
     [key("Раньше", "previous" + suffix, "back"), key("Ближайший день", "next", "next", "success")],
     [key(full ? "Оставшиеся пары" : "Показать все пары", (full ? "compact" : "full") + suffix, "view", "primary")],
     user.previewManual
-      ? [themedButton("Личное расписание", { callback_data: "personal:menu" }, "menu", { branded, style: "success" })]
+      ? [themedButton("Личное расписание", { callback_data: "personal:menu" }, "menu", { branded, style: "success", plain: true })]
       : [key("Автообновления: " + (user.notifications ? "вкл" : "выкл"), user.notifications ? "pause" : "resume",
         "changes", user.notifications ? "success" : "danger")],
   ] };
@@ -72,9 +74,9 @@ export function teacherKeyboard(user, date, full = false) {
 
 export function formatTeacherSchedule(schedule, teacher, { now = new Date(), full = false, timezone = "Europe/Minsk", corrected = false, branded = false } = {}) {
   const today = dateInTimezone(now, timezone), time = timeInTimezone(now, timezone);
-  const lines = [heading("schedule", "Расписание · " + escapeHtml(teacher.name), branded), dateTitle(schedule.date)];
+  const lines = [teacherHeading("schedule", "Расписание · " + escapeHtml(teacher.name), branded), dateTitle(schedule.date)];
   if (teacher.sourceTeacherId) lines.push("<i>Тестовый кабинет</i>");
-  if (corrected) lines.push("", heading("changes", "В расписании есть правки", branded));
+  if (corrected) lines.push("", teacherHeading("changes", "В расписании есть правки", branded));
   if (schedule.status) lines.push("", escapeHtml(schedule.status));
   const ended = lesson => schedule.date < today || (schedule.date === today && lesson.end <= time);
   const lessons = full ? schedule.lessons : schedule.lessons.filter(lesson => !ended(lesson));
@@ -92,7 +94,7 @@ export function formatTeacherSchedule(schedule, teacher, { now = new Date(), ful
       showedRemaining = true;
     }
     const active = schedule.date === today && lesson.start <= time && lesson.end > time;
-    const marker = completed ? "  " + themeIcon("completed", branded) : active ? " · Сейчас" : "";
+    const marker = completed ? (branded ? "  " + themeIcon("completed", true) : "") : active ? " · Сейчас" : "";
     lines.push("", lessonHeading(lesson) + marker, "<b>Группа " + escapeHtml(lesson.group) + "</b>");
   }
   return lines.join("\n");
@@ -100,7 +102,7 @@ export function formatTeacherSchedule(schedule, teacher, { now = new Date(), ful
 
 const showTeacherMessage = (client, userId, messageId, text, markup) => sendWithThemeFallback(
   (body, replyMarkup) => messageId ? client.editMessage(userId, messageId, body, { replyMarkup })
-    : client.sendMessage(userId, body, { replyMarkup }), text, markup, { keepKeyboard: true });
+    : client.sendMessage(userId, body, { replyMarkup }), text, markup, { customEmojiOnly: true });
 
 // A pin advances through teaching days. Midnight and missing/empty days must
 // never make it fall back to an older card or rotate through non-teaching days.
@@ -182,12 +184,12 @@ async function drainTeacherInbox({ database, client, teacher, user, config, now 
       now, timezone: config.timezone, full, branded: user.branded,
     });
     const text = action.welcome
-      ? heading("menu", "Здравствуйте! Это ваш кабинет МГМК", user.branded) + "\n\nВыберите день, чтобы посмотреть уроки\nНовое расписание и правки придут сюда"
+      ? teacherHeading("menu", "Здравствуйте! Это ваш кабинет МГМК", user.branded) + "\n\nВыберите день, чтобы посмотреть уроки\nНовое расписание и правки придут сюда"
       : ["pause", "resume"].includes(action.action)
-        ? (formatted || heading("settings", "Настройки", user.branded)) + (user.notifications
+        ? (formatted || teacherHeading("settings", "Настройки", user.branded)) + (user.notifications
           ? "\n\nБуду присылать новое расписание и правки"
           : "\n\nАвтообновления на паузе\nУроки можно посмотреть кнопками")
-        : formatted || heading("view", action.action === "previous" ? "Предыдущего расписания пока нет" : "Расписания на этот день пока нет", user.branded);
+        : formatted || teacherHeading("view", action.action === "previous" ? "Предыдущего расписания пока нет" : "Расписания на этот день пока нет", user.branded);
     const replyMarkup = teacherKeyboard(user, selected?.date, full);
     if (action.callbackId && selected && !["pause", "resume"].includes(action.action)) {
       await database.prepare("INSERT INTO teacher_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
@@ -278,7 +280,7 @@ async function drainTeacherNotices({ database, client, teacher, user, now }) {
       .bind(teacher.id, row.date, row.revision).run();
     try {
       const date = row.date.split("-").reverse().join(".");
-      const text = heading("changes", "На " + date + " есть правки", user.branded) + "\n\nОткройте карточку — там уже новое расписание";
+      const text = teacherHeading("changes", "На " + date + " есть правки", user.branded) + "\n\nОткройте карточку — там уже новое расписание";
       await showTeacherMessage(client, user.user_id, null, text, teacherKeyboard(user, row.date));
       await database.prepare("UPDATE teacher_notices SET status='sent' WHERE teacher_id=? AND date=? AND revision=?")
         .bind(teacher.id, row.date, row.revision).run();
