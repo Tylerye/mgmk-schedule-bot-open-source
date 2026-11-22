@@ -112,7 +112,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     else if (action === "help") reply(t(user).helpText, backToMenu(user, brandedMenu));
     else if (action === "feedback" || action === "privacy") reply(informationText(user, action), informationKeyboard(user, brandedMenu));
     else if (action.startsWith("updates:")) {
-      const page = releasePage(user, Number(action.split(":")[1]), brandedMenu);
+      const page = releasePage(user, action.slice("updates:".length), brandedMenu);
       reply(page.text, page.keyboard);
     } else if (action.startsWith("table:")) {
       const date = action.slice("table:".length);
