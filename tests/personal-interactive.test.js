@@ -74,18 +74,18 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
       ['editMessageText',77], ['editMessageText',77],
     ]);
     const [branded, fallback] = calls.slice(4).map(call=>call.body.reply_markup.inline_keyboard[0]);
-    assert.deepEqual(branded.map(button=>button.style), ['primary','primary']);
+    assert.deepEqual(branded.map(button=>button.style), ['success','success']);
     assert.deepEqual(branded.map(button=>button.callback_data), ['personal:today','personal:tomorrow']);
     assert.ok(branded.every(button=>/^\d+$/.test(button.icon_custom_emoji_id)));
     assert.deepEqual(fallback.map(button=>button.text), ['📅 Сегодня','🗓 Завтра']);
-    assert.deepEqual(fallback.map(button=>button.style), ['primary','primary']);
+    assert.deepEqual(fallback.map(button=>button.style), ['success','success']);
     assert.ok(fallback.every(button=>!Object.hasOwn(button,'icon_custom_emoji_id')));
     assert.match(calls[4].body.text,/<tg-emoji/u);
     assert.doesNotMatch(calls[5].body.text,/<tg-emoji/u);
     assert.match(calls[5].body.text,/Привет!/u);
     const menu = calls[4].body.reply_markup.inline_keyboard.flat();
     assert.ok(menu.some(button => button.callback_data === 'personal:updates:0'));
-    assert.ok(menu.every(button => button.style === 'primary'));
+    assert.ok(menu.every(button => button.style === 'success'));
 
     rejectEmoji = false;
     async function tap(action, update_id, expectedCalls) {

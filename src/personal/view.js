@@ -64,7 +64,7 @@ export function screenText(key, text, branded) {
 
 export function menu(user, widgetEnabled = false, branded = false) {
   const w = t(user);
-  const item = (label, action) => button(label, action, { branded, style: "primary" });
+  const item = (label, action) => button(label, action, { branded, style: "success" });
   return { inline_keyboard: [
     [item(w.today, "today"), item(w.tomorrow, "tomorrow")],
     [item(w.schedule, "schedule"), item(w.next, "next")],
