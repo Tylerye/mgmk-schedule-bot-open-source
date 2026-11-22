@@ -83,7 +83,9 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
     assert.match(calls[4].body.text,/<tg-emoji/u);
     assert.doesNotMatch(calls[5].body.text,/<tg-emoji/u);
     assert.match(calls[5].body.text,/Привет!/u);
-    assert.ok(calls[4].body.reply_markup.inline_keyboard.flat().some(button => button.callback_data === 'personal:updates:0'));
+    const menu = calls[4].body.reply_markup.inline_keyboard.flat();
+    assert.ok(menu.some(button => button.callback_data === 'personal:updates:0'));
+    assert.ok(menu.every(button => button.style === 'primary'));
 
     rejectEmoji = false;
     async function tap(action, update_id, expectedCalls) {
@@ -115,6 +117,8 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
     const switches = calls[10].body.reply_markup.inline_keyboard.flat();
     assert.equal(switches.find(button=>button.callback_data==='personal:toggle:auto_pin').style,'success');
     assert.equal(switches.find(button=>button.callback_data==='personal:toggle:sound').style,'danger');
+    assert.match(switches.find(button=>button.callback_data==='personal:toggle:auto_pin').text,/🟢 вкл/u);
+    assert.match(switches.find(button=>button.callback_data==='personal:toggle:sound').text,/🔴 выкл/u);
     await db.prepare('UPDATE budgets SET rows_written=36000').run();
     assert.equal((await route('/source-status')).status,503,'uncommitted upload cannot be acknowledged as successful');
   } finally {await mf.dispose();}

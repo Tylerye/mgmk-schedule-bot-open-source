@@ -22,10 +22,10 @@ export const words = {
     supportText: "<b>Хочешь поддержать бота?</b>\n\nРасписание бесплатное для всех\nЕсли хочешь помочь с развитием, реквизиты ниже",
     channel: "ТГК автора", donate: "Реквизиты", later: "Позже", details: "<b>Реквизитов пока нет</b>", closed: "<b>Привет! Это расписание МГМК</b>\n\nКакой день посмотрим?",
     helpText: "<b>Как пользоваться</b>\n\n<b>Нужны пары на сегодня или завтра?</b>\nЖми «Сегодня» или «Завтра»\nЕсли впереди выходные, жми «Ближайший день»\n\n<b>Хочешь посмотреть весь день?</b>\nЖми «Весь день» — там будут и прошедшие пары\nСтрелками можно листать дни\n\n<blockquote expandable><b>Как работают замены и закреп</b>\nКогда в PDF что-то поменяется, я напишу сюда\nПосле 16:30 по Минску могу закрепить следующий учебный день\nЕсли пара идет после 16:30, она видна до конца\n\nЧтобы выключить закреп или уведомления, зайди в настройки</blockquote>",
-    settingsText: "<b>Настройки</b>\n\nЗеленое — включено\nКрасное — выключено\n\n<blockquote expandable><b>Что тут можно поменять</b>\nЗакреп — расписание будет сверху чата\nЗвук — новое расписание придет со звуком\nЗамены — я напишу отдельно, если пара поменяется\nАвтообновления — выключи, если пока не нужны новые карточки\nКнопками дни можно смотреть всегда</blockquote>",
+    settingsText: "<b>Настройки</b>\n\nСмотри на значок рядом с подписью\n🟢 вкл · 🔴 выкл\n\n<blockquote expandable><b>Что тут можно поменять</b>\nЗакреп — расписание будет сверху чата\nЗвук — новое расписание придет со звуком\nЗамены — я напишу отдельно, если пара поменяется\nАвтообновления — выключи, если пока не нужны новые карточки\nКнопками дни можно смотреть всегда</blockquote>",
     changed: "Изменения в расписании", added: "добавлен", removed: "отменен", on: "вкл", off: "выкл", saving: "Автообновления пока на паузе\nРасписание можно открыть кнопками",
     part: "часть", emptyPart: "Остальное расписание теперь в предыдущих сообщениях", pinned: "Закреплено расписание", pilot: "Этот экран пока открыт для участников теста" },
-  en: { settingsText: "<b>Settings</b>\n\nGreen means on\nRed means off\n\n<blockquote expandable><b>What each switch does</b>\nPin keeps the timetable at the top\nSound alerts you when a new card arrives\nChanges sends a separate alert when a class changes\nTurn off Auto-updates to pause new cards\nThe day buttons still work</blockquote>", menu: "<b>Hey! This is the МГМК timetable</b>\n\nTap Today or Tomorrow to see your classes\nI’ll post here when there’s a new timetable or a change", updates: "What’s new", table: "Table", textView: "Plain text", main: "Main menu", schedule: "Timetable", today: "Today", tomorrow: "Tomorrow", next: "Next school day",
+  en: { settingsText: "<b>Settings</b>\n\nLook for the dot next to the label\n🟢 on · 🔴 off\n\n<blockquote expandable><b>What each switch does</b>\nPin keeps the timetable at the top\nSound alerts you when a new card arrives\nChanges sends a separate alert when a class changes\nTurn off Auto-updates to pause new cards\nThe day buttons still work</blockquote>", menu: "<b>Hey! This is the МГМК timetable</b>\n\nTap Today or Tomorrow to see your classes\nI’ll post here when there’s a new timetable or a change", updates: "What’s new", table: "Table", textView: "Plain text", main: "Main menu", schedule: "Timetable", today: "Today", tomorrow: "Tomorrow", next: "Next school day",
     settings: "Settings", help: "How to use", support: "Support the author", group: "Group", language: "Language",
     feedback: "Feedback", privacy: "About and privacy", contact: "Message the author",
     feedbackText: "<b>Got an idea or spotted a problem?</b>\n\nMessage @{contact}\nIf it’s about the timetable, include your group and the date",
@@ -64,14 +64,15 @@ export function screenText(key, text, branded) {
 
 export function menu(user, widgetEnabled = false, branded = false) {
   const w = t(user);
+  const item = (label, action) => button(label, action, { branded, style: "primary" });
   return { inline_keyboard: [
-    [button(w.today, "today", { branded, style: "primary" }), button(w.tomorrow, "tomorrow", { branded, style: "primary" })],
-    [button(w.schedule, "schedule", { branded, style: "primary" }), button(w.next, "next", { branded, style: "primary" })],
-    ...(widgetEnabled && user.group_id === widgetGroup ? [[button(widgetLabel(user), "widget")]] : []),
-    [button(w.settings, "settings", { branded }), button(w.help, "help", { branded })],
-    [button(w.updates, "updates:0", { branded, style: "primary" })],
-    [button(w.feedback, "feedback", { branded }), button(w.privacy, "privacy", { branded })],
-    [button(w.support, "support", { branded, style: "primary" })],
+    [item(w.today, "today"), item(w.tomorrow, "tomorrow")],
+    [item(w.schedule, "schedule"), item(w.next, "next")],
+    ...(widgetEnabled && user.group_id === widgetGroup ? [[item(widgetLabel(user), "widget")]] : []),
+    [item(w.settings, "settings"), item(w.help, "help")],
+    [item(w.updates, "updates:0")],
+    [item(w.feedback, "feedback"), item(w.privacy, "privacy")],
+    [item(w.support, "support")],
   ] };
 }
 
@@ -106,9 +107,16 @@ export function supportDetailsText(user, binding) {
 }
 export function settingsKeyboard(user, branded) {
   const w = t(user);
-  return { inline_keyboard: [[button(w.group, "groups:0", { branded }), button(w.language, "language", { branded })],
-    ...["auto_pin", "sound", "changes"].map(key => [button(`${w[key]}: ${user[key] ? w.on : w.off}`, `toggle:${key}`, { branded, style: user[key] ? "success" : "danger" })]),
-    [button(w.pause + ": " + (user.paused ? w.off : w.on), "toggle:paused", { branded, style: user.paused ? "danger" : "success" })], ...backToMenu(user, branded).inline_keyboard] };
+  const toggle = (label, key, enabled) => button(
+    label + ": " + (enabled ? "🟢 " + w.on : "🔴 " + w.off),
+    "toggle:" + key, { branded, style: enabled ? "success" : "danger" },
+  );
+  return { inline_keyboard: [
+    [button(w.group, "groups:0", { branded, style: "primary" }), button(w.language, "language", { branded, style: "primary" })],
+    ...["auto_pin", "sound", "changes"].map(key => [toggle(w[key], key, user[key])]),
+    [toggle(w.pause, "paused", !user.paused)],
+    ...backToMenu(user, branded).inline_keyboard,
+  ] };
 }
 export function groupsKeyboard(groups, user, page = 0, branded) {
   const pages = Math.max(1, Math.ceil(groups.length / 10));
