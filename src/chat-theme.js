@@ -55,23 +55,30 @@ export function themedButton(text, target, key, { branded = false, style, plain 
 }
 
 const fallbackById = Object.fromEntries(Object.entries(themeEmoji).map(([key,id])=>[id,fallback[key]]));
-function plainKeyboard(markup) {
+function plainKeyboard(markup, textOnly = false) {
   if (!markup?.inline_keyboard?.some(row => row.some(item => item.icon_custom_emoji_id))) return markup;
   return { inline_keyboard: markup.inline_keyboard.map(row => row.map(item => {
     const { icon_custom_emoji_id: id, ...plain } = item;
-    return id && fallbackById[id] ? { ...plain, text: fallbackById[id] + " " + plain.text } : plain;
+    return !textOnly && id && fallbackById[id] ? { ...plain, text: fallbackById[id] + " " + plain.text } : plain;
   })) };
 }
 
 // Retry once after a definitive format rejection. A timeout may already
 // have delivered the original message, so it must go to the caller unchanged.
-export async function sendWithThemeFallback(send, text, keyboard) {
+export async function sendWithThemeFallback(send, text, keyboard, { keepKeyboard = false } = {}) {
   try { return await send(text, keyboard); }
   catch (error) {
     if (!error.apiRejected || error.errorCode !== 400 || !/emoji|entities|reply markup|button.type.invalid/iu.test(error.description ?? "")) throw error;
     const plain = text?.replace(/<tg-emoji emoji-id="\d+">([^<]*)<\/tg-emoji>/gu, "$1")
       .replace(/<tg-time unix="\d+" format="r">([^<]*)<\/tg-time>/gu, "$1");
-    const markup = plainKeyboard(keyboard);
+    const markup = plainKeyboard(keyboard, keepKeyboard);
+    if (keepKeyboard && plain !== text && markup !== keyboard) {
+      try {
+        return await send(plain, keyboard);
+      } catch (retry) {
+        if (!retry.apiRejected || retry.errorCode !== 400 || !/emoji|entities|reply markup|button.type.invalid/iu.test(retry.description ?? "")) throw retry;
+      }
+    }
     if (plain === text && markup === keyboard) throw error;
     return send(plain, markup);
   }

@@ -57,7 +57,7 @@ export async function enqueueTeacherUpdate(database, update) {
 
 export function teacherKeyboard(user, date, full = false) {
   const branded = user.branded;
-  const key = (label, action, icon, style) => themedButton(label, { callback_data: "teacher:" + action }, icon, { branded, style });
+  const key = (label, action, icon, style) => themedButton(label, { callback_data: "teacher:" + action }, icon, { branded, style, plain: true });
   const suffix = date ? ":" + date : "";
   return { inline_keyboard: [
     [key("Сегодня", "today", "today", "success"), key("Завтра", "tomorrow", "tomorrow", "success")],
@@ -100,7 +100,7 @@ export function formatTeacherSchedule(schedule, teacher, { now = new Date(), ful
 
 const showTeacherMessage = (client, userId, messageId, text, markup) => sendWithThemeFallback(
   (body, replyMarkup) => messageId ? client.editMessage(userId, messageId, body, { replyMarkup })
-    : client.sendMessage(userId, body, { replyMarkup }), text, markup);
+    : client.sendMessage(userId, body, { replyMarkup }), text, markup, { keepKeyboard: true });
 
 // A pin advances through teaching days. Midnight and missing/empty days must
 // never make it fall back to an older card or rotate through non-teaching days.
@@ -150,7 +150,10 @@ export function chooseTeacherDate(rows, action, today, reference) {
   if (action === "tomorrow") return rows.find(r => r.date === addDays(today, 1));
   if (["full", "compact"].includes(action)) return rows.find(r => r.date === (reference ?? today));
   if (action === "previous") return rows.filter(r => r.date < (reference ?? today)).at(-1);
-  if (action === "next") return rows.find(r => r.date >= today);
+  if (action === "next") {
+    const upcoming = rows.filter(row => row.date >= today);
+    return upcoming.find(row => !row.payload || JSON.parse(row.payload).lessons.length > 0) ?? upcoming[0];
+  }
   return rows.find(r => r.date >= today) ?? rows.at(-1);
 }
 
