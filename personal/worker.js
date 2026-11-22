@@ -3,6 +3,7 @@ import { enqueuePersonalUpdate, processPersonalInbox } from "../src/personal/inb
 import { beginDataset, stageSchedules, finishDataset, fanoutBatch, mergeCatalogObservations, MAX_STAGE_BYTES, MAX_STAGE_SCHEDULES } from "../src/personal/ingest.js";
 import { deliverUser, diagnosticText } from "../src/personal/delivery.js";
 import { TelegramClient } from "../src/telegram.js";
+import { activateWeeklyPlan, weeklySourceStatus } from "../src/personal/weekly-plan.js";
 import { readJson, InputError } from "../cloudflare/request-json.js";
 import { pilotAllowed } from "../cloudflare/personal-relay.js";
 import { dateInTimezone } from "../src/dates.js";
@@ -120,6 +121,8 @@ export default {
     const now = new Date();
     let started = false;
     try {
+      if (path === "/week-source-status") return json(await weeklySourceStatus(store));
+      const source = ['/source-status', '/catalog', '/begin', '/stage', '/finish', '/source-error', '/week-source', '/tick/recover'].includes(path);
       if (path === "/tick" && await store.accountIdleTick(now))
         return json({ ok: true, inbox: 0, fanout: 0, due: 0, delivery: 0, recover: false });
       const budget = await store.budget(now, path === "/tick" ? 2 : 1, {
@@ -127,12 +130,11 @@ export default {
         router: ["/tick", "/tick/inbox", "/tick/delivery", "/tick/due", "/tick/fanout"].includes(path),
         userWork: /^\/(inbox|delivery|due)\/\d+$/u.test(path),
         lane: path === '/health' ? 'service' : (['/tick/fanout', '/tick/due', '/fanout'].includes(path) || path.startsWith('/due/')) ? 'background'
-          : ['/source-status', '/catalog', '/begin', '/stage', '/finish', '/source-error', '/tick/recover'].includes(path) ? 'source' : 'interactive',
+          : source ? 'source' : 'interactive',
       }); started = true;
       if (budget.mode === "stopped") {
         // Uploaders must not mistake an uncommitted source for a successful
         // activation. A bounded Actions retry/recovery will resume it later.
-        const source = ['/source-status', '/catalog', '/begin', '/stage', '/finish', '/source-error', '/tick/recover'].includes(path);
         return json({ok:!source,stopped:true,pending:false}, source ? 503 : 200);
       }
 
@@ -180,6 +182,8 @@ export default {
           if (!processed.busy && !processed.stopped && processed.delivery !== false)
             context.waitUntil(deliverInteractive(env, update.userId).catch(() => {}));
         }
+      } else if (path === "/week-source") {
+        return json(await activateWeeklyPlan(store, await readJson(request, 320_000)));
       } else if (path === "/source-status") {
         const body = await readJson(request, 4096);
         return json({ enabled: true, known: await store.setting(`source:${String(body.id).slice(0, 100)}`) });

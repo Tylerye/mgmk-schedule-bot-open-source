@@ -9,7 +9,7 @@ import { currentLesson, hasLessonSummary, lessonSummary } from "./lesson-summary
 export const AUTHOR_USERNAME = "your_username";
 
 export const words = {
-  ru: { menu: "<b>Привет! Это расписание МГМК</b>\n\nЖми «Сегодня» или «Завтра», чтобы глянуть пары\nКак только колледж выложит расписание или замены, бот напишет сюда", updates: "Обновления", table: "Таблица", textView: "Обычный текст", main: "Главное меню", schedule: "Расписание", today: "Сегодня", tomorrow: "Завтра", next: "Ближайший день",
+  ru: { menu: "<b>Привет! Это расписание МГМК</b>\n\nЖми «Сегодня» или «Завтра», чтобы глянуть пары\nКак только колледж выложит расписание или замены, бот напишет сюда", updates: "Обновления", week: "На неделю", table: "Таблица", textView: "Обычный текст", main: "Главное меню", schedule: "Расписание", today: "Сегодня", tomorrow: "Завтра", next: "Ближайший день",
     settings: "Настройки", help: "Как пользоваться", support: "Поддержать автора", group: "Группа", language: "Язык",
     feedback: "Обратная связь", privacy: "О боте и данных", contact: "Написать автору",
     feedbackText: "<b>Есть идея или что-то не работает?</b>\n\nНапиши @{contact}\nЕсли дело в расписании, скинь группу и дату — так проще найти, что случилось",
@@ -25,7 +25,7 @@ export const words = {
     settingsText: "<b>Настройки</b>\n\nСмотри на значок рядом с подписью\n🟢 вкл · 🔴 выкл\n\n<blockquote expandable><b>Что тут можно поменять</b>\nЗакреп — расписание будет сверху чата\nЗвук — новое расписание придет со звуком\nЗамены — я напишу отдельно, если пара поменяется\nАвтообновления — выключи, если пока не нужны новые карточки\nКнопками дни можно смотреть всегда</blockquote>",
     changed: "Изменения в расписании", added: "добавлен", removed: "отменен", on: "вкл", off: "выкл", saving: "Автообновления пока на паузе\nРасписание можно открыть кнопками",
     part: "часть", emptyPart: "Остальное расписание теперь в предыдущих сообщениях", pinned: "Закреплено расписание", pilot: "Этот экран пока открыт для участников теста" },
-  en: { settingsText: "<b>Settings</b>\n\nLook for the dot next to the label\n🟢 on · 🔴 off\n\n<blockquote expandable><b>What each switch does</b>\nPin keeps the timetable at the top\nSound alerts you when a new card arrives\nChanges sends a separate alert when a class changes\nTurn off Auto-updates to pause new cards\nThe day buttons still work</blockquote>", menu: "<b>Hey! This is the МГМК timetable</b>\n\nTap Today or Tomorrow to see your classes\nThe bot will post here when the college shares a new timetable or changes", updates: "What’s new", table: "Table", textView: "Plain text", main: "Main menu", schedule: "Timetable", today: "Today", tomorrow: "Tomorrow", next: "Next school day",
+  en: { settingsText: "<b>Settings</b>\n\nLook for the dot next to the label\n🟢 on · 🔴 off\n\n<blockquote expandable><b>What each switch does</b>\nPin keeps the timetable at the top\nSound alerts you when a new card arrives\nChanges sends a separate alert when a class changes\nTurn off Auto-updates to pause new cards\nThe day buttons still work</blockquote>", menu: "<b>Hey! This is the МГМК timetable</b>\n\nTap Today or Tomorrow to see your classes\nThe bot will post here when the college shares a new timetable or changes", updates: "What’s new", week: "This week", table: "Table", textView: "Plain text", main: "Main menu", schedule: "Timetable", today: "Today", tomorrow: "Tomorrow", next: "Next school day",
     settings: "Settings", help: "How to use", support: "Support the author", group: "Group", language: "Language",
     feedback: "Feedback", privacy: "About and privacy", contact: "Message the author",
     feedbackText: "<b>Got an idea or spotted a problem?</b>\n\nMessage @{contact}\nIf it’s about the timetable, include your group and the date",
@@ -52,7 +52,7 @@ export const widgetLabel = user => user.language === "en" ? "Day by lesson · HT
 export function button(text, action, options = {}) {
   const [kind, option] = action.split(":");
   const icon = kind === "toggle" ? (option === "pin" ? "auto_pin" : option)
-    : ({ groups: "group", lang: "language", donate: "support", preview: "view", later: "back" })[kind] ?? kind;
+    : ({ groups: "group", week: "schedule", lang: "language", donate: "support", preview: "view", later: "back" })[kind] ?? kind;
   return themedButton(text, { callback_data: "personal:" + action }, options.icon ?? icon, options);
 }
 
@@ -67,7 +67,7 @@ export function menu(user, widgetEnabled = false, branded = false) {
   const item = (label, action) => button(label, action, { branded, style: "success" });
   return { inline_keyboard: [
     [item(w.today, "today"), item(w.tomorrow, "tomorrow")],
-    [item(w.next, "next")],
+    [item(w.next, "next"), item(w.week, "week")],
     ...(widgetEnabled && user.group_id === widgetGroup ? [[item(widgetLabel(user), "widget")]] : []),
     [item(w.settings, "settings"), item(w.help, "help")],
     [item(w.updates, "updates:0")],

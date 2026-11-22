@@ -4,18 +4,19 @@ import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { build } from 'esbuild';
 import { readFile, readdir } from 'node:fs/promises';
 import { sampleSchedule } from './helpers/personal-fixture.js';
-import { dateInTimezone } from '../src/dates.js';
+import { dateInTimezone, dayKey } from '../src/dates.js';
 import { relayPersonalUpdate } from '../cloudflare/personal-relay.js';
 
 test('a real D1 trigger admits a tap and delivers its timetable without Cron or other users', async () => {
   const script = (await build({entryPoints:['personal/worker.js'],bundle:true,write:false,format:'esm',platform:'neutral',external:['node:crypto']})).outputFiles[0].text;
   const lanes=[], calls=[];
-  let rejectEmoji = false;
+  let rejectEmoji = false, rejectRich = false;
   const mf=new Miniflare(convertV4MiniflareOptions({name:'personal',modules:true,script,compatibilityDate:'2026-09-14',compatibilityFlags:['nodejs_compat'],
     d1Databases:{DB:'interactive'},bindings:{PERSONAL_SHARED_SECRET:'local-test',ADMIN_USER_ID:'100',BOT_TOKEN:'fake',PERSONAL_PUBLIC:'true',PERSONAL_BRANDED_MENU:'true',
       PERSONAL_DAILY_WRITES:'45000',PERSONAL_BACKGROUND_WRITES:'30000',PERSONAL_SOURCE_WRITES:'35000'},
     serviceBindings:{SELF:async(request,runtime)=>{lanes.push(new URL(request.url).pathname);return (await runtime.getWorker('personal')).fetch(request);}},
     outboundService:async request=>{calls.push({method:new URL(request.url).pathname.split('/').at(-1),body:await request.json()});
+      if (rejectRich && calls.at(-1).body.rich_message) return Response.json({ok:false,error_code:400,description:"Bad Request: RICH_MESSAGE_INVALID"},{status:400});
       if (rejectEmoji && calls.at(-1).body.reply_markup?.inline_keyboard.flat().some(button => button.icon_custom_emoji_id)) {
         return Response.json({ok:false,error_code:400,description:'Bad Request: BUTTON_CUSTOM_EMOJI_INVALID'},{status:400});
       }
@@ -101,7 +102,7 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
       assert.equal(calls.length,expectedCalls);
     }
     await tap('updates:0',4,7);
-    assert.match(calls[6].body.text,/V1\.2.*<\/b>/u);
+    assert.match(calls[6].body.text,/V1\.3.*<\/b>/u);
     assert.equal(calls[6].body.message_id,77);
     await tap('updates:history',5,8);
     assert.match(calls[7].body.text,/V0\.1[\s\S]*11\.11\.2026[\s\S]*V1\.0/u);
@@ -119,6 +120,41 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
     assert.equal(switches.find(button=>button.callback_data==='personal:toggle:sound').style,'danger');
     assert.match(switches.find(button=>button.callback_data==='personal:toggle:auto_pin').text,/🟢 вкл/u);
     assert.match(switches.find(button=>button.callback_data==='personal:toggle:sound').text,/🔴 выкл/u);
+    const baseline = { effectiveFrom:'2020-01-01', fingerprint:'a'.repeat(64), previous:null,
+      groups:{'8СА':{label:'8-Сба',days:{
+        [dayKey(date)]:{lessons:[[1,'УСТАРЕВШИЙ ПРЕДМЕТ','111']],hours:[]},
+        [dayKey(date) === 'monday' ? 'tuesday' : 'monday']:{lessons:[[1,'ПРАКТИКА / Петров И И','321']],hours:[]},
+      }}} };
+    const publish = body => mf.dispatchFetch('http://localhost/week-source',{
+      method:'POST',headers:{authorization:'Bearer local-test'},body:JSON.stringify(body),
+    });
+    assert.deepEqual(await (await publish(baseline)).json(),{fingerprint:baseline.fingerprint,groups:1});
+    assert.equal((await db.prepare("SELECT COUNT(*) n FROM catalog WHERE id='8СА'").first()).n,1);
+    const beforeStatus = await db.prepare('SELECT * FROM budgets').all();
+    assert.deepEqual(await (await route('/week-source-status')).json(),{fingerprint:baseline.fingerprint,groups:1});
+    assert.deepEqual((await db.prepare('SELECT * FROM budgets').all()).results,beforeStatus.results);
+    assert.equal((await publish({...baseline,fingerprint:'b'.repeat(64)})).status,409);
+    assert.equal((await db.prepare('SELECT COUNT(*) n FROM fanout').first()).n,0);
+    await tap('week',9,12);
+    const week = calls[11].body;
+    assert.equal(calls[11].method,'editMessageText');
+    assert.equal(week.message_id,77);
+    assert.match(week.rich_message.html,/раз в 3–4 дня/u);
+    assert.match(week.rich_message.html,/Дневной PDF/u);
+    assert.match(week.rich_message.html,/По плану/u);
+    assert.match(week.rich_message.html,/ПРАКТИКА.*321.*Петров/u);
+    assert.doesNotMatch(week.rich_message.html,/УСТАРЕВШИЙ ПРЕДМЕТ/u);
+    assert.match(week.rich_message.html,/<details open><summary>/u);
+    assert.match(week.rich_message.html,/МАТЕМАТИКА/u);
+    assert.match(week.rich_message.html,/каб\. 245/u);
+    assert.match(week.rich_message.html,/Пока нет расписания/u);
+    assert.deepEqual(week.reply_markup.inline_keyboard.flat().map(button=>button.callback_data),['personal:menu']);
+    rejectRich = true;
+    await tap('week',10,14);
+    assert.equal(calls[13].body.message_id,77);
+    assert.match(calls[13].body.text,/МАТЕМАТИКА/u);
+    assert.match(calls[13].body.text,/Пока нет расписания/u);
+    assert.equal(calls[13].body.rich_message,undefined);
     await db.prepare('UPDATE budgets SET rows_written=36000').run();
     assert.equal((await route('/source-status')).status,503,'uncommitted upload cannot be acknowledged as successful');
   } finally {await mf.dispose();}

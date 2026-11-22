@@ -4,6 +4,17 @@ import { backToMenu, button, screenText, t } from "./view.js";
 // Add new releases at the top. Keep the version IDs stable for old buttons.
 const releases = [
   {
+    version: "V1.3", date: "23.11.2026",
+    ru: ["Вся неделя под рукой", [
+      "В «На неделю» можно глянуть базовый план своей группы и свежие дневные PDF",
+      "Расписание собрано в одном сообщении с пометкой, что пары могут поменяться",
+    ]],
+    en: ["The week at a glance", [
+      "This week combines your group’s weekly plan and the latest daily PDFs",
+      "The whole plan opens in one message and is marked as tentative",
+    ]],
+  },
+  {
     version: "V1.2", date: "23.11.2026",
     ru: ["В расписании проще ориентироваться", [
       "Перемены и обед отделены от пар",

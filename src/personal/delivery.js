@@ -6,7 +6,7 @@ import { lessonDetailsChanges } from "./lesson-summary.js";
 import { escapeHtml } from "../schedule/format.js";
 import { manualJobsOnly } from './quota.js';
 import { backgroundPolicy } from '../background-policy.js';
-import { isTimetableMessage, screenHash as hashScreen } from './screen-state.js';
+import { isTimetableMessage, screenHash as hashScreen, richScreen } from './screen-state.js';
 
 const digest = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
@@ -197,7 +197,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       // timetable or the current pin, even if the target changed since enqueue.
       const protectedMessage = job.kind === "reply" && await isTimetableMessage(store, user, payload.editId);
       const editId = protectedMessage ? null : payload.editId;
-      const rich = job.kind === "reply" && payload.richHtml ? { html: payload.richHtml, skip_entity_detection: true } : null;
+      const rich = job.kind === "reply" ? richScreen(payload.richHtml) : null;
       const method = editId ? "editMessageText" : rich ? "sendRichMessage" : "sendMessage";
       const content = rich
         ? { chat_id: id, rich_message: rich, reply_markup: payload.keyboard, ...(editId ? {} : { disable_notification: true }) }

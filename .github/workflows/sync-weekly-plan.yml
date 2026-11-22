@@ -1,0 +1,27 @@
+name: Sync weekly class plan
+on:
+  schedule:
+    - cron: '30 0 * * 1,4'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: personal-weekly-plan
+  cancel-in-progress: false
+jobs:
+  sync:
+    if: ${{ vars.PERSONAL_WEEKLY_DRIVE_FOLDER_ID != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - run: python3 -m venv "$RUNNER_TEMP/weekly-plan"
+      - run: '"$RUNNER_TEMP/weekly-plan/bin/pip" install --only-binary=:all: --require-hashes -r scripts/weekly-requirements.txt'
+      - run: WEEKLY_PYTHON="$RUNNER_TEMP/weekly-plan/bin/python" node scripts/sync-weekly-plan.js
+        env:
+          PERSONAL_WEEKLY_DRIVE_FOLDER_ID: ${{ vars.PERSONAL_WEEKLY_DRIVE_FOLDER_ID }}
+          WORKER_BASE_URL: ${{ secrets.WORKER_BASE_URL }}
+          PARSER_SHARED_SECRET: ${{ secrets.PARSER_SHARED_SECRET }}

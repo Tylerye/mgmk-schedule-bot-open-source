@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+export const richScreen = html => html ? { html, skip_entity_detection: true } : null;
+
 export const screenHash = (text, keyboard) => createHash('sha256')
   .update(JSON.stringify([text, keyboard ?? { inline_keyboard: [] }])).digest('hex');
 

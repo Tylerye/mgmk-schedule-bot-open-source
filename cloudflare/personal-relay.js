@@ -38,7 +38,7 @@ export async function relayPersonalSource(request, env, pathname) {
     return new Response(JSON.stringify({ ok: response.status === 204 }), { status: response.status === 204 ? 200 : 503 });
   }
   if (request.method !== "POST" || !env.PARSER_SHARED_SECRET || request.headers.get("authorization") !== `Bearer ${env.PARSER_SHARED_SECRET}`) return new Response(null, { status: 403 });
-  if (!/^\/internal\/personal\/(catalog|begin|stage|finish|source-error|source-status|health)$/u.test(pathname)) return new Response(null, { status: 404 });
+  if (!/^\/internal\/personal\/(catalog|begin|stage|finish|source-error|source-status|week-source-status|week-source|health)$/u.test(pathname)) return new Response(null, { status: 404 });
   if (env.PERSONAL_ENABLED !== "true" || !env.PERSONAL || !env.PERSONAL_SHARED_SECRET) return new Response(JSON.stringify({ enabled: false }), { status: 503 });
   return env.PERSONAL.fetch(`https://personal.internal/${pathname.split("/").at(-1)}`, {
     method: "POST", headers: { authorization: `Bearer ${env.PERSONAL_SHARED_SECRET}`, "content-type": "application/json" }, body: request.body,

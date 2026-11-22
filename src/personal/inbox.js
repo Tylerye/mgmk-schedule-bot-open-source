@@ -1,7 +1,8 @@
+import { weekPage, weekRange } from "./week.js";
 import { publishedDayButtons } from "./timetable-table.js";
 import { releasePage } from "./releases.js";
 import { findGroups } from "./catalog.js";
-import { screenHash, isTimetableMessage } from './screen-state.js';
+import { screenHash, isTimetableMessage, richScreen } from './screen-state.js';
 import { hasLessonSummary, lessonDetailsChanges } from "./lesson-summary.js";
 import { t, menu, button, backToMenu, screenText, supportKeyboard, settingsKeyboard, groupsKeyboard, initialDates, selectedDate, renderPersonal, informationText, informationKeyboard, widgetGroup, widgetLabel } from "./view.js";
 
@@ -158,6 +159,13 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
         jobs.push(["UPDATE cards SET mode=? WHERE user_id=? AND group_id=? AND date=?", mode, user.user_id, user.group_id, date]);
         jobs.push(job(user, "card", date, { priority: 0, payload: { manual: true, history: true } }));
       }
+    } else if (action === "week" || action.startsWith("week:")) {
+      if (!user.group_id) reply(groupText(), groupsKeyboard(await groups(), user, 0, brandedMenu));
+      else {
+        const range = weekRange(now);
+        const week = await store.weekSchedules(user.group_id, range.start, range.end);
+        replies.push({ ...weekPage(week, user, range, brandedMenu, action.split(":")[1]), editId: update.messageId ?? null });
+      }
     } else if (["today", "tomorrow", "next", "schedule"].includes(action) || action.startsWith("preview:") || action.startsWith("widget-text:")) {
       if (!user.group_id) reply(groupText(), groupsKeyboard(await groups(), user, 0, brandedMenu));
       else {
@@ -225,9 +233,9 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     // User/card/source state is freshly read under the same lock as delivery.
     // Supersede older navigation even when this latest tap needs no new job.
     const only = replies.length === 1 ? replies[0] : null;
-    const unchanged = only && !only.supportDetails && !only.richHtml && update.acknowledged && !changed.length && jobs.length === 1
+    const unchanged = only && !only.supportDetails && update.acknowledged && !changed.length && jobs.length === 1
       && only.editId && String(user.user_id) !== String(ownerId) && !await isTimetableMessage(store, user, only.editId)
-      && await store.setting(`screen-v1:${user.user_id}:${only.editId}`) === screenHash(only.text, only.keyboard);
+      && await store.setting(`screen-v1:${user.user_id}:${only.editId}`) === screenHash(richScreen(only.richHtml) ?? only.text, only.keyboard);
     if (!unchanged) for (const [index, payload] of replies.entries()) jobs.push(job(user, "reply", payload.editId ? "screen" : `${row.update_id}:${index}`, { priority: -2, payload: { ...payload, manual: true } }));
     // Insert after superseding older navigation jobs. Keep the visible reply
     // first; the transient acknowledgement must not delay the screen edit.
