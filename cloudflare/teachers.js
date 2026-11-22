@@ -150,8 +150,9 @@ export async function storeTeacherResult(database, job, payload) {
   return true;
 }
 
-async function rowsFor(database, teacherId) {
-  return (await database.prepare("SELECT * FROM teacher_schedules WHERE teacher_id=? ORDER BY date").bind(sourceTeacherId(teacherId)).all()).results;
+async function rowsFor(database, teacherId, fromDate = "") {
+  return (await database.prepare("SELECT * FROM teacher_schedules WHERE teacher_id=? AND date>=? ORDER BY date")
+    .bind(sourceTeacherId(teacherId), fromDate).all()).results;
 }
 
 export function chooseTeacherDate(rows, action, today, reference) {
@@ -319,7 +320,7 @@ export async function writeTeacherStatus(database, key, value, now = new Date())
 async function teacherCheck(env, config, teacher, now) {
   const user = await env.DB.prepare("SELECT * FROM teacher_users WHERE teacher_id=?").bind(teacher.id).first();
   const inbox = await env.DB.prepare("SELECT MIN(retry_at) due FROM teacher_inbox WHERE teacher_id=? AND status='pending'").bind(teacher.id).first();
-  const schedules = await rowsFor(env.DB, teacher.id);
+  const schedules = await rowsFor(env.DB, teacher.id, dateInTimezone(now, config.timezone));
   const signature = createHash("sha256").update(JSON.stringify([user, schedules.map(s => [s.date,s.hash]), config.timezone, config.pinSwitchTime,
     env.CF_VERSION_METADATA?.id, env.TEACHER_BRANDED_MENU, env.PERSONAL_ENABLED, env.OWNER_PREVIEW_ENABLED, env.ADMIN_USER_ID])).digest("hex");
   return { user, inboxDue: inbox?.due ?? null, schedules, signature };
@@ -372,10 +373,9 @@ export async function teacherMaintenance(env, config, logger, teacherId, now = n
     await drainTeacherInbox(context);
     if (!user.notifications || user.previewManual) { await saveTeacherCheck(env,config,teacher,now); return; }
     const today = dateInTimezone(now, config.timezone);
-    const schedules = await rowsFor(env.DB, teacher.id);
-    const rows = schedules.filter(r => r.date >= today);
+    const schedules = await rowsFor(env.DB, teacher.id, today);
     // Bound work per invocation; subsequent ticks publish remaining dates.
-    for (const row of rows.slice(0, 3)) await publishTeacherDate({ ...context, row });
+    for (const row of schedules.slice(0, 3)) await publishTeacherDate({ ...context, row });
     await drainTeacherNotices(context);
     const publications = (await env.DB.prepare("SELECT * FROM teacher_publications WHERE teacher_id=? AND message_id IS NOT NULL ORDER BY date").bind(teacher.id).all()).results;
     const desired = chooseTeacherPin(publications, schedules, user.pinned_message_id,

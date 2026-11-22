@@ -22,6 +22,10 @@ test('idle ticks take the cheap path until the first pending job is due', async 
   assert.equal(await new PersonalStore(f.db).accountIdleTick(due), false);
   const user = await f.store.user(100);
   await f.store.batch(Array.from({ length: 16 }, (_, i) => f.store.jobStatement(user, 'card', String(i), { due: +due })));
+  assert.equal(await new PersonalStore(f.db).accountIdleTick(now), true);
+  await f.store.enqueue(user, 'card', 'ready', { priority: 5, due: +now });
+  assert.equal(await new PersonalStore(f.db).accountIdleTick(now), false);
+  await f.store.run("UPDATE jobs SET due=?, priority=99 WHERE date='ready'", +due);
   assert.equal(await new PersonalStore(f.db).accountIdleTick(now), false);
 });
 async function fixture(t, { cards=true }={}) {

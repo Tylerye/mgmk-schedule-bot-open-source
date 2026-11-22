@@ -144,6 +144,19 @@ test('workerd immediately delivers a new publication across 22 groups without Cr
       const idleBefore = await physical();
       for (let i=0;i<10;i++) await idle();
       console.log(JSON.stringify({scenario:'ten-idle-ticks', rowsWritten:await physical()-idleBefore}));
+      for (const size of [16, 17, 100]) {
+        const future = Date.now() + 3600000;
+        const jobs = Array.from({ length: size }, (_, i) => db.prepare(
+          "INSERT INTO jobs(id,user_id,epoch,kind,priority,due) VALUES(?,8888,1,'card',2,?)"
+        ).bind('idle-probe-' + i, future));
+        await db.batch(jobs);
+        await idle();
+        const startWrites = await physical(), startBudget = await budget();
+        for (let i = 0; i < 5; i++) await idle();
+        console.log(JSON.stringify({ scenario: 'five-idle-ticks', size, rowsWritten: await physical() - startWrites,
+          budgetReads: (await budget()).rows_read - startBudget.rows_read }));
+        await db.prepare("DELETE FROM jobs WHERE id GLOB 'idle-probe-*'").run();
+      }
       const tap = i => route('test-inbox',{update_id:i,userId:8888,action:'settings',messageId:77,acknowledged:true});
       assert.equal((await tap(1)).status,200);
       const tapBefore = await physical(), tapStart = Date.now();

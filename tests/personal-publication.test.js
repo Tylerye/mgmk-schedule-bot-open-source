@@ -67,3 +67,22 @@ test('finish signals only a newly activated generation; unchanged and obsolete s
   await beginDataset(f.store, older); await stageSchedules(f.store, older.id, [s]);
   assert.equal(await finishDataset(f.store, older.id), false);
 });
+
+test('fanout closes an exhausted cursor after its last recipient pauses', async t => {
+  const f = await personalFixture(); t.after(() => f.close());
+  const schedule = await sampleSchedule();
+  for (let id = 1; id <= 25; id++)
+    await f.store.run('INSERT INTO users(user_id,group_id) VALUES(?,?)', id, schedule.canonicalGroup);
+  await installSchedules(f.store, [schedule]);
+  await fanoutBatch(f.store, 1000);
+  const before = await f.store.all('SELECT id, revision FROM jobs ORDER BY id');
+  assert.equal(before.length, 24);
+  const sequence = await f.store.first('SELECT value FROM job_revision_sequence');
+  await f.store.run('UPDATE users SET paused=1 WHERE user_id=25');
+  await fanoutBatch(f.store, 2000);
+  assert.equal((await f.store.first('SELECT status FROM fanout')).status, 'done');
+  await Promise.all([fanoutBatch(f.store, 2000), fanoutBatch(f.store, 2000)]);
+  assert.equal((await f.store.first('SELECT status FROM fanout')).status, 'done');
+  assert.deepEqual(await f.store.first('SELECT value FROM job_revision_sequence'), sequence);
+  assert.deepEqual(await f.store.all('SELECT id, revision FROM jobs ORDER BY id'), before);
+});

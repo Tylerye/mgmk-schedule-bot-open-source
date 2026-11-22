@@ -22,7 +22,7 @@ export async function telegramOperation(store, client, user, key, method, body, 
   const old = journal ? await store.first("SELECT * FROM operations WHERE id=?", id) : null;
   if (old?.status === "succeeded") return { done: true, result: JSON.parse(old.result) };
   if (old?.status === "uncertain" || (old?.status === "started" && sendsMessage)) {
-    await store.run("UPDATE operations SET status='uncertain' WHERE id=?", id);
+    if (old.status === "started") await store.run("UPDATE operations SET status='uncertain' WHERE id=?", id);
     return { uncertain: true };
   }
   if (old?.status === "failed") return { failed: true, ...(old.result ? JSON.parse(old.result) : {}) };
@@ -181,7 +181,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       if (await applyOutcome(store, job, result)) await finishJob(store, job);
     } else if (job.kind === "reply" || job.kind === "alert" || job.kind === "diagnostics") {
       if (job.kind === "alert" && payload.scheduleHash) {
-        const latest = (await store.schedules(user.group_id)).find(s => s.date === payload.date);
+        const latest = await store.first("SELECT s.hash FROM active_versions a JOIN snapshots s ON s.dataset_id=a.dataset_id WHERE a.date=? AND s.group_id=?", payload.date, user.group_id);
         if (latest?.hash !== payload.scheduleHash) { await finishJob(store, job, "superseded"); return; }
       }
       if (job.kind === "alert" && payload.pinMessageId) { await finishJob(store, job, "superseded"); return; }

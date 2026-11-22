@@ -44,10 +44,22 @@ export class PersonalStore {
   setSetting(key, value) {
     return this.run("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE settings.value IS NOT excluded.value", key, JSON.stringify(value));
   }
-  async user(id) { const user=await this.first("SELECT * FROM users WHERE user_id=?", id); return user ? {...user, auto_pin: await this.setting(`auto-pin:${id}`,true)} : null; }
+  async user(id) {
+    const row = await this.first("SELECT u.*, p.value AS auto_pin FROM users u LEFT JOIN settings p ON p.key=? WHERE u.user_id=?", `auto-pin:${id}`, id);
+    return row && { ...row, auto_pin: row.auto_pin === null ? true : JSON.parse(row.auto_pin) };
+  }
   async groups() { return (await this.all("SELECT payload FROM catalog")).map(r => JSON.parse(r.payload)); }
   async schedules(group) {
     return (await this.all("SELECT s.payload FROM snapshots s JOIN active_versions a ON a.dataset_id=s.dataset_id WHERE s.group_id=? ORDER BY a.date", group)).map(r => JSON.parse(r.payload));
+  }
+  async previewSchedules(group, date) {
+    // Arrow buttons need only the neighboring published dates for this group.
+    const active = " FROM active_versions a JOIN snapshots s ON s.dataset_id=a.dataset_id AND s.group_id=? ";
+    const rows = await this.all("SELECT a.date,s.payload" + active + "WHERE a.date=? "
+      + "UNION ALL SELECT * FROM (SELECT a.date,NULL" + active + "WHERE a.date<? ORDER BY a.date DESC LIMIT 1) "
+      + "UNION ALL SELECT * FROM (SELECT a.date,NULL" + active + "WHERE a.date>? ORDER BY a.date LIMIT 1)",
+      group, date, group, date, group, date);
+    return rows.map(row => row.payload ? JSON.parse(row.payload) : { date: row.date });
   }
   async weekSchedules(group, start, end) {
     const rows = await this.all("SELECT a.date, s.payload, NULL AS effective_from "
@@ -91,14 +103,16 @@ export class PersonalStore {
   async accountIdleTick(now) {
     const day = now.toISOString().slice(0, 10), cached = stoppedDays.get(this.db);
     if (cached?.day === day && cached.lane === 'interactive' && cached.until > now.getTime()) return false;
-    // The ready index orders pending jobs by priority before due. Bound this
-    // probe and use the full router if the sample cannot cover the whole queue.
+    // Probe jobs_ready(status,priority,due) once per supported priority.
+    // Unknown priorities conservatively wake the router, including legacy jobs.
     // Match the normal router admission headroom, even for the last idle tick.
     const estimate = idleReadEstimate.get(this.db) ?? 8;
     const result = await this.run("UPDATE budgets SET requests=requests+2,rows_read=rows_read+?,rows_written=rows_written+2"
       + " WHERE day=? AND requests+2<22000 AND rows_read+2000<800000 AND rows_written+20<?"
       + " AND NOT EXISTS(SELECT 1 FROM inbox WHERE status='pending')"
-      + " AND NOT EXISTS(SELECT count(*) FROM (SELECT due FROM jobs WHERE status='pending' LIMIT 17) HAVING count(*)>16 OR min(due)<=?)"
+      + " AND NOT EXISTS(SELECT 1 FROM jobs WHERE status='pending' AND priority IN (-2,-1,0,1,2,3,4,5) AND due<=?)"
+      + " AND NOT EXISTS(SELECT 1 FROM jobs WHERE status='pending' AND priority < -2)"
+      + " AND NOT EXISTS(SELECT 1 FROM jobs WHERE status='pending' AND priority > 5)"
       + " AND NOT EXISTS(SELECT 1 FROM fanout WHERE status='pending')"
       + " AND NOT EXISTS(SELECT 1 FROM users WHERE paused=0 AND blocked=0 AND next_due<=?)"
       + " AND NOT EXISTS(SELECT 1 FROM datasets WHERE status='staging')"

@@ -68,6 +68,8 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     const menuText = () => titled("menu", t(user).menu);
     const groupText = () => titled("group", t(user).choose);
     const missingText = () => titled("view", t(user).missing);
+    let initialCards = [];
+    let repeatedSelection = false;
     let action = update.action;
     if (action.startsWith("table:")) action = "preview:" + action.slice("table:".length) + ":full";
     // Only the latest navigation request should survive rapid taps
@@ -85,23 +87,24 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
       if (user.language !== original.language) user.epoch++;
       user.screen = user.group_id ? "menu" : "groups";
       reply(user.group_id ? menuText() : groupText(), user.group_id ? mainMenu() : groupsKeyboard(await groups(), user, 0, brandedMenu));
-      if (user.group_id) for (const s of initialDates(await store.schedules(user.group_id), now)) jobs.push(job(user, "card", s.date, { priority: 0, payload: { manual: true } }));
+      if (user.group_id) initialCards = initialDates(await store.schedules(user.group_id), now);
+      repeatedSelection = user.language === original.language;
     } else if (action.startsWith("groups:") || action.startsWith("search:")) {
       user.screen = "groups";
       const catalog = await groups();
       const matches = action.startsWith("search:") ? findGroups(catalog, action.slice(7)) : catalog;
       reply(groupText(), groupsKeyboard(matches, user, action.startsWith("groups:") ? Number(action.split(":")[1]) : 0, brandedMenu));
     } else if (action.startsWith("group:")) {
-      const group = (await groups()).find(g => g.id === action.slice(6));
+      const group = await store.first("SELECT id FROM catalog WHERE id=?", action.slice(6));
       if (!group) reply(groupText(), groupsKeyboard(await groups(), user, 0, brandedMenu));
       else {
         if (user.group_id !== group.id) { user.group_id = group.id; user.epoch++; user.pin_date = null; }
         user.screen = "menu";
         reply(menuText());
         if (!user.support_seen) { reply(titled("support", t(user).supportText), supportKeyboard(user, brandedMenu)); user.support_seen = 1; }
-        const schedules = initialDates(await store.schedules(user.group_id), now);
-        if (!schedules.length) reply(missingText());
-        for (const s of schedules) jobs.push(job(user, "card", s.date, { priority: 0, payload: { manual: true } }));
+        initialCards = initialDates(await store.schedules(user.group_id), now);
+        if (!initialCards.length) reply(missingText());
+        repeatedSelection = group.id === original.group_id;
       }
     } else if (action === "pause") { user.paused = 1; user.next_due = null; reply(titled("settings", t(user).settingsText), settingsKeyboard(user, brandedMenu));
     } else if (action.startsWith("toggle:")) {
@@ -156,7 +159,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
       const [, date, mode] = action.split(":");
       const card = user.group_id && await store.card(user, date);
       if (card?.parts[0]?.id === update.messageId) {
-        jobs.push(["UPDATE cards SET mode=? WHERE user_id=? AND group_id=? AND date=?", mode, user.user_id, user.group_id, date]);
+        if (card.mode !== mode) jobs.push(["UPDATE cards SET mode=? WHERE user_id=? AND group_id=? AND date=?", mode, user.user_id, user.group_id, date]);
         jobs.push(job(user, "card", date, { priority: 0, payload: { manual: true, history: true } }));
       }
     } else if (action === "week" || action.startsWith("week:")) {
@@ -171,8 +174,10 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
       else {
         const fromWidget = action.startsWith("widget-text:");
         if (fromWidget) action = `preview:${action.slice("widget-text:".length)}:full`;
-        const schedules = await store.schedules(user.group_id);
-        const date = action.startsWith("preview:") ? action.split(":")[1] : selectedDate(schedules, action, now);
+        const fixedDate = action.startsWith("preview:") ? action.split(":")[1]
+          : ["today", "tomorrow"].includes(action) ? selectedDate([], action, now) : null;
+        const schedules = fixedDate ? await store.previewSchedules(user.group_id, fixedDate) : await store.schedules(user.group_id);
+        const date = fixedDate ?? selectedDate(schedules, action, now);
         if (!schedules.some(s => s.date === date)) reply(missingText(), mainMenu(), fromWidget ? null : update.messageId);
         else {
           const schedule = schedules.find(s => s.date === date);
@@ -209,22 +214,28 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
           jobs.push(job(user, "commands", languageCode, { priority: 5, payload: { manual: true } }));
       }
     }
-    if (update.action === "start" && user.group_id) {
-      for (const s of initialDates(await store.schedules(user.group_id), now)) {
+    const starting = update.action === "start" && user.group_id;
+    if (starting) initialCards = initialDates(await store.schedules(user.group_id), now);
+    if (initialCards.length) {
+      for (const s of initialCards) {
         // An explicit /start can repair a deleted pin or a card overwritten by
         // an older bot version, even when the saved render hash still matches.
-        const verifyMessageId = user.pin_date === s.date ? user.pin_message_id : null;
-        if (!verifyMessageId && !original.blocked && original.next_due > now.getTime()) {
+        const verifyMessageId = starting && user.pin_date === s.date ? user.pin_message_id : null;
+        // Keep the first selected card on the normal path to reconcile pins and deadlines.
+        const canSkip = starting || (repeatedSelection && s !== initialCards[0]);
+        if (canSkip && !verifyMessageId && !original.blocked && original.next_due > now.getTime()) {
           const card = await store.card(user, s.date);
           if (card?.schedule_hash === s.hash && card.schedule_payload === JSON.stringify(s)) {
             const rendered = renderPersonal(s, user, { now, branded: brandedMenu, mode: card.mode, lessonChanges: lessonDetailsChanges(s, card) });
             const count = Math.max(rendered.parts.length, card.parts.length);
             const current = Array.from({ length: count }, (_, index) => card.parts[index]?.id
               && card.parts[index].hash === screenHash(rendered.parts[index] ?? t(user).emptyPart, index ? undefined : rendered.keyboard));
-            if (current.every(Boolean)) continue;
+            if (current.every(Boolean) && (starting || !await store.first(
+              "SELECT 1 FROM jobs WHERE id=? AND status='pending'", `${user.user_id}:card:${s.date}`
+            ))) continue;
           }
         }
-        jobs.push(job(user, "card", s.date, { priority: 0, payload: { manual: true, verifyMessageId } }));
+        jobs.push(job(user, "card", s.date, { priority: 0, payload: starting ? { manual: true, verifyMessageId } : { manual: true } }));
       }
     }
     const keys = ["language", "group_id", "epoch", "screen", "sound", "changes", "pin", "paused", "blocked", "support_seen", "pin_date", "next_due"];

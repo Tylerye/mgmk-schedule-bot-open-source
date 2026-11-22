@@ -107,7 +107,7 @@ export async function fanoutBatch(store, now = Date.now()) {
   // New/resumed subscribers obtain their own current snapshots on entry.
   await store.run("UPDATE fanout SET status='done' WHERE status='pending' "
     + "AND EXISTS(SELECT 1 FROM datasets d WHERE d.id=fanout.dataset_id AND d.status='ready') "
-    + "AND NOT EXISTS(SELECT 1 FROM users u WHERE u.group_id=fanout.group_id AND u.paused=0 AND u.blocked=0)");
+    + "AND NOT EXISTS(SELECT 1 FROM users u WHERE u.group_id=fanout.group_id AND u.paused=0 AND u.blocked=0 AND u.user_id>fanout.cursor)");
   const event = await store.first("SELECT f.*,d.date FROM fanout f JOIN datasets d ON d.id=f.dataset_id WHERE f.status='pending' AND d.status='ready' ORDER BY d.generation DESC LIMIT 1");
   if (!event) return;
   const active = await store.first("SELECT dataset_id FROM active_versions WHERE date=?", event.date);
@@ -120,23 +120,25 @@ export async function fanoutBatch(store, now = Date.now()) {
   // At most 24 new jobs (6 D1 writes each), 24 cursor/index updates
   // (2 each), and one sequence write fit the existing 200-write reservation.
   const limit = 24;
+  // Jobs do not change subscription eligibility. Reuse the same bounded set
+  // for allocation, enqueue and progress inside this transaction.
+  const recipients = "SELECT u.user_id,u.group_id,u.epoch FROM fanout f "
+    + "CROSS JOIN users u ON u.group_id=f.group_id "
+    + "WHERE f.dataset_id=? AND f.status='pending' AND u.paused=0 AND u.blocked=0 AND u.user_id>f.cursor "
+    + "AND EXISTS(SELECT 1 FROM active_versions WHERE date=? AND dataset_id=f.dataset_id) "
+    + "ORDER BY f.group_id,u.user_id LIMIT ?";
   await store.batch([
-    ["UPDATE job_revision_sequence SET value=value+? WHERE id=1", limit],
+    ["UPDATE job_revision_sequence SET value=value+? WHERE id=1 AND EXISTS(" + recipients + ")", limit, event.dataset_id, event.date, 1],
     ["INSERT INTO jobs(id,user_id,epoch,kind,date,priority,due,payload,revision) "
       + "SELECT CAST(u.user_id AS TEXT)||':card:'||?,u.user_id,u.epoch,'card',?,1,?,'{}',"
       + "(SELECT value FROM job_revision_sequence WHERE id=1)-?+ROW_NUMBER() OVER (ORDER BY u.group_id,u.user_id) "
-      + "FROM users u JOIN fanout f ON f.group_id=u.group_id JOIN active_versions a ON a.dataset_id=f.dataset_id "
-      + "WHERE f.dataset_id=? AND f.status='pending' AND u.paused=0 AND u.blocked=0 AND u.user_id>f.cursor "
-      + "ORDER BY u.group_id,u.user_id LIMIT ? " + JOB_CONFLICT_UPDATE,
-      event.date, event.date, now, limit, event.dataset_id, limit],
-    ["WITH progress AS MATERIALIZED (SELECT u.group_id,MAX(u.user_id) next_cursor FROM users u "
-      + "JOIN jobs j ON j.id=CAST(u.user_id AS TEXT)||':card:'||? "
-      + "WHERE j.revision>(SELECT value FROM job_revision_sequence WHERE id=1)-? "
-      + "AND j.revision<=(SELECT value FROM job_revision_sequence WHERE id=1) GROUP BY u.group_id) "
+      + "FROM (" + recipients + ") u WHERE 1 " + JOB_CONFLICT_UPDATE,
+      event.date, event.date, now, limit, event.dataset_id, event.date, limit],
+    ["WITH progress AS MATERIALIZED (SELECT group_id,MAX(user_id) next_cursor FROM (" + recipients + ") GROUP BY group_id) "
       + "UPDATE fanout SET cursor=COALESCE((SELECT next_cursor FROM progress WHERE group_id=fanout.group_id),cursor),"
       + "status=CASE WHEN EXISTS(SELECT 1 FROM users u WHERE u.group_id=fanout.group_id AND u.paused=0 AND u.blocked=0 "
       + "AND u.user_id>COALESCE((SELECT next_cursor FROM progress WHERE group_id=fanout.group_id),fanout.cursor)) "
       + "THEN 'pending' ELSE 'done' END WHERE dataset_id=? AND status='pending' AND group_id IN (SELECT group_id FROM progress)",
-      event.date, limit, event.dataset_id],
+      event.dataset_id, event.date, limit, event.dataset_id],
   ]);
 }
