@@ -10,9 +10,9 @@ test('public access is explicit, accepts valid IDs and still reserves teacher ac
  const env={PERSONAL_PUBLIC:'true',PERSONAL_ENABLED:'true',PERSONAL_SHARED_SECRET:'test',PERSONAL:{fetch(){throw Error('teacher must not be relayed')}}};
  assert.equal(await relayPersonalUpdate(env,{update_id:1,message:{from:{id:22,username:'teacher'},chat:{id:22,type:'private'},text:'/start'}},[{userId:22,username:'teacher'}]),null);
 });
-test('header has a blank line and service copy has no long dashes or pin announcement control',async()=>{
+test('header has a blank line and service copy avoids sentence-ending periods or pin announcement control',async()=>{
  const s=await sampleSchedule();const r=renderPersonal(s,{language:'ru'},{now:new Date('2026-11-12T07:00:00+03:00')});
- assert.match(r.parts[0],/ноября<\/i>\n\n<b>/u);
- assert.ok(Object.values(words.ru).every(text=>!/[—–;]/u.test(text)));
+ assert.match(r.parts[0],/ноября\n\n<b>/u);
+ assert.ok(Object.values(words.ru).every(text=>!/[ёЁ]|\.(?:[ \n]|<\/|$)/u.test(text)));
  assert.ok(!settingsKeyboard({auto_pin:true}).inline_keyboard.flat().some(b=>b.callback_data==='personal:toggle:pin'));
 });

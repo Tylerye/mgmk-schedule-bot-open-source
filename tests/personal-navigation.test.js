@@ -25,7 +25,7 @@ test('settings, pagination and timetable buttons edit the pressed screen, includ
   assert.equal(screens[index].reply_markup.inline_keyboard[0][0].url,`https://t.me/${AUTHOR_USERNAME}`);
   assert.equal(screens[index].reply_markup.inline_keyboard[1][0].callback_data,'personal:menu');
  }
- assert.match(screens[10].text,/Не полагайся только на бота/);
+ assert.match(screens[10].text,/лучше свериться с куратором/);
  assert.equal((await f.store.user(100)).group_id,'8СА');
 });
 test('automatic pin defaults on and can be disabled independently of pin announcements',async t=>{

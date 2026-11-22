@@ -182,7 +182,7 @@ test("support details render from the private binding without entering the job p
   assert.equal(calls.length, 1);
   assert.equal(calls[0].method, "editMessageText");
   assert.equal(calls[0].body.message_id, 55);
-  assert.match(calls[0].body.text, /добровольно/u);
+  assert.match(calls[0].body.text, /Расписание бесплатное для всех/u);
   assert.match(calls[0].body.text, /00000000/u);
   assert.match(calls[0].body.text, /0000 0000 0000 0000/u);
   assert.match(calls[0].body.text, /1111 1111 1111 1111/u);

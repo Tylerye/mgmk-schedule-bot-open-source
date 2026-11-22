@@ -1,9 +1,9 @@
-import { timetableTable } from "./timetable-table.js";
+import { publishedDayButtons } from "./timetable-table.js";
 import { releasePage } from "./releases.js";
 import { findGroups } from "./catalog.js";
 import { screenHash, isTimetableMessage } from './screen-state.js';
 import { hasLessonSummary, lessonDetailsChanges } from "./lesson-summary.js";
-import { t, menu, button, backToMenu, supportKeyboard, settingsKeyboard, groupsKeyboard, initialDates, selectedDate, renderPersonal, informationText, informationKeyboard, widgetGroup, widgetLabel } from "./view.js";
+import { t, menu, button, backToMenu, screenText, supportKeyboard, settingsKeyboard, groupsKeyboard, initialDates, selectedDate, renderPersonal, informationText, informationKeyboard, widgetGroup, widgetLabel } from "./view.js";
 
 export { collectPersonalUpdate } from "./update.js";
 
@@ -63,36 +63,46 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     const jobs = [], replies = [];
     const mainMenu = () => menu(user, widgetEnabled, brandedMenu);
     const reply = (text, keyboard = mainMenu(), editId = update.messageId ?? null) => replies.push({ text, keyboard, editId });
+    const titled = (icon, text) => screenText(icon, text, brandedMenu);
+    const menuText = () => titled("menu", t(user).menu);
+    const groupText = () => titled("group", t(user).choose);
+    const missingText = () => titled("view", t(user).missing);
     let action = update.action;
+    if (action.startsWith("table:")) action = "preview:" + action.slice("table:".length) + ":full";
     // Only the latest navigation request should survive rapid taps
     jobs.push(["UPDATE jobs SET status='superseded',completed_at=COALESCE(completed_at,unixepoch()*1000) WHERE user_id=? AND status='pending' AND kind IN ('reply','callback','commands')", user.user_id]);
     if (action === "start") action = user.group_id ? "menu" : "language";
     if (action === "language") {
-      reply("Русский / English", { inline_keyboard: [[button("Русский", "lang:ru", { branded: brandedMenu, style: "primary" }), button("English", "lang:en", { branded: brandedMenu })]] });
+      const en = user.language === "en";
+      reply(titled("language", en ? "<b>Pick a language</b>" : "<b>На каком языке будем общаться?</b>"), {
+        inline_keyboard: [[button("Русский", "lang:ru", { branded: brandedMenu, style: !en ? "primary" : undefined }),
+          button("English", "lang:en", { branded: brandedMenu, style: en ? "primary" : undefined })],
+          ...(user.group_id ? backToMenu(user, brandedMenu).inline_keyboard : [])],
+      });
     } else if (action.startsWith("lang:")) {
       user.language = action.split(":")[1];
       if (user.language !== original.language) user.epoch++;
       user.screen = user.group_id ? "menu" : "groups";
-      reply(user.group_id ? t(user).menu : t(user).choose, user.group_id ? mainMenu() : groupsKeyboard(await groups(), user, 0, brandedMenu));
+      reply(user.group_id ? menuText() : groupText(), user.group_id ? mainMenu() : groupsKeyboard(await groups(), user, 0, brandedMenu));
       if (user.group_id) for (const s of initialDates(await store.schedules(user.group_id), now)) jobs.push(job(user, "card", s.date, { priority: 0, payload: { manual: true } }));
     } else if (action.startsWith("groups:") || action.startsWith("search:")) {
       user.screen = "groups";
       const catalog = await groups();
       const matches = action.startsWith("search:") ? findGroups(catalog, action.slice(7)) : catalog;
-      reply(t(user).choose, groupsKeyboard(matches, user, action.startsWith("groups:") ? Number(action.split(":")[1]) : 0, brandedMenu));
+      reply(groupText(), groupsKeyboard(matches, user, action.startsWith("groups:") ? Number(action.split(":")[1]) : 0, brandedMenu));
     } else if (action.startsWith("group:")) {
       const group = (await groups()).find(g => g.id === action.slice(6));
-      if (!group) reply(t(user).choose, groupsKeyboard(await groups(), user, 0, brandedMenu));
+      if (!group) reply(groupText(), groupsKeyboard(await groups(), user, 0, brandedMenu));
       else {
         if (user.group_id !== group.id) { user.group_id = group.id; user.epoch++; user.pin_date = null; }
         user.screen = "menu";
-        reply(`${t(user).group}: ${group.displayName}`);
-        if (!user.support_seen) { reply(t(user).supportText, supportKeyboard(user, brandedMenu)); user.support_seen = 1; }
+        reply(menuText());
+        if (!user.support_seen) { reply(titled("support", t(user).supportText), supportKeyboard(user, brandedMenu)); user.support_seen = 1; }
         const schedules = initialDates(await store.schedules(user.group_id), now);
-        if (!schedules.length) reply(t(user).missing);
+        if (!schedules.length) reply(missingText());
         for (const s of schedules) jobs.push(job(user, "card", s.date, { priority: 0, payload: { manual: true } }));
       }
-    } else if (action === "pause") { user.paused = 1; user.next_due = null; reply(t(user).settingsText, settingsKeyboard(user, brandedMenu));
+    } else if (action === "pause") { user.paused = 1; user.next_due = null; reply(titled("settings", t(user).settingsText), settingsKeyboard(user, brandedMenu));
     } else if (action.startsWith("toggle:")) {
       const key = action.split(":")[1]; user[key] = user[key] ? 0 : 1;
       if (key === 'auto_pin') {
@@ -107,27 +117,18 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
         user.epoch++; user.next_due = null;
         if (!user.paused && user.group_id) for (const s of initialDates(await store.schedules(user.group_id), now)) jobs.push(job(user, "card", s.date, { priority: 0, payload: { manual: true } }));
       }
-      reply(t(user).settingsText, settingsKeyboard(user, brandedMenu));
-    } else if (action === "settings") reply(t(user).settingsText, settingsKeyboard(user, brandedMenu));
-    else if (action === "help") reply(t(user).helpText, backToMenu(user, brandedMenu));
-    else if (action === "feedback" || action === "privacy") reply(informationText(user, action), informationKeyboard(user, brandedMenu));
+      reply(titled("settings", t(user).settingsText), settingsKeyboard(user, brandedMenu));
+    } else if (action === "settings") reply(titled("settings", t(user).settingsText), settingsKeyboard(user, brandedMenu));
+    else if (action === "help") reply(titled("help", t(user).helpText), backToMenu(user, brandedMenu));
+    else if (action === "feedback" || action === "privacy") reply(titled(action, informationText(user, action)), informationKeyboard(user, brandedMenu));
     else if (action.startsWith("updates:")) {
       const page = releasePage(user, action.slice("updates:".length), brandedMenu);
       reply(page.text, page.keyboard);
-    } else if (action.startsWith("table:")) {
-      const date = action.slice("table:".length);
-      if (!user.group_id) reply(t(user).choose, groupsKeyboard(await groups(), user, 0, brandedMenu));
-      else {
-        const schedules = await store.schedules(user.group_id);
-        const schedule = schedules.find(item => item.date === date);
-        if (!schedule) reply(t(user).missing, mainMenu());
-        else replies.push({ ...timetableTable(schedule, schedules, user, now, brandedMenu), editId: update.messageId ?? null });
-      }
-    } else if (action === "support") reply(t(user).supportText, supportKeyboard(user, brandedMenu));
+    } else if (action === "support") reply(titled("support", t(user).supportText), supportKeyboard(user, brandedMenu));
     else if (action === "donate") replies.push({
-      supportDetails: true, keyboard: { inline_keyboard: [[button(t(user).back, "support", { branded: brandedMenu })]] }, editId: update.messageId ?? null,
+      supportDetails: true, branded: brandedMenu, keyboard: { inline_keyboard: [[button(t(user).back, "support", { branded: brandedMenu })]] }, editId: update.messageId ?? null,
     });
-    else if (action === "later") reply(t(user).closed, mainMenu(), update.messageId);
+    else if (action === "later") reply(titled("menu", t(user).closed), mainMenu(), update.messageId);
     else if (action === "diagnostics") {
       // Owner-only route is also checked by the Worker. Aggregates, no users.
       jobs.push(job(user, "diagnostics", String(row.update_id), { priority: 0, payload: { manual: true } }));
@@ -158,17 +159,17 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
         jobs.push(job(user, "card", date, { priority: 0, payload: { manual: true, history: true } }));
       }
     } else if (["today", "tomorrow", "next", "schedule"].includes(action) || action.startsWith("preview:") || action.startsWith("widget-text:")) {
-      if (!user.group_id) reply(t(user).choose, groupsKeyboard(await groups(), user, 0, brandedMenu));
+      if (!user.group_id) reply(groupText(), groupsKeyboard(await groups(), user, 0, brandedMenu));
       else {
         const fromWidget = action.startsWith("widget-text:");
         if (fromWidget) action = `preview:${action.slice("widget-text:".length)}:full`;
         const schedules = await store.schedules(user.group_id);
         const date = action.startsWith("preview:") ? action.split(":")[1] : selectedDate(schedules, action, now);
-        if (!schedules.some(s => s.date === date)) reply(t(user).missing, mainMenu(), fromWidget ? null : update.messageId);
+        if (!schedules.some(s => s.date === date)) reply(missingText(), mainMenu(), fromWidget ? null : update.messageId);
         else {
           const schedule = schedules.find(s => s.date === date);
           const card = hasLessonSummary(schedule) ? await store.card(user, date) : null;
-          const rendered = renderPersonal(schedule, user, { now, lessonChanges: lessonDetailsChanges(schedule, card),
+          const rendered = renderPersonal(schedule, user, { now, branded: brandedMenu, lessonChanges: lessonDetailsChanges(schedule, card),
             mode: action.startsWith("preview:") ? action.split(":")[2] : "compact" });
           const keyboard = structuredClone(rendered.keyboard);
           for (const row of keyboard.inline_keyboard) for (const item of row) {
@@ -186,10 +187,12 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
             if (page + 1 < rendered.parts.length) pages.push(button("▶️", `preview:${date}:${mode}:${page + 1}`));
             keyboard.inline_keyboard.unshift(pages);
           }
+          const days = publishedDayButtons(schedules, date, user, brandedMenu);
+          if (days.length) keyboard.inline_keyboard.splice(-1, 0, days);
           reply(rendered.parts[page], keyboard, fromWidget ? null : update.messageId);
         }
       }
-    } else reply(t(user).menu);
+    } else reply(menuText());
     // Returning from a block re-enables delivery, but pause remains a choice.
     user.blocked = 0;
     if (update.action.startsWith("lang:")) {
@@ -206,7 +209,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
         if (!verifyMessageId && !original.blocked && original.next_due > now.getTime()) {
           const card = await store.card(user, s.date);
           if (card?.schedule_hash === s.hash && card.schedule_payload === JSON.stringify(s)) {
-            const rendered = renderPersonal(s, user, { now, mode: card.mode, lessonChanges: lessonDetailsChanges(s, card) });
+            const rendered = renderPersonal(s, user, { now, branded: brandedMenu, mode: card.mode, lessonChanges: lessonDetailsChanges(s, card) });
             const count = Math.max(rendered.parts.length, card.parts.length);
             const current = Array.from({ length: count }, (_, index) => card.parts[index]?.id
               && card.parts[index].hash === screenHash(rendered.parts[index] ?? t(user).emptyPart, index ? undefined : rendered.keyboard));

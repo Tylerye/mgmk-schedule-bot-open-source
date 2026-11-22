@@ -1,3 +1,4 @@
+import { heading, themedButton, sendWithThemeFallback } from "../src/chat-theme.js";
 import { TEACHERS, escapeHtml } from "../src/teachers.js";
 import { addDays, dateInTimezone, timeInTimezone } from "../src/dates.js";
 import { withStateLock } from "./d1-store.js";
@@ -54,31 +55,41 @@ export async function enqueueTeacherUpdate(database, update) {
 }
 
 export function teacherKeyboard(user, date, full = false) {
+  const branded = user.branded;
+  const key = (label, action, icon, style) => themedButton(label, { callback_data: "teacher:" + action }, icon, { branded, style });
+  const suffix = date ? ":" + date : "";
   return { inline_keyboard: [
-    [{ text: "📅 Сегодня", callback_data: "teacher:today" }, { text: "📆 Ближайший день", callback_data: "teacher:next" }],
-    [{ text: "◀️ Предыдущий день", callback_data: `teacher:previous${date ? `:${date}` : ""}` },
-      { text: full ? "🟢 Оставшиеся занятия" : "📋 Все занятия за день", callback_data: `teacher:${full ? "compact" : "full"}${date ? `:${date}` : ""}` }],
-    user.previewManual ? [{ text: "Личное расписание", callback_data: "personal:menu" }]
-      : [{ text: user.notifications ? "🔕 Пауза автообновлений" : "🔔 Возобновить автообновления", callback_data: `teacher:${user.notifications ? "pause" : "resume"}` }],
+    [key("Сегодня", "today", "today", "primary"), key("Ближайший день", "next", "next", "primary")],
+    [key("Раньше", "previous" + suffix, "back"),
+      key(full ? "Оставшиеся уроки" : "Весь день", (full ? "compact" : "full") + suffix, "view", "primary")],
+    user.previewManual
+      ? [themedButton("Личное расписание", { callback_data: "personal:menu" }, "menu", { branded })]
+      : [key("Автообновления: " + (user.notifications ? "вкл" : "выкл"), user.notifications ? "pause" : "resume",
+        "changes", user.notifications ? "success" : "danger")],
   ] };
 }
 
-export function formatTeacherSchedule(schedule, teacher, { now = new Date(), full = false, timezone = "Europe/Minsk", corrected = false } = {}) {
+export function formatTeacherSchedule(schedule, teacher, { now = new Date(), full = false, timezone = "Europe/Minsk", corrected = false, branded = false } = {}) {
   const today = dateInTimezone(now, timezone), time = timeInTimezone(now, timezone);
   const date = schedule.date.split("-").reverse().join(".");
-  const weekday = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"][new Date(`${schedule.date}T12:00:00Z`).getUTCDay()];
-  const lines = [`<b>📚 ${escapeHtml(teacher.name)}</b>`, `<b>${date} · ${weekday}</b>`];
-  if (teacher.sourceTeacherId) lines.unshift("🧪 Тестовый кабинет");
-  if (corrected) lines.push("✏️ Расписание обновлено");
-  if (schedule.status) lines.push(`\n${escapeHtml(schedule.status)}`);
-  const lessons = schedule.lessons.filter(l => full || schedule.date > today || (schedule.date === today && l.end > time));
-  if (schedule.lessons.length && !lessons.length) lines.push("\n✅ Занятия завершены. Посмотреть их можно по кнопке «Все занятия за день».");
+  const weekday = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"][new Date(schedule.date + "T12:00:00Z").getUTCDay()];
+  const lines = [heading("schedule", escapeHtml(teacher.name), branded), weekday + ", " + date];
+  if (teacher.sourceTeacherId) lines.push("<i>Тестовый кабинет</i>");
+  if (corrected) lines.push("", heading("changes", "В расписании есть правки", branded));
+  if (schedule.status) lines.push("", escapeHtml(schedule.status));
+  const lessons = schedule.lessons.filter(lesson => full || schedule.date > today || (schedule.date === today && lesson.end > time));
+  if (schedule.lessons.length && !lessons.length) lines.push("", "Все уроки уже прошли", "Чтобы посмотреть их, нажмите «Весь день»");
   for (const lesson of lessons) {
-    const current = schedule.date === today && lesson.start <= time && lesson.end > time;
-    lines.push(`\n${current ? "🟢" : "▫️"} <b>${lesson.number} урок · ${lesson.start}–${lesson.end}</b>\nГруппа: <b>${escapeHtml(lesson.group)}</b>`);
+    const active = schedule.date === today && lesson.start <= time && lesson.end > time;
+    lines.push("", "<b>" + lesson.start + "–" + lesson.end + "</b>  ·  " + lesson.number + " урок" + (active ? "  ·  Сейчас" : ""),
+      "Группа <b>" + escapeHtml(lesson.group) + "</b>");
   }
   return lines.join("\n");
 }
+
+const showTeacherMessage = (client, userId, messageId, text, markup) => sendWithThemeFallback(
+  (body, replyMarkup) => messageId ? client.editMessage(userId, messageId, body, { replyMarkup })
+    : client.sendMessage(userId, body, { replyMarkup }), text, markup);
 
 // A pin advances through teaching days. Midnight and missing/empty days must
 // never make it fall back to an older card or rotate through non-teaching days.
@@ -139,8 +150,8 @@ async function drainTeacherInbox({ database, client, teacher, user, config, now 
     if (action.userId !== user.user_id || action.teacherId !== teacher.id) continue;
     if (action.welcome && client.call) await client.call("setMyCommands", { scope: { type: "chat", chat_id: user.user_id }, commands: [
       { command: "start", description: "Личный кабинет преподавателя" },
-      { command: "today", description: "Моё расписание на сегодня" },
-      { command: "tomorrow", description: "Моё расписание на завтра" },
+      { command: "today", description: "Мое расписание на сегодня" },
+      { command: "tomorrow", description: "Мое расписание на завтра" },
       { command: "latest", description: "Ближайшее опубликованное расписание" },
       { command: "previous", description: "Предыдущее расписание" },
       { command: "stop", description: "Приостановить автообновления" },
@@ -153,11 +164,16 @@ async function drainTeacherInbox({ database, client, teacher, user, config, now 
     const today = dateInTimezone(now, config.timezone);
     const selected = chooseTeacherDate(schedules, action.action, today, action.date);
     const full = action.action === "full" || (action.action !== "compact" && selected?.date < today);
-    const text = action.welcome ? `<b>Здравствуйте, ${escapeHtml(teacher.name)}!</b>\n\nВаш личный кабинет подключён. Бот будет присылать новые расписания и сообщать об изменениях. Доступ закреплён за вашим Telegram-аккаунтом.\n\nВыберите день кнопками ниже.`
+    const formatted = selected && formatTeacherSchedule(JSON.parse(selected.payload), teacher, {
+      now, timezone: config.timezone, full, branded: user.branded,
+    });
+    const text = action.welcome
+      ? heading("menu", "Здравствуйте! Это ваш кабинет МГМК", user.branded) + "\n\nВыберите день, чтобы посмотреть уроки\nНовое расписание и правки придут сюда"
       : ["pause", "resume"].includes(action.action)
-      ? `${selected ? formatTeacherSchedule(JSON.parse(selected.payload), teacher, { now, timezone: config.timezone, full }) : escapeHtml(teacher.name)}\n\n${user.notifications ? "🔔 Автоматические уведомления включены." : "🔕 Автоматические уведомления приостановлены. Расписание доступно по кнопкам."}`
-      : selected ? formatTeacherSchedule(JSON.parse(selected.payload), teacher, { now, timezone: config.timezone, full })
-        : `${escapeHtml(teacher.name)}\n\n${action.action === "previous" ? "Предыдущее расписание пока недоступно." : "Расписание на выбранный день ещё не опубликовано."}`;
+        ? (formatted || heading("settings", "Настройки", user.branded)) + (user.notifications
+          ? "\n\nБуду присылать новое расписание и правки"
+          : "\n\nАвтообновления на паузе\nУроки можно посмотреть кнопками")
+        : formatted || heading("view", action.action === "previous" ? "Предыдущего расписания пока нет" : "Расписания на этот день пока нет", user.branded);
     const replyMarkup = teacherKeyboard(user, selected?.date, full);
     if (action.callbackId && selected && !["pause", "resume"].includes(action.action)) {
       await database.prepare("INSERT INTO teacher_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
@@ -166,10 +182,8 @@ async function drainTeacherInbox({ database, client, teacher, user, config, now 
     // Persist intent before a potentially ambiguous send. Edits are safe to retry.
     if (!action.callbackId) await database.prepare("UPDATE teacher_inbox SET status='sending' WHERE update_id=?").bind(row.update_id).run();
     try {
-      if (action.callbackId) {
-        await client.answerCallbackQuery(action.callbackId);
-        await client.editMessage(user.user_id, action.messageId, text, { replyMarkup });
-      } else await client.sendMessage(user.user_id, text, { replyMarkup });
+      if (action.callbackId) await client.answerCallbackQuery(action.callbackId);
+      await showTeacherMessage(client, user.user_id, action.callbackId ? action.messageId : null, text, replyMarkup);
       await database.prepare("UPDATE teacher_inbox SET status='done' WHERE update_id=?").bind(row.update_id).run();
     } catch (error) {
       if (isMessageNotModified(error) || (action.callbackId && isMessageUneditable(error))) {
@@ -195,7 +209,7 @@ async function publishTeacherDate({ database, client, teacher, user, row, now, c
   const selected = view.date && view.date !== row.date
     ? await database.prepare("SELECT payload FROM teacher_schedules WHERE teacher_id=? AND date=?").bind(sourceTeacherId(teacher.id), view.date).first() : null;
   const schedule = JSON.parse(selected?.payload ?? row.payload);
-  const text = formatTeacherSchedule(schedule, teacher, { now, timezone: config.timezone, full: view.full,
+  const text = formatTeacherSchedule(schedule, teacher, { now, timezone: config.timezone, full: view.full, branded: user.branded,
     corrected: !selected && Boolean(publication.hash && publication.hash !== row.hash) });
   const renderHash = JSON.stringify([text, user.notifications]);
   // Render text changes only at lesson boundaries or when the source changes.
@@ -211,7 +225,7 @@ async function publishTeacherDate({ database, client, teacher, user, row, now, c
   if (!messageId) await database.prepare("UPDATE teacher_publications SET status='sending' WHERE teacher_id=? AND date=?").bind(teacher.id, row.date).run();
   try {
     if (messageId) {
-      try { await client.editMessage(user.user_id, messageId, text, { replyMarkup }); }
+      try { await showTeacherMessage(client, user.user_id, messageId, text, replyMarkup); }
       catch (error) {
         if (!isMessageNotModified(error)) {
           if (isMessageUneditable(error)) {
@@ -222,7 +236,7 @@ async function publishTeacherDate({ database, client, teacher, user, row, now, c
           throw error;
         }
       }
-    } else messageId = (await client.sendMessage(user.user_id, text, { replyMarkup })).message_id;
+    } else messageId = (await showTeacherMessage(client, user.user_id, null, text, replyMarkup)).message_id;
     await database.prepare("UPDATE teacher_publications SET message_id=?,hash=?,revision=?,status='sent',retry_at=0 WHERE teacher_id=? AND date=?")
       .bind(messageId, row.hash, revision, teacher.id, row.date).run();
     await database.prepare("INSERT INTO teacher_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
@@ -249,8 +263,9 @@ async function drainTeacherNotices({ database, client, teacher, user, now }) {
     await database.prepare("UPDATE teacher_notices SET status='sending' WHERE teacher_id=? AND date=? AND revision=?")
       .bind(teacher.id, row.date, row.revision).run();
     try {
-      await client.sendMessage(user.user_id, `✏️ ${escapeHtml(teacher.name)}: расписание на ${row.date.split("-").reverse().join(".")} изменилось. Карточка обновлена.`,
-        { replyMarkup: teacherKeyboard(user, row.date) });
+      const date = row.date.split("-").reverse().join(".");
+      const text = heading("changes", "На " + date + " есть правки", user.branded) + "\n\nОткройте карточку — там уже новое расписание";
+      await showTeacherMessage(client, user.user_id, null, text, teacherKeyboard(user, row.date));
       await database.prepare("UPDATE teacher_notices SET status='sent' WHERE teacher_id=? AND date=? AND revision=?")
         .bind(teacher.id, row.date, row.revision).run();
     } catch (error) {
@@ -320,6 +335,7 @@ export async function teacherMaintenance(env, config, logger, teacherId, now = n
     if (teacher.sourceTeacherId && String(user.user_id) !== String(env.ADMIN_USER_ID)) throw new Error("Preview account identity mismatch");
     if (teacher.userId && teacher.userId !== user.user_id) throw new Error("Preview account identity mismatch");
     user.previewManual = env.PERSONAL_ENABLED === "true" && Boolean(teacher.sourceTeacherId);
+    user.branded = env.TEACHER_BRANDED_MENU === "true";
     const client = suppliedClient ?? clientFor(env, logger);
     const context = { database: env.DB, client, teacher, user, config, now };
     await drainTeacherInbox(context);

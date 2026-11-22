@@ -10,13 +10,12 @@ import { relayPersonalUpdate } from '../cloudflare/personal-relay.js';
 test('a real D1 trigger admits a tap and delivers its timetable without Cron or other users', async () => {
   const script = (await build({entryPoints:['personal/worker.js'],bundle:true,write:false,format:'esm',platform:'neutral',external:['node:crypto']})).outputFiles[0].text;
   const lanes=[], calls=[];
-  let rejectEmoji = false, rejectRich = false;
+  let rejectEmoji = false;
   const mf=new Miniflare(convertV4MiniflareOptions({name:'personal',modules:true,script,compatibilityDate:'2026-09-14',compatibilityFlags:['nodejs_compat'],
     d1Databases:{DB:'interactive'},bindings:{PERSONAL_SHARED_SECRET:'local-test',ADMIN_USER_ID:'100',BOT_TOKEN:'fake',PERSONAL_PUBLIC:'true',PERSONAL_BRANDED_MENU:'true',
       PERSONAL_DAILY_WRITES:'45000',PERSONAL_BACKGROUND_WRITES:'30000',PERSONAL_SOURCE_WRITES:'35000'},
     serviceBindings:{SELF:async(request,runtime)=>{lanes.push(new URL(request.url).pathname);return (await runtime.getWorker('personal')).fetch(request);}},
     outboundService:async request=>{calls.push({method:new URL(request.url).pathname.split('/').at(-1),body:await request.json()});
-      if (rejectRich && calls.at(-1).body.rich_message) return Response.json({ok:false,error_code:400,description:"Bad Request: RICH_MESSAGE_INVALID"},{status:400});
       if (rejectEmoji && calls.at(-1).body.reply_markup?.inline_keyboard.flat().some(button => button.icon_custom_emoji_id)) {
         return Response.json({ok:false,error_code:400,description:'Bad Request: BUTTON_CUSTOM_EMOJI_INVALID'},{status:400});
       }
@@ -26,7 +25,7 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
     for(const file of (await readdir('personal/migrations')).filter(f=>f.endsWith('.sql')).sort())
       for(const sql of (await readFile('personal/migrations/'+file,'utf8')).replace(/--[^\n]*/gu,'').replace(/;\s*END;/gi,'__TRIGGER_END__;').split(';').map(s=>s.replaceAll('__TRIGGER_END__','; END;')).filter(s=>s.trim())) await db.prepare(sql).run();
     const date=dateInTimezone(new Date(),'Europe/Minsk'), schedule=await sampleSchedule('8Са',date);
-    await db.prepare("INSERT INTO users(user_id,group_id) VALUES(100,'8СА'),(200,'8СА')").run();
+    await db.prepare("INSERT INTO users(user_id,group_id,sound) VALUES(100,'8СА',0),(200,'8СА',1)").run();
     await db.prepare("INSERT INTO datasets(id,date,generation,manifest,expected_count,status) VALUES('today',?,1,'{}',1,'ready')").bind(date).run();
     await db.prepare("INSERT INTO active_versions(date,dataset_id,generation) VALUES(?,'today',1)").bind(date).run();
     await db.prepare("INSERT INTO snapshots(dataset_id,group_id,hash,payload) VALUES('today','8СА',?,?)").bind(schedule.hash,JSON.stringify(schedule)).run();
@@ -40,7 +39,7 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
     assert.deepEqual(calls.map(c=>c.method),['editMessageText','answerCallbackQuery']);
     // Either fixture lesson can be the remaining one at the runner's real
     // Minsk time; finishing lesson 1 must not make this test fail at 09:00.
-    assert.match(calls[0].body.text,/МАТЕМАТИКА|ФИЗИКА|Учебный день завершён/u);
+    assert.match(calls[0].body.text,/МАТЕМАТИКА|ФИЗИКА|На сегодня все/u);
     assert.equal(calls[0].body.chat_id,100);
     assert.equal((await db.prepare("SELECT status FROM jobs WHERE id='other'").first()).status,'pending');
     assert.ok(lanes.includes('/inbox/1'));assert.ok(lanes.includes('/delivery/100'));
@@ -75,12 +74,15 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
       ['editMessageText',77], ['editMessageText',77],
     ]);
     const [branded, fallback] = calls.slice(4).map(call=>call.body.reply_markup.inline_keyboard[0]);
-    assert.deepEqual(branded.map(button=>button.style), ['primary','success']);
+    assert.deepEqual(branded.map(button=>button.style), ['primary','primary']);
     assert.deepEqual(branded.map(button=>button.callback_data), ['personal:today','personal:tomorrow']);
     assert.ok(branded.every(button=>/^\d+$/.test(button.icon_custom_emoji_id)));
     assert.deepEqual(fallback.map(button=>button.text), ['📅 Сегодня','🗓 Завтра']);
-    assert.deepEqual(fallback.map(button=>button.style), ['primary','success']);
+    assert.deepEqual(fallback.map(button=>button.style), ['primary','primary']);
     assert.ok(fallback.every(button=>!Object.hasOwn(button,'icon_custom_emoji_id')));
+    assert.match(calls[4].body.text,/<tg-emoji/u);
+    assert.doesNotMatch(calls[5].body.text,/<tg-emoji/u);
+    assert.match(calls[5].body.text,/Привет!/u);
     assert.ok(calls[4].body.reply_markup.inline_keyboard.flat().some(button => button.callback_data === 'personal:updates:0'));
 
     rejectEmoji = false;
@@ -97,7 +99,7 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
       assert.equal(calls.length,expectedCalls);
     }
     await tap('updates:0',4,7);
-    assert.match(calls[6].body.text,/V1\.0.*<\/b>/u);
+    assert.match(calls[6].body.text,/V1\.1.*<\/b>/u);
     assert.equal(calls[6].body.message_id,77);
     await tap('updates:history',5,8);
     assert.match(calls[7].body.text,/V0\.1[\s\S]*11\.11\.2026[\s\S]*V1\.0/u);
@@ -106,14 +108,13 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
     await tap('table:'+date,7,10);
     assert.equal(calls[9].method,'editMessageText');
     assert.equal(calls[9].body.message_id,77);
-    assert.match(calls[9].body.rich_message.html,/<table bordered striped compact>/u);
-    assert.match(calls[9].body.rich_message.html,/МАТЕМАТИКА/u);
-    rejectRich = true;
-    await tap('table:'+date,8,12);
-    assert.equal(calls[11].method,'editMessageText');
-    assert.equal(calls[11].body.message_id,77);
-    assert.match(calls[11].body.text,/МАТЕМАТИКА/u);
-    assert.equal(calls[11].body.rich_message,undefined);
+    assert.match(calls[9].body.text,/МАТЕМАТИКА/u);
+    assert.match(calls[9].body.text,/<b>08:15–09:00<\/b>/u);
+    assert.equal(calls[9].body.rich_message,undefined);
+    await tap('settings',8,11);
+    const switches = calls[10].body.reply_markup.inline_keyboard.flat();
+    assert.equal(switches.find(button=>button.callback_data==='personal:toggle:auto_pin').style,'success');
+    assert.equal(switches.find(button=>button.callback_data==='personal:toggle:sound').style,'danger');
     await db.prepare('UPDATE budgets SET rows_written=36000').run();
     assert.equal((await route('/source-status')).status,503,'uncommitted upload cannot be acknowledged as successful');
   } finally {await mf.dispose();}

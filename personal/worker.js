@@ -240,7 +240,7 @@ export default {
         if (budget.mode === 'normal' && pilotAllowed(env, id)) {
           await deliverUser(store, new TelegramClient({ token: env.BOT_TOKEN, logger, timeoutMs: 8000 }), id,
             { now, mode: budget.mode, ownerId: env.ADMIN_USER_ID, supportDetails: env.PERSONAL_SUPPORT_DETAILS,
-              clock: Date.now, catchUp: true, widgetEnabled: env.PERSONAL_WIDGET_ENABLED === "true" });
+              clock: Date.now, catchUp: true, widgetEnabled: env.PERSONAL_WIDGET_ENABLED === "true", brandedMenu: env.PERSONAL_BRANDED_MENU === "true" });
         }
       }
       else if (path === "/tick/delivery") {
@@ -262,7 +262,7 @@ export default {
           const background = url.searchParams.get("background") === "1";
           const acquired = await deliverUser(store, new TelegramClient({ token: env.BOT_TOKEN, logger, timeoutMs: 8000 }), id,
             { now, mode: budget.mode, ownerId: env.ADMIN_USER_ID, supportDetails: env.PERSONAL_SUPPORT_DETAILS,
-              clock: background ? Date.now : undefined, widgetEnabled: env.PERSONAL_WIDGET_ENABLED === "true" });
+              clock: background ? Date.now : undefined, widgetEnabled: env.PERSONAL_WIDGET_ENABLED === "true", brandedMenu: env.PERSONAL_BRANDED_MENU === "true" });
           if (background) return json({ ok: true });
           const next = await store.first("SELECT MIN(due) due FROM jobs WHERE user_id=? AND status='pending'" + manualJobsOnly(budget.mode), id);
           return json({ ok: true, busy: acquired === false, pending: next?.due != null, nextDue: next?.due ?? null });

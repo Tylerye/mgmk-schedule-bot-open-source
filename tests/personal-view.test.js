@@ -29,11 +29,11 @@ test("RU/EN labels preserve PDF names, linked subgroups and notes; classes conti
   assert.ok(ru.parts[0].includes("подгруппа 2"));
   const en = renderPersonal(schedule, { language: "en" }, { mode: "full", now: new Date("2026-11-12T16:31:00+03:00") });
   assert.match(en.parts[0], /Thursday, 12 November/u);
-  assert.match(en.parts[0], /<b>1 lesson<\/b>.*✓/u);
+  assert.match(en.parts[0], /<b>08:15–09:00<\/b>.*1 lesson.*✓/u);
   assert.match(en.parts[0], /МАТЕМАТИКА/u);
   assert.ok(!en.parts[0].includes("329"));
   assert.match(en.parts[0], /Information period/u);
-  assert.match(en.parts[0], /<i>.*LUNCH/u);
+  assert.match(en.parts[0], /🍴 <b>Lunch/u);
 });
 
 test("long cards split without losing source text or breaking HTML", async () => {

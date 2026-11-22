@@ -50,7 +50,7 @@ test("8-Сба can request the widget alongside text; definite rejection falls b
   await tap(100, "widget-text:" + schedule.date);
   assert.equal(calls.at(-1).method, "sendMessage");
   await tap(100, "widget:tomorrow");
-  assert.match(calls.at(-1).body.text, /пока не опубликовано/u);
+  assert.match(calls.at(-1).body.text, /Пока не вижу расписание/u);
 
   error = Object.assign(new Error("Method unavailable"), { apiRejected: true, errorCode: 404 });
   await tap(100, "widget:today");

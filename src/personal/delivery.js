@@ -1,5 +1,6 @@
+import { sendWithThemeFallback } from "../chat-theme.js";
 import { createHash } from "node:crypto";
-import { renderPersonal, t, button, subjectChanges, choosePersonalPin, nextRenderAt, nextPersonalPinAt, noticeParts, supportDetailsText, widgetGroup, withoutMenuEmoji } from "./view.js";
+import { renderPersonal, t, button, subjectChanges, choosePersonalPin, nextRenderAt, nextPersonalPinAt, noticeParts, supportDetailsText, widgetGroup, screenText } from "./view.js";
 import { buildScheduleWidget } from "./widget.js";
 import { lessonDetailsChanges } from "./lesson-summary.js";
 import { escapeHtml } from "../schedule/format.js";
@@ -45,7 +46,10 @@ export async function telegramOperation(store, client, user, key, method, body, 
     ["UPDATE users SET last_api_at=? WHERE user_id=?", claimedAt, user.user_id],
   ]);
   try {
-    const result = await client.call(method, body);
+    const result = body.text === undefined ? await client.call(method, body)
+      : await sendWithThemeFallback((text, markup) => client.call(method, {
+        ...body, text, ...(markup ? { reply_markup: markup } : {}),
+      }), body.text, body.reply_markup);
     const stable = sendsMessage ? { message_id: result?.message_id } : true;
     if (sendsMessage && !Number.isSafeInteger(stable.message_id)) throw new Error("Missing Telegram receipt");
     if (method === "sendMessage") stable.content_hash = digest([body.text, body.reply_markup ?? { inline_keyboard: [] }]);
@@ -75,8 +79,7 @@ export async function telegramOperation(store, client, user, key, method, body, 
     const permanent = error.apiRejected && error.errorCode >= 400 && error.errorCode < 500;
     const replaceable = permanent && method === 'editMessageText' && /message to edit not found/iu.test(error.description ?? '');
     const missingPin = permanent && method === 'pinChatMessage' && /message to pin not found/iu.test(error.description ?? '');
-    const emojiRejected = permanent && error.errorCode === 400 && /emoji|reply markup|button.type.invalid/iu.test(error.description ?? '');
-    const failure = { replaceable, ...(missingPin ? { missingPin: true } : {}), ...(emojiRejected ? { emojiRejected: true } : {}) };
+    const failure = { replaceable, ...(missingPin ? { missingPin: true } : {}) };
     if (journal) await store.run("UPDATE operations SET status=?,result=? WHERE id=?", permanent ? "failed" : "retry", JSON.stringify(failure), id);
     return permanent ? { failed: true, ...failure } : { retryAt: now + 5000 };
   }
@@ -117,13 +120,13 @@ async function pinStatement(store, user, cards, now) {
   return pending ? [] : [store.jobStatement(user, "pin", "", { priority: 1, due: now.getTime() })];
 }
 
-export async function deliverUser(store, client, id, { now = new Date(), mode = "normal", ownerId, supportDetails, clock, catchUp = false, widgetEnabled = false } = {}) {
+export async function deliverUser(store, client, id, { now = new Date(), mode = "normal", ownerId, supportDetails, clock, catchUp = false, widgetEnabled = false, brandedMenu = false } = {}) {
   return store.lock(id, now.getTime(), async token => {
     const user = await store.user(id);
     if (!user || user.blocked) return;
     if (catchUp) {
       if (mode !== "normal" || user.paused || user.next_due === null || user.next_due > now.getTime()) return;
-      const due = await enqueueDueLocked(store, user, now, { client, clock, token });
+      const due = await enqueueDueLocked(store, user, now, brandedMenu, { client, clock, token });
       if (due.handled) return;
       user.next_due = due.next;
       // Preserve the worker's existing per-user delivery cooldown. The job
@@ -185,7 +188,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       const partIndex = payload.partIndex ?? 0;
       let text = payload.texts?.[partIndex] ?? payload.text;
       const details = job.kind === "reply" && payload.supportDetails === true;
-      if (details) text = supportDetailsText(user, supportDetails);
+      if (details) text = screenText("support", supportDetailsText(user, supportDetails), payload.branded);
       if (job.kind === "diagnostics") {
         if (String(id) !== String(ownerId)) { await finishJob(store, job, "cancelled"); return; }
         text = await diagnosticText(store, now);
@@ -207,14 +210,6 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       const screenHash = hashScreen(rich ?? text, payload.keyboard);
       const unchanged = standalone && await store.setting(screenKey) === screenHash;
       const result = unchanged ? { done: true } : await op(`${job.kind}:${job.date}:${job.revision}:${partIndex}:${details ? "support-details" : digest(body)}`, method, body);
-      if (job.kind === "reply" && result.emojiRejected) {
-        const fallback = withoutMenuEmoji(payload.keyboard);
-        if (fallback) {
-          await store.run("UPDATE jobs SET payload=? WHERE id=? AND revision=?",
-            JSON.stringify({ ...payload, keyboard: fallback }), job.id, job.revision);
-          return;
-        }
-      }
       if (rich && result.failed && !result.replaceable) {
         // A definitive Rich Message rejection can fall back to text at the
         // same target. An ambiguous send remains uncertain in its journal.
@@ -271,7 +266,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       if (!schedule) { await finishJob(store, job, "cancelled"); return; }
       const card = await store.card(user, job.date) ?? { parts: [], mode: "compact", schedule: null };
       const lessonChanges = lessonDetailsChanges(schedule, card);
-      const rendered = renderPersonal(schedule, user, { mode: card.mode, now, lessonChanges });
+      const rendered = renderPersonal(schedule, user, { mode: card.mode, now, branded: brandedMenu, lessonChanges });
       const parts = [...card.parts];
       const count = Math.max(parts.length, rendered.parts.length);
       let changed = false;
@@ -391,7 +386,7 @@ async function editDueCard(store, user, candidate, next, date, { client, clock, 
   return true;
 }
 
-async function enqueueDueLocked(store, fresh, date, direct) {
+async function enqueueDueLocked(store, fresh, date, brandedMenu, direct) {
   const now = date.getTime(), schedules = await store.schedules(fresh.group_id), cards = await loadCards(store, fresh);
   const statements = [];
   let candidate;
@@ -399,7 +394,7 @@ async function enqueueDueLocked(store, fresh, date, direct) {
     const card = cards.find(c => c.date === schedule.date);
     // New publications are queued by durable fanout, never by a clock tick.
     if (!card) continue;
-    const rendered = renderPersonal(schedule, fresh, { mode: card.mode, now: date, lessonChanges: lessonDetailsChanges(schedule, card) });
+    const rendered = renderPersonal(schedule, fresh, { mode: card.mode, now: date, branded: brandedMenu, lessonChanges: lessonDetailsChanges(schedule, card) });
     const count = Math.max(card.parts.length, rendered.parts.length);
     if (!Array.from({ length: count }, (_, i) => card.parts[i]?.hash === digest([rendered.parts[i] ?? t(fresh).emptyPart, i ? { inline_keyboard: [] } : rendered.keyboard])).every(Boolean)) {
       const pending = await store.first("SELECT 1 FROM jobs WHERE id=? AND status='pending' AND epoch=?", `${fresh.user_id}:card:${schedule.date}`, fresh.epoch);
@@ -420,7 +415,7 @@ async function enqueueDueLocked(store, fresh, date, direct) {
   return { next };
 }
 
-export async function enqueueDue(store, now = Date.now(), userId = null) {
+export async function enqueueDue(store, now = Date.now(), userId = null, brandedMenu = false) {
   const users = userId === null
     ? await store.all("SELECT * FROM users WHERE paused=0 AND blocked=0 AND next_due IS NOT NULL AND next_due<=? ORDER BY next_due LIMIT 4", now)
     : await store.all("SELECT * FROM users WHERE user_id=? AND paused=0 AND blocked=0 AND next_due<=?", userId, now);
@@ -428,7 +423,7 @@ export async function enqueueDue(store, now = Date.now(), userId = null) {
     await store.lock(user.user_id, now, async () => {
       const fresh = await store.user(user.user_id);
       if (!fresh || fresh.paused || fresh.blocked || fresh.next_due === null || fresh.next_due > now) return;
-      await enqueueDueLocked(store, fresh, new Date(now));
+      await enqueueDueLocked(store, fresh, new Date(now), brandedMenu);
     });
   }
 }
