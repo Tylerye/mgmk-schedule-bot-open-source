@@ -30,3 +30,22 @@ test('survey binds to its Telegram receipt and saves only one decision', async t
   assert.deepEqual(calls.map(c => [c.method, c.body.message_id]), [['editMessageText', 42], ['deleteMessage', 42]]);
   assert.equal(calls[0].body.reply_markup.inline_keyboard.length, 1);
 });
+
+test('update rating is isolated from the previous survey and visible only in owner status', async t => {
+  const f = await personalFixture(); t.after(() => f.close());
+  const now = new Date();
+  const id = 123;
+  const campaign = 'rating-update-20261123-v1';
+  await f.store.run('INSERT INTO users(user_id) VALUES(?)', id);
+  await f.store.setSetting('rating-20261120-v1:123', 2);
+  await f.store.run("INSERT INTO operations(id,user_id,method,status,result,started_at) VALUES(?,?,'sendMessage','succeeded',?,?)",
+    id + ':alert:' + campaign + ':10:0:receipt', id, JSON.stringify({ message_id: 44 }), +now);
+  for (const [updateId, messageId, stars] of [[1,43,1],[2,44,5],[3,44,3]]) {
+    const update = { userId: id, messageId, action: 'rating:update-20261123:' + stars, update_id: updateId, acknowledged: true };
+    await enqueuePersonalUpdate(f.store, update, +now);
+    await processPersonalInbox(f.store, await f.store.first('SELECT * FROM inbox WHERE update_id=?', updateId), now);
+  }
+  assert.equal(await f.store.setting(campaign + ':123'), 5);
+  assert.doesNotMatch(await diagnosticText(f.store, now), /Оценка обновления/u);
+  assert.match(await diagnosticText(f.store, now, null, { showUpdateRating: true }), /Оценка обновления · 5 \/ 5 · голосов 1/u);
+});

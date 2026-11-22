@@ -8,6 +8,12 @@ import { t, menu, button, backToMenu, screenText, supportKeyboard, settingsKeybo
 
 export { collectPersonalUpdate } from "./update.js";
 
+function titledUpdate(user, branded) {
+  return screenText("updates", user.language === "en"
+    ? "<b>Thanks for rating the update</b>\n\nSend /start to open the new menu"
+    : "<b>Спасибо за оценку обновления</b>\n\nНажмите /start, чтобы открыть новое меню", branded);
+}
+
 export async function enqueuePersonalUpdate(store, update, now = Date.now()) {
   if (await store.first("SELECT 1 FROM inbox WHERE update_id=?", update.update_id)) return false;
   const count=await store.first("SELECT (SELECT COUNT(*) FROM (SELECT 1 FROM inbox WHERE status='pending' LIMIT 500)) total,(SELECT COUNT(*) FROM (SELECT 1 FROM inbox WHERE status='pending' AND user_id=? LIMIT 5)) own,(SELECT rows FROM security_storage_counts WHERE name='inbox') records",update.userId);
@@ -31,9 +37,10 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
       await store.run("INSERT OR IGNORE INTO users(user_id) VALUES(?)", row.user_id);
       user = await store.user(row.user_id);
     }
-    if (/^rating:(?:[1-5]|later)$/u.test(update.action)) {
-      const choice = update.action.slice(7);
-      const key = "rating-20261120-v1";
+    const rating = /^rating:(?:(update-20261123):)?([1-5]|later)$/u.exec(update.action);
+    if (rating && !(rating[1] && rating[2] === "later")) {
+      const [, campaign, choice] = rating;
+      const key = campaign ? "rating-update-20261123-v1" : "rating-20261120-v1";
       const voteKey = key + ":" + row.user_id;
       const receipt = await store.first(
         "SELECT 1 FROM operations WHERE id GLOB ? AND method='sendMessage' AND status='succeeded' AND json_extract(result,'$.message_id')=? LIMIT 1",
@@ -44,13 +51,15 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
         const later = choice === "later";
         const en = user.language === "en";
         const low = Number(choice) <= 2;
-        const text = en
+        const text = campaign
+          ? titledUpdate(user, brandedMenu)
+          : en
           ? (low ? "💛 Thanks for being honest\n\nTell me what would make the bot better" : choice === "3" ? "🙌 Thanks for rating the bot\n\nI'll keep improving it" : "💛 Thanks for the support\n\nGlad the bot helps")
           : (low ? "💛 Спасибо за честную оценку\n\nЕсли есть идея, напиши мне, что можно улучшить" : choice === "3" ? "🙌 Спасибо за оценку\n\nБуду дальше улучшать бота" : "💛 Спасибо за поддержку\n\nРад, что бот помогает");
         statements.push(["INSERT INTO settings(key,value) VALUES(?,?)", voteKey, JSON.stringify(later ? choice : Number(choice))]);
         statements.push(job(user, "rating-response", String(update.messageId), { priority: -2, payload: {
           manual: true, messageId: update.messageId, remove: later, text,
-          keyboard: { inline_keyboard: low ? [informationKeyboard(user, brandedMenu).inline_keyboard[0]] : [] },
+          keyboard: { inline_keyboard: !campaign && low ? [informationKeyboard(user, brandedMenu).inline_keyboard[0]] : [] },
         } }));
       }
       await store.batch([...statements,

@@ -136,7 +136,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
     const job = await store.first("SELECT * FROM jobs WHERE user_id=? AND status='pending' AND due<=?" + manualJobsOnly(mode) + " ORDER BY priority,due,id LIMIT 1", id, now.getTime());
     if (!job) return;
     const payload = JSON.parse(job.payload);
-    if ((job.epoch !== user.epoch && job.kind !== "rating-response" && !(job.kind === "alert" && job.date === "rating-20261120-v1")) || (user.paused && !payload.manual)) { await finishJob(store, job, "cancelled"); return; }
+    if ((job.epoch !== user.epoch && job.kind !== "rating-response" && !(job.kind === "alert" && ["rating-20261120-v1", "rating-update-20261123-v1"].includes(job.date))) || (user.paused && !payload.manual)) { await finishJob(store, job, "cancelled"); return; }
     if (mode === "stopped" || (mode !== "normal" && !payload.manual)) return;
     const op = (key, method, body) => telegramOperation(store, client, user, key, method, body, now.getTime(), { queuedEdit: job.kind === 'card' || job.kind === 'reply' || job.kind === 'rating-response', clock });
     const sendBody = (text, keyboard, silent = true) => ({ chat_id: id, text, parse_mode: "HTML", disable_web_page_preview: true,
@@ -191,7 +191,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       if (details) text = screenText("support", supportDetailsText(user, supportDetails), payload.branded);
       if (job.kind === "diagnostics") {
         if (String(id) !== String(ownerId)) { await finishJob(store, job, "cancelled"); return; }
-        text = await diagnosticText(store, now);
+        text = await diagnosticText(store, now, null, { showUpdateRating: true });
       }
       // Old queued replies also pass here. Never let navigation edit a
       // timetable or the current pin, even if the target changed since enqueue.
@@ -435,7 +435,7 @@ export async function deliveryHealth(store, now = new Date()) {
   const late = Math.max(dueLagSeconds, jobLagSeconds) > (backgroundPolicy(now).staleAfterMs / 1000);
   return { dueUsers: due.count, dueLagSeconds, pendingJobs: jobs.count, jobLagSeconds, late };
 }
-export async function diagnosticText(store, now = new Date(), delivery = null) {
+export async function diagnosticText(store, now = new Date(), delivery = null, { showUpdateRating = false } = {}) {
   delivery ??= await deliveryHealth(store, now);
   const queue = await store.first("SELECT COUNT(*) count,MIN(due) oldest FROM jobs WHERE status='pending'");
   const uncertain = await store.first("SELECT COUNT(*) count FROM operations WHERE status='uncertain' OR (status='started' AND method IN ('sendMessage','sendRichMessage','sendWidget'))");
@@ -444,6 +444,11 @@ export async function diagnosticText(store, now = new Date(), delivery = null) {
   const budget = await store.first("SELECT * FROM budgets WHERE day=?", now.toISOString().slice(0, 10));
   const policy = backgroundPolicy(now);
   const [ratings] = await store.all("SELECT COUNT(*) count,ROUND(AVG(value),2) average,SUM(value='1') one,SUM(value='2') two,SUM(value='3') three,SUM(value='4') four,SUM(value='5') five FROM settings WHERE key GLOB 'rating-20261120-v1:*' AND value IN ('1','2','3','4','5')");
+  const updateRating = showUpdateRating ? await store.first(
+    "SELECT COUNT(*) count,ROUND(AVG(value),2) average,SUM(value='1') one,SUM(value='2') two,SUM(value='3') three,SUM(value='4') four,SUM(value='5') five "
+    + "FROM settings WHERE key GLOB 'rating-update-20261123-v1:*' AND value IN ('1','2','3','4','5')",
+  ) : null;
+  const updateRatingText = updateRating ? `\n\n⭐ Оценка обновления · ${updateRating.average ?? "—"} / 5 · голосов ${updateRating.count}\n1 ★ — ${updateRating.one ?? 0} · 2 ★ — ${updateRating.two ?? 0} · 3 ★ — ${updateRating.three ?? 0}\n4 ★ — ${updateRating.four ?? 0} · 5 ★ — ${updateRating.five ?? 0}` : "";
   const mode = budget && store.backgroundPaused(budget) ? 'saving' : 'normal';
-  return `Personal timetable\nQueue: ${queue.count}; lag: ${delivery.jobLagSeconds}s\nDue users: ${delivery.dueUsers}; lag: ${delivery.dueLagSeconds}s\nDelivery: ${delivery.late ? 'delayed' : 'on time'}\nBackground: ${policy.night ? 'night (15 min)' : 'day (1 min)'}\nUncertain: ${uncertain.count}\nFailed: ${failed.count}\n429: ${await store.setting("429", 0)}\nParser: ${source ? 'error (last good version retained)' : 'ok'}\nQuota (D1 meta + accounting reserve): ${JSON.stringify(budget)}\nMode: ${mode}\n⭐ Rating: ${ratings.average ?? "—"} / 5 · ${ratings.count} votes\n1: ${ratings.one ?? 0} · 2: ${ratings.two ?? 0} · 3: ${ratings.three ?? 0} · 4: ${ratings.four ?? 0} · 5: ${ratings.five ?? 0}`;
+  return `Personal timetable\nQueue: ${queue.count}; lag: ${delivery.jobLagSeconds}s\nDue users: ${delivery.dueUsers}; lag: ${delivery.dueLagSeconds}s\nDelivery: ${delivery.late ? 'delayed' : 'on time'}\nBackground: ${policy.night ? 'night (15 min)' : 'day (1 min)'}\nUncertain: ${uncertain.count}\nFailed: ${failed.count}\n429: ${await store.setting("429", 0)}\nParser: ${source ? 'error (last good version retained)' : 'ok'}\nQuota (D1 meta + accounting reserve): ${JSON.stringify(budget)}\nMode: ${mode}\n⭐ Rating: ${ratings.average ?? "—"} / 5 · ${ratings.count} votes\n1: ${ratings.one ?? 0} · 2: ${ratings.two ?? 0} · 3: ${ratings.three ?? 0} · 4: ${ratings.four ?? 0} · 5: ${ratings.five ?? 0}${updateRatingText}`;
 }
