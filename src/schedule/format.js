@@ -4,7 +4,7 @@ import { eventDuration } from "./timeline.js";
 import { scheduleViewTimeline } from "./view-timeline.js";
 import { heading, lessonHeading, themedButton, themeIcon } from "../chat-theme.js";
 
-export const GROUP_SCHEDULE_STYLE = "group-card-v2";
+export const GROUP_SCHEDULE_STYLE = "group-card-v3";
 
 const WEEKDAYS = ["Воскресенье", "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"];
 const MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
@@ -56,7 +56,10 @@ function formatEvent(event, completed, branded) {
     if (event.teachers?.length) lines.push(`👤 ${joinValues(event.teachers)}`);
     return lines.join("\n");
   }
-  if (event.type === "break") block = `<u>☕ Перемена · ${eventDuration(event)} минут · ${event.start}–${event.end}</u>`;
+  if (event.type === "break") {
+    const label = `Перемена · ${eventDuration(event)} минут · ${event.start}–${event.end}`;
+    block = branded ? `<u><i>${label}</i></u>` : `<u>☕ ${label}</u>`;
+  }
   else if (event.type === "large_break") block = `<u>${branded ? themeIcon("large_break", true) : "🌿"} Большая перемена · ${eventDuration(event)} минут · ${event.start}–${event.end}</u>`;
   else if (event.type === "lunch") {
     const lunch = `${branded ? themeIcon("lunch", true) : "🍽"} ОБЕД · ${eventDuration(event)} минут · ${event.start}–${event.end}`;
@@ -69,6 +72,11 @@ function formatEvent(event, completed, branded) {
     const location = event.rooms?.length || event.room
       ? `Кабинет: ${rooms}`
       : "Кабинет: 329 (если куратор не сообщил про актовый зал)";
+    if (branded) {
+      const label = `Дополнительное занятие — ${name}`;
+      const marker = completed ? "  " + themeIcon("completed", true) : "";
+      return `${heading("view", label, true)} · ${event.start}–${event.end}${marker}\n<i>${location}</i>`;
+    }
     const title = `${icon} Дополнительное занятие — ${name} · ${event.start}–${event.end}`;
     return completed
       ? `<b>✅ ${title}</b>\n🚪 ${location}`
@@ -129,8 +137,9 @@ export function formatScheduleMessage(schedule, {
       || (schedule.date === today && event.end <= currentTime))),
   }));
   const visible = mode === "compact" ? eventStates.filter(({ completed }) => !completed) : eventStates;
-  if (completed && mode === "compact") blocks.push("✅ Учебный день завершён");
-  else if (visible.length === 0 && mode === "compact") blocks.push("✅ Учебный день завершён");
+  if (mode === "compact" && (completed || visible.length === 0)) {
+    blocks.push(branded ? heading("completed", "Учебный день завершён", true) : "✅ Учебный день завершён");
+  }
   else {
     blocks.push(...visible.map(({ event, completed }) => formatEvent(event, mode === "full" && completed, branded)));
   }

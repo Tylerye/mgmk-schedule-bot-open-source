@@ -65,6 +65,7 @@ test("renders the branded group card with the existing schedule callback", () =>
   const { text, replyMarkup } = renderSchedule(schedule, { withKeyboard: true });
   assert.match(text, /<tg-emoji[^>]+>📚<\/tg-emoji> <b>Расписание — 8-Сба<\/b>/u);
   assert.match(text, /<b>1-й урок<\/b> · 08:15–09:00\n<b>МАТЕМАТИКА<\/b>\n<i>Каб\. 245 · Чуприс А\.В\.<\/i>/u);
+  assert.doesNotMatch(text.replace(/<tg-emoji[^>]+>[^<]*<\/tg-emoji>/gu, ""), /\p{Extended_Pictographic}/u);
   assert.deepEqual(replyMarkup.inline_keyboard[0].map(({ callback_data, style }) => [callback_data, style]),
     [["schedule:2026-09-15:full", "success"]]);
 });

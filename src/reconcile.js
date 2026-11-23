@@ -52,7 +52,7 @@ async function editIfChanged({ client, store, logger, record, rendering, reason 
     return false;
   }
   try {
-    await client.editMessage(store.state.chatId, record.messageId, rendering.text, { replyMarkup: rendering.replyMarkup });
+    await client.editMessage(store.state.chatId, record.messageId, rendering.text, { replyMarkup: rendering.replyMarkup, customEmojiOnly: true });
   } catch (error) {
     if (!isMessageNotModified(error)) throw error;
   }
@@ -87,7 +87,7 @@ async function ensurePublished({ client, store, config, logger, record, now, act
   }
 
   if (!record.messageId) {
-    const message = await client.sendMessage(chatId, rendering.text, { replyMarkup: rendering.replyMarkup });
+    const message = await client.sendMessage(chatId, rendering.text, { replyMarkup: rendering.replyMarkup, customEmojiOnly: true });
     record.messageId = message.message_id;
     record.messageChatId = chatId;
     record.publishedScheduleHash = currentScheduleHash;
@@ -122,7 +122,7 @@ async function ensurePublished({ client, store, config, logger, record, now, act
   } catch (error) {
     if (!isMessageUneditable(error)) throw error;
     const oldMessageId = record.messageId;
-    const message = await client.sendMessage(chatId, correctedRendering.text, { replyMarkup: correctedRendering.replyMarkup });
+    const message = await client.sendMessage(chatId, correctedRendering.text, { replyMarkup: correctedRendering.replyMarkup, customEmojiOnly: true });
     record.messageId = message.message_id;
     record.messageChatId = chatId;
     record.publishedScheduleHash = currentScheduleHash;

@@ -86,7 +86,7 @@ export class TelegramClient {
     return this.call("getUpdates", { offset, timeout, allowed_updates: ["message", "callback_query", "chat_member"] });
   }
 
-  sendMessage(chatId, text, { replyMarkup, replyToMessageId } = {}) {
+  sendMessage(chatId, text, { replyMarkup, replyToMessageId, customEmojiOnly = false } = {}) {
     return sendWithThemeFallback((body, markup) => this.call("sendMessage", {
       chat_id: chatId,
       text: body,
@@ -94,10 +94,10 @@ export class TelegramClient {
       disable_web_page_preview: true,
       ...(markup ? { reply_markup: markup } : {}),
       ...(replyToMessageId ? { reply_parameters: { message_id: replyToMessageId, allow_sending_without_reply: false } } : {}),
-    }), text, replyMarkup);
+    }), text, replyMarkup, { customEmojiOnly });
   }
 
-  editMessage(chatId, messageId, text, { replyMarkup } = {}) {
+  editMessage(chatId, messageId, text, { replyMarkup, customEmojiOnly = false } = {}) {
     return sendWithThemeFallback((body, markup) => this.call("editMessageText", {
       chat_id: chatId,
       message_id: messageId,
@@ -105,7 +105,7 @@ export class TelegramClient {
       parse_mode: "HTML",
       disable_web_page_preview: true,
       ...(markup ? { reply_markup: markup } : {}),
-    }), text, replyMarkup);
+    }), text, replyMarkup, { customEmojiOnly });
   }
 
   pinMessage(chatId, messageId) {
@@ -200,7 +200,7 @@ export async function processTelegramUpdates({
         completed,
       });
       try {
-        await client.editMessage(chat.id, record.messageId, rendering.text, { replyMarkup: rendering.replyMarkup });
+        await client.editMessage(chat.id, record.messageId, rendering.text, { replyMarkup: rendering.replyMarkup, customEmojiOnly: true });
       } catch (error) {
         if (!isMessageNotModified(error)) throw error;
       }
@@ -237,13 +237,13 @@ export async function processTelegramUpdates({
     } else if (requestedDate) {
       const record = store.state.schedules[requestedDate];
       await client.sendMessage(chatId, record
-        ? formatScheduleMessage(record.schedule, { mode: "full", now, timezone: config.timezone, updated: record.corrected })
-        : `Расписание на ${requestedDate} ещё не найдено.`);
+        ? formatScheduleMessage(record.schedule, { mode: "full", now, timezone: config.timezone, updated: record.corrected, branded: true })
+        : `Расписание на ${requestedDate} ещё не найдено.`, { customEmojiOnly: true });
     } else if (command === "/latest") {
       const record = latestSchedule(store.state);
       await client.sendMessage(chatId, record
-        ? formatScheduleMessage(record.schedule, { mode: "full", now, timezone: config.timezone, updated: record.corrected })
-        : "Расписание ещё не загружено.");
+        ? formatScheduleMessage(record.schedule, { mode: "full", now, timezone: config.timezone, updated: record.corrected, branded: true })
+        : "Расписание ещё не загружено.", { customEmojiOnly: true });
     } else if (command === "/status" && String(message.from?.id) === String(config.adminUserId)) {
       const health = store.state.health;
       const pinStatus = store.state.pinCapability?.canPin === true
