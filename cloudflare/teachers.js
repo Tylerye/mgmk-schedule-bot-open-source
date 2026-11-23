@@ -33,7 +33,8 @@ export async function collectTeacherUpdate(database, update, config = {}) {
   const route = callback && /^teacher:(today|tomorrow|next|previous|full|compact|pause|resume|list)(?::(\d{4}-\d{2}-\d{2}))?(?::([a-z]+))?$/u.exec(callback.data ?? "");
   const command = String(message.text ?? "").trim().split(/\s/u)[0].split("@")[0].toLowerCase();
   const usernameSeat = !callback && from.id !== numeric(config.ADMIN_USER_ID) && accounts.find(t =>
-    t.allowUsernameEnrollment && !t.userId && t.username === from.username?.toLowerCase());
+    t.allowUsernameEnrollment && !t.userId && t.username === from.username?.toLowerCase()
+    && (!t.enrollmentUserId || t.enrollmentUserId === from.id));
   const action = callback ? route?.[1] : commands.get(command) ?? (usernameSeat && "next");
   const target = route?.[3];
   if (target && ["pause", "resume", "list"].includes(action)) return null;
@@ -51,7 +52,7 @@ export async function collectTeacherUpdate(database, update, config = {}) {
     teacher = numericSeat ?? usernameSeat;
     if (!teacher || callback || (numericSeat && command !== "/start")) return null;
     enrolledByUsername = !numericSeat;
-    if (teacher.userId && teacher.userId !== from.id) return null;
+    if (teacher.enrollmentUserId && teacher.enrollmentUserId !== from.id) return null;
     await database.prepare("INSERT OR IGNORE INTO teacher_users(teacher_id,user_id,enrolled_at) VALUES(?,?,?)")
       .bind(teacher.id, from.id, new Date().toISOString()).run();
     const seat = await database.prepare("SELECT * FROM teacher_users WHERE teacher_id=?").bind(teacher.id).first();
@@ -60,6 +61,7 @@ export async function collectTeacherUpdate(database, update, config = {}) {
   if ((target || action === "list") && !teacher.sourceTeacherId) return null;
   if (teacher.sourceTeacherId && (!teacher.userId || teacher.userId !== from.id)) return null;
   if (teacher.userId && teacher.userId !== from.id) return null;
+  if (teacher.enrollmentUserId && teacher.enrollmentUserId !== from.id) return null;
   return { update_id: update.update_id, teacherId: teacher.id, action, userId: from.id,
     ...(!callback && (command === "/start" || enrolledByUsername) ? { welcome: true } : {}),
     ...(callback ? { callbackId: String(callback.id).slice(0, 256), messageId: message.message_id, date: route[2] ?? null, ...(target ? { target } : {}) } : {}) };
@@ -344,6 +346,7 @@ export async function writeTeacherStatus(database, key, value, now = new Date())
 
 async function teacherCheck(env, config, teacher, now, withPayload = false) {
   const user = await env.DB.prepare("SELECT * FROM teacher_users WHERE teacher_id=?").bind(teacher.id).first();
+  if (user && teacher.enrollmentUserId && user.user_id !== teacher.enrollmentUserId) return { user: null, inboxDue: null };
   const inbox = await env.DB.prepare("SELECT MIN(retry_at) due FROM teacher_inbox WHERE teacher_id=? AND status='pending'").bind(teacher.id).first();
   if (!withPayload && !user && inbox?.due == null) return { user, inboxDue: null };
   const from = dateInTimezone(now, config.timezone);
@@ -392,6 +395,7 @@ export async function teacherMaintenance(env, config, logger, teacherId, now = n
   const result = await withStateLock(env.DB, async () => {
     const user = await env.DB.prepare("SELECT * FROM teacher_users WHERE teacher_id=?").bind(teacher.id).first();
     if (!user) return;
+    if (teacher.enrollmentUserId && teacher.enrollmentUserId !== user.user_id) return;
     if (teacher.sourceTeacherId && String(user.user_id) !== String(env.ADMIN_USER_ID)) throw new Error("Preview account identity mismatch");
     if (teacher.userId && teacher.userId !== user.user_id) throw new Error("Preview account identity mismatch");
     user.ownerPreview = Boolean(teacher.sourceTeacherId);

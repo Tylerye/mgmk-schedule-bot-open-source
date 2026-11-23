@@ -5,7 +5,7 @@ export const TEACHERS = [
   { id: "teacher-two", name: "Учебный Б. Б.", username: "example_teacher_two" },
   { id: "teacher-three", name: "Тестовый В. В.", username: "example_teacher_three" },
   { id: "teacherfour", name: "Демонстрационная Г. Г.", username: "example_teacher_four", allowUsernameEnrollment: true, optionalSourceRow: true },
-  { id: "galuzo", name: "Галузо К. И.", username: "example_teacher_five", allowUsernameEnrollment: true, optionalSourceRow: true },
+  { id: "galuzo", name: "Галузо К. И.", username: "example_teacher_five", enrollmentUserId: 10005, allowUsernameEnrollment: true, optionalSourceRow: true },
 ];
 
 export function teacherNameKey(value) {
