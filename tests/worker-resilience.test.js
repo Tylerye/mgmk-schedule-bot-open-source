@@ -240,7 +240,7 @@ test("minute dispatcher starts every bounded lane without database work or blind
       && !c.options.headers.authorization && !!c.options.headers["x-maintenance-signature"] && c.options.signal));
     calls.length = 0;
     await dispatchMaintenance({ ...env, TEACHERS_ENABLED: "true" }, new Date("2026-11-19T09:01:00+03:00"));
-    assert.equal(calls.length, 7);
+    assert.equal(calls.length, 8);
     assert.ok(calls.every(c => !c.path.endsWith("source")));
     calls.length = 0;
     await assert.rejects(dispatchMaintenance({ ...env, TEACHERS_ENABLED: "true" }, new Date("2026-11-19T20:15:00+03:00")));
