@@ -36,7 +36,7 @@ test("workerd runs ten isolated lanes, durable teacher enrollment and publicatio
     for (const month of new Set([addDays(today, -7), today, addDays(today, 5)].map(monthFolderName)))
       await db.prepare("INSERT INTO teacher_settings(key,value) VALUES(?,'month')").bind(`month:${month}`).run();
     assert.equal((await mf.dispatchFetch("http://localhost/tick")).status, 200);
-    assert.equal(paths.filter(p => p.startsWith("/internal/maintenance/")).length, 10);
+    assert.equal(paths.filter(p => p.startsWith("/internal/maintenance/")).length, 11);
     const health = await (await mf.dispatchFetch("http://localhost/internal/health",{headers:{authorization:"Bearer health-test"}})).json();
     assert.equal(health.ok, true); assert.equal(health.teachers.stale, false);
     const schedule = { teacherId: "teacher-three", date: addDays(today, 1), hash: "a".repeat(64), lessons: [{ number: 2, group: "26Д", start: "09:10", end: "09:55" }], status: "" };
