@@ -261,8 +261,12 @@ async function drainTeacherInbox({ database, client, teacher, user, config, now 
 }
 
 async function publishTeacherDate({ database, client, teacher, user, row, now, config }) {
-  await database.prepare("INSERT OR IGNORE INTO teacher_publications(teacher_id,date) VALUES(?,?)").bind(teacher.id, row.date).run();
-  const publication = await database.prepare("SELECT * FROM teacher_publications WHERE teacher_id=? AND date=?").bind(teacher.id, row.date).first();
+  const lookup = database.prepare("SELECT * FROM teacher_publications WHERE teacher_id=? AND date=?").bind(teacher.id, row.date);
+  let publication = await lookup.first();
+  if (!publication) {
+    await database.prepare("INSERT OR IGNORE INTO teacher_publications(teacher_id,date) VALUES(?,?)").bind(teacher.id, row.date).run();
+    publication = await lookup.first();
+  }
   if (publication.retry_at > now.getTime() || (!publication.message_id && ["sending", "uncertain", "failed"].includes(publication.status))) return;
   const viewRow = publication.message_id && await database.prepare("SELECT value FROM teacher_settings WHERE key=?").bind(`view:${teacher.id}:${publication.message_id}`).first();
   const view = viewRow ? JSON.parse(viewRow.value) : {};
@@ -297,8 +301,10 @@ async function publishTeacherDate({ database, client, teacher, user, row, now, c
         }
       }
     } else messageId = (await showTeacherMessage(client, user.user_id, null, text, replyMarkup)).message_id;
-    await database.prepare("UPDATE teacher_publications SET message_id=?,hash=?,revision=?,status='sent',retry_at=0 WHERE teacher_id=? AND date=?")
-      .bind(messageId, row.hash, revision, teacher.id, row.date).run();
+    if (publication.message_id !== messageId || publication.hash !== row.hash || publication.status !== "sent" || publication.retry_at !== 0) {
+      await database.prepare("UPDATE teacher_publications SET message_id=?,hash=?,revision=?,status='sent',retry_at=0 WHERE teacher_id=? AND date=?")
+        .bind(messageId, row.hash, revision, teacher.id, row.date).run();
+    }
     await database.prepare("INSERT INTO teacher_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
       .bind(`render:${teacher.id}:${row.date}`, renderHash).run();
   } catch (error) {
