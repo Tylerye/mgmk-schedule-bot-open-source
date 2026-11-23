@@ -62,9 +62,11 @@ export async function beginDataset(store, input) {
   const existing = await store.first("SELECT * FROM datasets WHERE id=?", input.id);
   const manifest = JSON.stringify(input.manifest);
   if (existing && (existing.manifest !== manifest || existing.date !== input.date || existing.generation !== input.generation)) throw new Error("Dataset identity conflict");
+  if (existing) return existing.status === "ready";
   await store.run("INSERT OR IGNORE INTO datasets(id,date,generation,manifest,expected_count,source_id,fingerprint) VALUES(?,?,?,?,?,?,?)",
     input.id, input.date, input.generation, manifest, Object.keys(input.manifest).length,
     typeof input.sourceId === "string" ? input.sourceId.slice(0, 100) : null, typeof input.fingerprint === "string" ? input.fingerprint.slice(0, 1000) : null);
+  return false;
 }
 
 export async function stageSchedules(store, id, schedules) {

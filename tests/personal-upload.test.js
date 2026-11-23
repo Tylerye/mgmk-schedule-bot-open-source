@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { personalFixture, sampleSchedule } from "./helpers/personal-fixture.js";
-import { mergeCatalogObservations } from "../src/personal/ingest.js";
+import { beginDataset, finishDataset, mergeCatalogObservations, stageSchedules } from "../src/personal/ingest.js";
 import { uploadPersonalResult } from "../scripts/personal-upload.js";
 
 test("an entirely failed timetable still adds its newly discovered group to the production catalog path", async t => {
@@ -48,4 +48,25 @@ test("overlapping observations preserve both catalog dates and replay writes not
   const changes = f.sqlite.prepare("SELECT total_changes() AS n").get().n;
   await mergeCatalogObservations(f.store, [{ group: "8СА", date: "2026-11-18" }]);
   assert.equal(f.sqlite.prepare("SELECT total_changes() AS n").get().n, changes);
+});
+
+test("a ready upload skips staging while finish and catalog still run", async t => {
+  const f = await personalFixture();
+  t.after(() => f.close());
+  const s = await sampleSchedule();
+  const result = { publishable: true, date: s.date, schedules: [s], observations: [{ group: s.group, date: s.date }] };
+  const calls = [];
+  const options = { result, source: {}, generation: 1, contentHash: "fixture", async request(path, { body }) {
+    const action = path.split("/").at(-1);
+    const input = JSON.parse(body);
+    calls.push(action);
+    if (action === "begin") return { ready: await beginDataset(f.store, input), catalogSeedKnown: true };
+    if (action === "stage") await stageSchedules(f.store, input.id, input.schedules);
+    if (action === "finish") await finishDataset(f.store, input.id);
+    return { ok: true };
+  } };
+  await uploadPersonalResult(options);
+  assert.deepEqual(calls.splice(0), ["begin", "stage", "finish", "catalog"]);
+  await uploadPersonalResult(options);
+  assert.deepEqual(calls, ["begin", "finish", "catalog"]);
 });

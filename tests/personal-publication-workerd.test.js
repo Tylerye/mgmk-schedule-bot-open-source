@@ -21,12 +21,17 @@ test('workerd immediately delivers a new publication across 22 groups without Cr
     import {PersonalStore} from './src/personal/store.js';
     const measure = PersonalStore.prototype.measure;
     let writes = 0;
+    let reads = 0;
+    let statements = 0;
     PersonalStore.prototype.measure = function(result) {
       writes += result?.meta?.rows_written ?? 0;
+      reads += result?.meta?.rows_read ?? 0;
+      statements++;
       return measure.call(this,result);
     };
     export default {async fetch(request,env,ctx){
       if(new URL(request.url).pathname==='/test-cost') return Response.json(writes);
+      if(new URL(request.url).pathname==='/test-d1-meta') return Response.json({ reads, writes, statements });
       if(new URL(request.url).pathname==='/test-inbox') {
         const pending=[];
         const response=await worker.fetch(new Request('http://localhost/inbox',request),env,{waitUntil(p){pending.push(p)}});
@@ -44,7 +49,7 @@ test('workerd immediately delivers a new publication across 22 groups without Cr
       return worker.fetch(request,env,ctx);
     }};`, resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'neutral', external: ['node:crypto'],
     plugins: baseline ? [{ name: 'baseline-publication', setup(b) {
-      b.onLoad({ filter: /[\\/](?:personal[\\/]worker|src[\\/]personal[\\/](?:ingest|store|delivery))\.js$/ }, args => {
+      b.onLoad({ filter: /[\\/](?:personal[\\/]worker|src[\\/]personal[\\/](?:ingest|store|delivery|inbox))\.js$/ }, args => {
         const path = relative(realpathSync(process.cwd()), realpathSync(args.path)).replaceAll('\\', '/');
         return { contents: execFileSync('git', ['-c', `safe.directory=${process.cwd()}`, 'show', `${baseline}:${path}`], { encoding: 'utf8' }), loader: 'js' };
       });
@@ -114,14 +119,16 @@ test('workerd immediately delivers a new publication across 22 groups without Cr
     assert.equal(sends.length, recipients);
     assert.equal(lanes.length, invocations);
     const physical = async () => (await mf.dispatchFetch('http://localhost/test-cost')).json();
+    const d1 = async () => (await mf.dispatchFetch('http://localhost/test-d1-meta')).json();
+    const difference = (after, before) => Object.fromEntries(Object.entries(after).map(([key, n]) => [key, n - before[key]]));
     console.log(JSON.stringify({ scenario: 'new-publication', recipients, rowsWritten: await physical(), baseline: Boolean(baseline), telegramDelay, activationMs, activationRecipients, elapsedMs: Date.now() - started, httpInvocations: invocations, sends: sends.length,
-      budget: await db.prepare('SELECT requests,rows_read,rows_written FROM budgets').first() }));
+      d1: await d1(), budget: await db.prepare('SELECT requests,rows_read,rows_written FROM budgets').first() }));
     if (process.env.PERSONAL_MEASURE_DUE) {
       // Force one visible edit per user without depending on the host's lesson times.
       await db.prepare("UPDATE cards SET parts=json_set(parts,'$[0].hash','outdated')").run();
       await db.prepare("UPDATE users SET next_due=0,last_api_at=0").run();
       const budget = () => db.prepare('SELECT requests,rows_read,rows_written FROM budgets').first();
-      const before = await budget(), writesBefore = await physical(), offset = lanes.length, dueStarted = Date.now();
+      const before = await budget(), beforeD1 = await d1(), writesBefore = await physical(), offset = lanes.length, dueStarted = Date.now();
       await mf.dispatchFetch('http://localhost/test-cron');
       const firstPass = new Set(edits).size;
       for (let i = 0; i < 6 && new Set(edits).size < recipients; i++) await mf.dispatchFetch('http://localhost/test-cron');
@@ -133,7 +140,7 @@ test('workerd immediately delivers a new publication across 22 groups without Cr
       const after = await budget();
       console.log(JSON.stringify({ scenario: 'due-card-edits', recipients, rowsWritten: await physical()-writesBefore, baseline: Boolean(baseline), firstPass, elapsedMs: Date.now() - dueStarted,
         firstMs: editTimes[0]-dueStarted, p95Ms: editTimes[Math.ceil(recipients*0.95)-1]-dueStarted, lastMs: editTimes.at(-1)-dueStarted,
-        httpInvocations: lanes.length - offset, budget: Object.fromEntries(Object.entries(after).map(([key, value]) => [key, value - before[key]])) }));
+        httpInvocations: lanes.length - offset, d1: difference(await d1(), beforeD1), budget: difference(after, before) }));
       const route = (path, body={}) => mf.dispatchFetch('http://localhost/'+path,{ method:'POST',
         headers:{authorization:'Bearer local-test'}, body:JSON.stringify(body) });
       const idle = async () => {
@@ -159,10 +166,36 @@ test('workerd immediately delivers a new publication across 22 groups without Cr
       }
       const tap = i => route('test-inbox',{update_id:i,userId:8888,action:'settings',messageId:77,acknowledged:true});
       assert.equal((await tap(1)).status,200);
-      const tapBefore = await physical(), tapStart = Date.now();
-      for (let i=2;i<=7;i++) assert.equal((await tap(i)).status,200);
+      const tapBefore = await d1(), tapTimes = [];
+      for (let i=2;i<=7;i++) {
+        const start = performance.now();
+        assert.equal((await tap(i)).status,200);
+        tapTimes.push(performance.now() - start);
+      }
       assert.equal(await db.prepare("SELECT COUNT(*) n FROM inbox WHERE user_id=8888 AND status='done'").first('n'),7);
-      console.log(JSON.stringify({scenario:'six-repeat-taps', rowsWritten:await physical()-tapBefore, elapsedMs:Date.now()-tapStart}));
+      const sorted = [...tapTimes].sort((a, b) => a - b);
+      console.log(JSON.stringify({scenario:'six-repeat-taps', d1: difference(await d1(), tapBefore),
+        p50Ms: sorted[2], p95Ms: sorted.at(-1), elapsedMs: tapTimes.reduce((sum, ms) => sum + ms, 0)}));
+
+      const far = Date.now() + 3600000;
+      await db.batch(Array.from({ length: 350 }, (_, i) => db.prepare(
+        "INSERT INTO jobs(id,user_id,epoch,kind,priority,due) VALUES(?,8888,1,'card',?,?)"
+      ).bind('router-probe-' + i, i === 349 ? 99 : 2, far)));
+      const routerBefore = await d1();
+      const router = await route('tick/delivery');
+      assert.equal(router.status, 200);
+      assert.equal((await router.json()).pending, false);
+      console.log(JSON.stringify({ scenario: 'delivery-router-with-future-work', d1: difference(await d1(), routerBefore) }));
+      await db.prepare("DELETE FROM jobs WHERE id GLOB 'router-probe-*'").run();
+
+      await db.prepare("UPDATE users SET blocked=1 WHERE user_id=8888").run();
+      await db.prepare("INSERT INTO jobs(id,user_id,epoch,kind,priority,due) VALUES('blocked-probe',8888,1,'card',3,0)").run();
+      const blockedBefore = await d1(), blockedOffset = lanes.length;
+      await mf.dispatchFetch('http://localhost/test-cron');
+      assert.equal(await db.prepare("SELECT status FROM jobs WHERE id='blocked-probe'").first('status'), 'pending');
+      console.log(JSON.stringify({ scenario: 'blocked-only-cron', d1: difference(await d1(), blockedBefore),
+        httpInvocations: lanes.length - blockedOffset }));
+      await db.prepare("DELETE FROM jobs WHERE id='blocked-probe'").run();
     }
     // Concurrent fanout pumps are serialized in D1, including revision allocation.
     await db.prepare("UPDATE fanout SET status='pending',cursor=0").run();

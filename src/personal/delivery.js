@@ -110,9 +110,16 @@ async function applyOutcome(store, job, outcome) {
 
 const pinCards = cards => cards.map(c => ({ date: c.date, messageId: c.parts[0]?.id, hasLessons: Boolean(c.schedule?.lessons.length) }));
 const currentPin = user => ({ messageId: user.pin_message_id, date: user.pin_date });
-async function loadCards(store, user) {
-  return (await store.all("SELECT * FROM cards WHERE user_id=? AND group_id=? ORDER BY date", user.user_id, user.group_id))
-    .map(c => ({ ...c, parts: JSON.parse(c.parts), schedule: c.schedule_payload ? JSON.parse(c.schedule_payload) : null }));
+async function loadCards(store, user, excludeDate = "") {
+  const rows = await store.all("SELECT c.*,s.payload AS active_payload FROM cards c LEFT JOIN active_versions a ON a.date=c.date "
+    + "LEFT JOIN snapshots s ON s.dataset_id=a.dataset_id AND s.group_id=c.group_id "
+    + "WHERE c.user_id=? AND c.group_id=? AND c.date<>? ORDER BY c.date", user.user_id, user.group_id, excludeDate);
+  const schedules = [];
+  const cards = rows.map(({ active_payload, ...card }) => {
+    if (active_payload) schedules.push(JSON.parse(active_payload));
+    return { ...card, parts: JSON.parse(card.parts), schedule: card.schedule_payload ? JSON.parse(card.schedule_payload) : null };
+  });
+  return { cards, schedules };
 }
 function nextDue(user, schedules, cards, now) {
   const deadlines = schedules.filter(s => cards.some(c => c.date === s.date))
@@ -169,8 +176,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       // Voting and message edits share the user lock. Never reopen a voted survey.
       if (await store.setting(`${updateSurvey}:${id}`) !== null) { await finishJob(store, job); return; }
       const original = await store.first("SELECT payload FROM jobs WHERE id=?", `${id}:alert:${updateSurvey}`);
-      const receipt = await store.first("SELECT result FROM operations WHERE id GLOB ? AND method='sendMessage' AND status='succeeded' LIMIT 1",
-        `${id}:alert:${updateSurvey}:*`);
+      const receipt = await store.campaignReceipt(id, updateSurvey);
       if (!original || !receipt) { await finishJob(store, job, "cancelled"); return; }
       const survey = JSON.parse(original.payload);
       const accepted = JSON.parse(receipt.result);
@@ -283,14 +289,14 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
         if (user.pin_message_id && user.pin_message_id !== desired.messageId) statements.push(store.jobStatement(user, "unpin", String(user.pin_message_id), { priority: 1, due: now.getTime(), payload: { messageId: user.pin_message_id } }));
         // Pin announcements removed: the automatic pin itself is sufficient
         const decoded = cards.map(c => ({ ...c, parts: JSON.parse(c.parts), schedule: c.schedule_payload ? JSON.parse(c.schedule_payload) : null }));
-        const next = nextDue({ ...user, pin_message_id: desired.messageId, pin_date: desired.date }, await store.schedules(user.group_id), decoded, now);
+        const schedules = await store.schedulesForDates(user.group_id, cards.map(c => c.date));
+        const next = nextDue({ ...user, pin_message_id: desired.messageId, pin_date: desired.date }, schedules, decoded, now);
         if (user.next_due !== next) statements.push(dueStatement(user, next));
         statements.push(doneJob(job));
         await store.batch(statements);
       }
     } else if (job.kind === "card") {
-      const schedules = await store.schedules(user.group_id);
-      const schedule = schedules.find(s => s.date === job.date);
+      const schedule = await store.schedule(user.group_id, job.date);
       if (!schedule) { await finishJob(store, job, "cancelled"); return; }
       const card = await store.card(user, job.date) ?? { parts: [], mode: "compact", schedule: null };
       const lessonChanges = lessonDetailsChanges(schedule, card);
@@ -355,9 +361,10 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
           payload: { texts: noticeParts(`${t(user).changed} · ${job.date}`, changes), scheduleHash: schedule.hash, date: job.date } }));
       }
       if (!user.paused && !payload.history) {
-        const cards = (await loadCards(store, user)).filter(c => c.date !== job.date);
+        const { cards, schedules } = await loadCards(store, user, job.date);
         cards.push({ ...card, date: job.date, parts, schedule });
         statements.push(...await pinStatement(store, user, cards, now));
+        schedules.push(schedule);
         const next = nextDue(user, schedules, cards, now);
         if (user.next_due !== next) statements.push(dueStatement(user, next));
       }
@@ -415,7 +422,7 @@ async function editDueCard(store, user, candidate, next, date, { client, clock, 
 }
 
 async function enqueueDueLocked(store, fresh, date, brandedMenu, direct) {
-  const now = date.getTime(), schedules = await store.schedules(fresh.group_id), cards = await loadCards(store, fresh);
+  const now = date.getTime(), { schedules, cards } = await loadCards(store, fresh);
   const statements = [];
   let candidate;
   for (const schedule of schedules) {

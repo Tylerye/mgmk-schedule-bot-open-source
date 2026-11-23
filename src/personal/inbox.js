@@ -15,10 +15,12 @@ function titledUpdate(user, branded) {
 }
 
 export async function enqueuePersonalUpdate(store, update, now = Date.now()) {
-  if (await store.first("SELECT 1 FROM inbox WHERE update_id=?", update.update_id)) return false;
-  const count=await store.first("SELECT (SELECT COUNT(*) FROM (SELECT 1 FROM inbox WHERE status='pending' LIMIT 500)) total,(SELECT COUNT(*) FROM (SELECT 1 FROM inbox WHERE status='pending' AND user_id=? LIMIT 5)) own,(SELECT rows FROM security_storage_counts WHERE name='inbox') records",update.userId);
-  if(count.total>=500 || count.own>=5 || count.records>=100000) return false;
-  const inserted = await store.run("INSERT OR IGNORE INTO inbox(update_id,user_id,payload,received_at) VALUES(?,?,?,?)", update.update_id, update.userId, JSON.stringify(update), now);
+  const inserted = await store.run("INSERT OR IGNORE INTO inbox(update_id,user_id,payload,received_at) SELECT ?,?,?,? "
+    + "WHERE NOT EXISTS(SELECT 1 FROM inbox WHERE update_id=?) "
+    + "AND NOT EXISTS(SELECT 1 FROM inbox WHERE status='pending' LIMIT 1 OFFSET 499) "
+    + "AND NOT EXISTS(SELECT 1 FROM inbox WHERE user_id=? AND status='pending' LIMIT 1 OFFSET 4) "
+    + "AND (SELECT rows FROM security_storage_counts WHERE name='inbox')<100000",
+  update.update_id, update.userId, JSON.stringify(update), now, update.update_id, update.userId);
   // D1 includes the storage-counter trigger in changes (normally 2).
   // A duplicate changes no rows; trigger writes must not defer a new tap.
   return Number(inserted.meta?.changes ?? 0) > 0;
@@ -42,10 +44,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
       const [, campaign, choice] = rating;
       const key = campaign ? "rating-update-20261123-v1" : "rating-20261120-v1";
       const voteKey = key + ":" + row.user_id;
-      const receipt = await store.first(
-        "SELECT 1 FROM operations WHERE id GLOB ? AND method='sendMessage' AND status='succeeded' AND json_extract(result,'$.message_id')=? LIMIT 1",
-        row.user_id + ":alert:" + key + ":*", update.messageId,
-      );
+      const receipt = update.messageId == null ? null : await store.campaignReceipt(row.user_id, key, update.messageId);
       const statements = [];
       if (receipt && await store.setting(voteKey) === null) {
         const later = choice === "later";

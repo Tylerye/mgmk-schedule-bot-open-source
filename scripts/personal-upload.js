@@ -28,16 +28,18 @@ export async function uploadPersonalResult({ result, source, contentHash, genera
     // moves new Workers to larger batches. The request body bound still applies.
     const cap = Number.isInteger(begin.maxStageSchedules) && begin.maxStageSchedules > 0
       ? Math.min(begin.maxStageSchedules, MAX_STAGE_SCHEDULES) : 3;
-    let schedules = [];
-    for (const schedule of result.schedules.map(compactSchedule)) {
-      if (schedules.length && (schedules.length === cap
-        || Buffer.byteLength(JSON.stringify({ id, schedules: [...schedules, schedule] })) > MAX_STAGE_BYTES)) {
-        await post("stage", { id, schedules });
-        schedules = [];
+    if (begin.ready !== true) {
+      let schedules = [];
+      for (const schedule of result.schedules.map(compactSchedule)) {
+        if (schedules.length && (schedules.length === cap
+          || Buffer.byteLength(JSON.stringify({ id, schedules: [...schedules, schedule] })) > MAX_STAGE_BYTES)) {
+          await post("stage", { id, schedules });
+          schedules = [];
+        }
+        schedules.push(schedule);
       }
-      schedules.push(schedule);
+      if (schedules.length) await post("stage", { id, schedules });
     }
-    if (schedules.length) await post("stage", { id, schedules });
     await post("finish", { id });
     console.log(JSON.stringify({ event: "personal_source_activated", date: result.date, groups: result.schedules.length }));
   } catch (error) {

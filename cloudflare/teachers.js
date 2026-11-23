@@ -180,6 +180,19 @@ export function chooseTeacherDate(rows, action, today, reference) {
   return rows.find(r => r.date >= today) ?? rows.at(-1);
 }
 
+async function commandSchedule(database, teacherId, action, today, reference) {
+  if (action === "next") return chooseTeacherDate(await rowsFor(database, teacherId, today), action, today, reference);
+  const source = sourceTeacherId(teacherId);
+  const base = "SELECT * FROM teacher_schedules WHERE teacher_id=?";
+  if (action === "previous") return database.prepare(base + " AND date<? ORDER BY date DESC LIMIT 1").bind(source, reference ?? today).first();
+  if (["today", "tomorrow", "full", "compact"].includes(action)) {
+    const date = action === "tomorrow" ? addDays(today, 1) : action === "today" ? today : reference ?? today;
+    return database.prepare(base + " AND date=?").bind(source, date).first();
+  }
+  return await database.prepare(base + " AND date>=? ORDER BY date LIMIT 1").bind(source, today).first()
+    ?? await database.prepare(base + " ORDER BY date DESC LIMIT 1").bind(source).first();
+}
+
 async function drainTeacherInbox({ database, client, teacher, user, config, now }) {
   const rows = (await database.prepare("SELECT * FROM teacher_inbox WHERE teacher_id=? AND status='pending' AND retry_at<=? ORDER BY update_id LIMIT 3").bind(teacher.id, now.getTime()).all()).results;
   for (const row of rows) {
@@ -202,9 +215,8 @@ async function drainTeacherInbox({ database, client, teacher, user, config, now 
     const target = ownerPreview && TEACHERS.find(item => item.id === action.target);
     const shownTeacher = target ? { ...target, sourceTeacherId: target.id } : teacher;
     const list = action.action === "list";
-    const schedules = list ? [] : await rowsFor(database, target?.id ?? teacher.id);
     const today = dateInTimezone(now, config.timezone);
-    const selected = chooseTeacherDate(schedules, action.action, today, action.date);
+    const selected = list ? null : await commandSchedule(database, target?.id ?? teacher.id, action.action, today, action.date);
     const full = action.action === "full" || (action.action !== "compact" && selected?.date < today);
     const formatted = selected && formatTeacherSchedule(JSON.parse(selected.payload), shownTeacher, {
       now, timezone: config.timezone, full, branded: user.branded,
@@ -330,16 +342,20 @@ export async function writeTeacherStatus(database, key, value, now = new Date())
     .bind(key, JSON.stringify({ ...value, at: now.toISOString() }), new Date(now.getTime() - 180000).toISOString()).run();
 }
 
-async function teacherCheck(env, config, teacher, now) {
+async function teacherCheck(env, config, teacher, now, withPayload = false) {
   const user = await env.DB.prepare("SELECT * FROM teacher_users WHERE teacher_id=?").bind(teacher.id).first();
   const inbox = await env.DB.prepare("SELECT MIN(retry_at) due FROM teacher_inbox WHERE teacher_id=? AND status='pending'").bind(teacher.id).first();
-  const schedules = await rowsFor(env.DB, teacher.id, dateInTimezone(now, config.timezone));
+  if (!withPayload && !user && inbox?.due == null) return { user, inboxDue: null };
+  const from = dateInTimezone(now, config.timezone);
+  const schedules = withPayload ? await rowsFor(env.DB, teacher.id, from)
+    : (await env.DB.prepare("SELECT date,hash FROM teacher_schedules WHERE teacher_id=? AND date>=? ORDER BY date")
+      .bind(sourceTeacherId(teacher.id), from).all()).results;
   const signature = createHash("sha256").update(JSON.stringify([user, schedules.map(s => [s.date,s.hash]), config.timezone, config.pinSwitchTime,
     env.CF_VERSION_METADATA?.id, env.TEACHER_BRANDED_MENU, env.PERSONAL_ENABLED, env.OWNER_PREVIEW_ENABLED, env.ADMIN_USER_ID])).digest("hex");
   return { user, inboxDue: inbox?.due ?? null, schedules, signature };
 }
 async function saveTeacherCheck(env, config, teacher, now, processedSchedules) {
-  const state = await teacherCheck(env, config, teacher, now);
+  const state = await teacherCheck(env, config, teacher, now, true);
   const today = dateInTimezone(now, config.timezone);
   const dates = [Date.parse(`${addDays(today,1)}T00:00:00+03:00`), Date.parse(`${today}T${config.pinSwitchTime}:00+03:00`)];
   for (const row of state.schedules) for (const lesson of JSON.parse(row.payload).lessons)

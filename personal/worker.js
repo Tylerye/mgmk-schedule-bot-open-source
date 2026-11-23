@@ -6,7 +6,6 @@ import { TelegramClient } from "../src/telegram.js";
 import { activateWeeklyPlan, weeklySourceStatus } from "../src/personal/weekly-plan.js";
 import { readJson, InputError } from "../cloudflare/request-json.js";
 import { pilotAllowed } from "../cloudflare/personal-relay.js";
-import { dateInTimezone } from "../src/dates.js";
 import { manualJobsOnly } from '../src/personal/quota.js';
 import { backgroundPolicy } from '../src/background-policy.js';
 import { deliveryHealth } from '../src/personal/delivery.js';
@@ -14,6 +13,12 @@ import { deliveryHealth } from '../src/personal/delivery.js';
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 const logger = { info() {}, warn() {}, error() {} }; // Do not log user payloads.
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+// Seek to each distinct priority so sparse queues can use the due bound.
+const pendingPriorities = "WITH RECURSIVE priorities(priority) AS ("
+  + "SELECT MIN(priority) FROM jobs WHERE status='pending' UNION ALL "
+  + "SELECT (SELECT MIN(j.priority) FROM jobs j WHERE j.status='pending' AND j.priority>priorities.priority) "
+  + "FROM priorities WHERE priority IS NOT NULL) ";
+const priorityRange = " AND priority IN (SELECT priority FROM priorities)";
 
 async function internal(env, path) {
   const r = await env.SELF.fetch(`https://personal.internal${path}`, { method: "POST", headers: { authorization: `Bearer ${env.PERSONAL_SHARED_SECRET}` }, body: "{}" });
@@ -25,6 +30,9 @@ async function kick(env, { inbox = true, delivery = true, due = false, fanout = 
   // with its own CPU budget. A minute Cron resumes after isolate termination.
   const deadline = Date.now() + 24000;
   let calls = 0;
+  // Fresh fanout inserts a dense wave of immediately due rows. The ordered
+  // index can stop at the first entries, without enumerating priorities.
+  const deliveryPath = fanout ? "/tick/delivery?publication=1" : "/tick/delivery";
   const failedLanes = new Set();
   const run = async path => {
     calls++;
@@ -36,7 +44,7 @@ async function kick(env, { inbox = true, delivery = true, due = false, fanout = 
       const retry = !failedLanes.has(path);
       if (retry) console.warn(JSON.stringify({ event: "personal_pump_lane_error", lane: path }));
       failedLanes.add(path);
-      return { pending: retry };
+      return { pending: retry, delivery: retry };
     }
   };
   // At most four router calls per wave. Preserve the previous 48-call bound
@@ -49,16 +57,18 @@ async function kick(env, { inbox = true, delivery = true, due = false, fanout = 
       const wave = await run('/tick/due');
       due = Boolean(wave.pending);
       dueAdvanced = due && wave.advanced;
-      delivery = true;
+      delivery ||= Boolean(wave.delivery);
     }
-    if (inbox) inbox = Boolean((await run("/tick/inbox")).pending);
+    if (inbox) {
+      const result = await run("/tick/inbox");
+      inbox = Boolean(result.pending);
+      delivery ||= Boolean(result.delivery);
+    }
     if (delivery) {
-      const result = await run("/tick/delivery");
+      const result = await run(deliveryPath);
       delivery = Boolean(result.pending); nextDue = result.nextDue ?? null;
     }
     if (!inbox && !delivery && !due && !fanout) break;
-    // Inbox commands may have created delivery work in this wave.
-    delivery = true;
     if (nextDue !== null) await wait(Math.max(100, Math.min(1100, nextDue - Date.now())));
     else if (!dueAdvanced) await wait(1100);
   }
@@ -139,17 +149,15 @@ export default {
       }
 
       if (path === "/tick") {
-        const work = await store.first("SELECT (SELECT COUNT(*) FROM (SELECT 1 FROM inbox WHERE status='pending' LIMIT 1)) inbox,"
+        const [recovery, ...args] = budget.rows_written + 200 < store.quota.source ? store.recoveryCandidate(now) : ["0"];
+        const work = await store.first(pendingPriorities + "SELECT (SELECT COUNT(*) FROM (SELECT 1 FROM inbox WHERE status='pending' LIMIT 1)) inbox,"
           + "(SELECT COUNT(*) FROM (SELECT 1 FROM fanout f JOIN datasets d ON d.id=f.dataset_id WHERE f.status='pending' AND d.status='ready' LIMIT 1)) fanout,"
           + "(SELECT COUNT(*) FROM (SELECT 1 FROM users WHERE paused=0 AND blocked=0 AND next_due<=? LIMIT 1)) due,"
-          + "(SELECT COUNT(*) FROM (SELECT 1 FROM jobs WHERE status='pending' AND due<=?" + manualJobsOnly(budget.mode) + " LIMIT 1)) delivery", now.getTime(), now.getTime());
+          + "EXISTS(SELECT 1 FROM jobs j WHERE j.status='pending' AND j.due<=?" + priorityRange + manualJobsOnly(budget.mode)
+          + " AND EXISTS(SELECT 1 FROM users u WHERE u.user_id=j.user_id AND u.blocked=0)) delivery,"
+          + recovery + " recover", now.getTime(), now.getTime(), ...args);
         if (budget.mode !== 'normal') { work.due = 0; work.fanout = 0; }
-        const error = await store.setting("source-error");
-        const staging = await store.first("SELECT 1 FROM datasets WHERE status='staging' AND generation<? AND date>=? LIMIT 1", now.getTime() - 300000, dateInTimezone(now, "Europe/Minsk"));
-        const recovery = await store.setting("recovery", {});
-        const recover = Boolean(budget.rows_written + 200 < store.quota.source && env.LEGACY && (error || staging) && (recovery.day !== now.toISOString().slice(0, 10) || recovery.count < 3)
-          && (!recovery.at || now.getTime() - recovery.at >= 20 * 60000));
-        return json({ ok: true, ...work, recover });
+        return json({ ok: true, ...work, recover: Boolean(work.recover) });
       }
       if (path === "/health") {
         const counts = await store.first("SELECT (SELECT COUNT(*) FROM catalog) groups,(SELECT COUNT(*) FROM active_versions) days,(SELECT COUNT(*) FROM users) users");
@@ -192,8 +200,8 @@ export default {
         await mergeCatalogObservations(store, body.observations, body.seedVersion);
       } else if (path === "/begin") {
         const body = await readJson(request, 32768);
-        await beginDataset(store, body);
-        return json({ ok: true, maxStageSchedules: MAX_STAGE_SCHEDULES,
+        const ready = await beginDataset(store, body);
+        return json({ ok: true, ready, maxStageSchedules: MAX_STAGE_SCHEDULES,
           catalogSeedKnown: Boolean(body.seedVersion) && await store.setting("catalog-seed-version") === body.seedVersion });
       } else if (path === "/stage") {
         const body = await readJson(request, MAX_STAGE_BYTES); await stageSchedules(store, body.id, body.schedules);
@@ -220,8 +228,9 @@ export default {
         }
       } else if (path === "/tick/inbox") {
         const row = await store.first("SELECT * FROM inbox WHERE status='pending' ORDER BY update_id LIMIT 1");
-        if (row) await internal(env, `/inbox/${row.update_id}`);
-        return json({ ok: true, pending: Boolean(row && await store.first("SELECT 1 FROM inbox WHERE status='pending' LIMIT 1")) });
+        const result = row && await internal(env, `/inbox/${row.update_id}`);
+        return json({ ok: true, delivery: Boolean(result?.delivery),
+          pending: Boolean(row && await store.first("SELECT 1 FROM inbox WHERE status='pending' LIMIT 1")) });
       } else if (/^\/inbox\/\d+$/u.test(path)) {
         const row = await store.first("SELECT * FROM inbox WHERE update_id=? AND status='pending'", Number(path.split("/")[2]));
         if (row && pilotAllowed(env, row.user_id)) {
@@ -237,8 +246,12 @@ export default {
       else if (path === "/tick/due") {
         const users = await store.all("SELECT user_id FROM users WHERE paused=0 AND blocked=0 AND next_due<=? ORDER BY next_due,user_id LIMIT 8", now.getTime());
         await runUserLanes(env, users, id => `/due/${id}`, now.getTime());
-        const next = await store.first("SELECT user_id FROM users WHERE paused=0 AND blocked=0 AND next_due<=? ORDER BY next_due,user_id LIMIT 1", now.getTime());
-        return json({ok:true,pending:Boolean(next),advanced:Boolean(next && users.length && next.user_id !== users[0].user_id)});
+        const next = await store.first(pendingPriorities
+          + "SELECT (SELECT user_id FROM users WHERE paused=0 AND blocked=0 AND next_due<=? ORDER BY next_due,user_id LIMIT 1) user_id,"
+          + "EXISTS(SELECT 1 FROM jobs j WHERE j.status='pending' AND j.due<=?" + priorityRange
+          + " AND EXISTS(SELECT 1 FROM users u WHERE u.user_id=j.user_id AND u.blocked=0)) delivery", now.getTime(), Date.now() + 1200);
+        return json({ok:true,pending:next.user_id !== null,delivery:Boolean(next.delivery),
+          advanced:Boolean(next.user_id !== null && users.length && next.user_id !== users[0].user_id)});
       } else if (/^\/due\/\d+$/u.test(path)) {
         const id = Number(path.split('/')[2]);
         if (budget.mode === 'normal' && pilotAllowed(env, id)) {
@@ -248,16 +261,22 @@ export default {
         }
       }
       else if (path === "/tick/delivery") {
-        const rows = await store.all("SELECT j.user_id FROM (SELECT user_id,priority,due FROM jobs WHERE status='pending' AND due<=?" + manualJobsOnly(budget.mode) + " ORDER BY priority,due LIMIT 128) j JOIN users u ON u.user_id=j.user_id WHERE u.blocked=0 AND u.last_api_at<=? GROUP BY j.user_id ORDER BY MIN(j.priority),MIN(j.due),MIN(u.last_api_at) LIMIT 8", now.getTime(), now.getTime() - 1050);
+        const publication = url.searchParams.get("publication") === "1";
+        const prefix = publication ? "" : pendingPriorities;
+        const range = publication ? "" : priorityRange;
+        const rows = await store.all(prefix + "SELECT user_id FROM (SELECT j.user_id,j.priority,j.due,u.last_api_at FROM jobs j "
+          + "JOIN users u ON u.user_id=j.user_id WHERE j.status='pending' AND j.due<=?"
+          + range + manualJobsOnly(budget.mode) + " AND u.blocked=0 ORDER BY j.priority,j.due LIMIT 128) "
+          + "WHERE last_api_at<=? GROUP BY user_id ORDER BY MIN(priority),MIN(due),MIN(last_api_at) LIMIT 8", now.getTime(), now.getTime() - 1050);
         await runUserLanes(env, rows, id => `/delivery/${id}?background=1`, now.getTime());
         // Skip still-cooling users without allocating their locks, intents and
         // HTTP lanes. Other subscribers can advance immediately; only a wave
         // with no eligible recipient waits for the earliest durable deadline.
         const clock = Date.now();
-        const next = await store.first("SELECT CASE WHEN EXISTS(SELECT 1 FROM jobs j JOIN users u ON u.user_id=j.user_id "
-          + "WHERE j.status='pending' AND j.due<=? AND u.blocked=0 AND u.last_api_at<=?" + manualJobsOnly(budget.mode) + " LIMIT 1) THEN ? "
+        const next = await store.first(prefix + "SELECT CASE WHEN EXISTS(SELECT 1 FROM jobs j JOIN users u ON u.user_id=j.user_id "
+          + "WHERE j.status='pending' AND j.due<=? AND u.blocked=0 AND u.last_api_at<=?" + range + manualJobsOnly(budget.mode) + " LIMIT 1) THEN ? "
           + "ELSE (SELECT MIN(MAX(j.due,u.last_api_at+1050)) FROM jobs j JOIN users u ON u.user_id=j.user_id "
-          + "WHERE j.status='pending' AND j.due<=? AND u.blocked=0" + manualJobsOnly(budget.mode) + ") END due",
+          + "WHERE j.status='pending' AND j.due<=? AND u.blocked=0" + range + manualJobsOnly(budget.mode) + ") END due",
           clock, clock - 1050, clock, clock + 1200);
         return json({ ok: true, pending: next?.due != null && next.due <= Date.now() + 1200, nextDue: next?.due ?? null });
       } else if (/^\/delivery\/\d+$/u.test(path)) {
@@ -283,7 +302,7 @@ export default {
       if (work.recover) await internal(env, "/tick/recover").catch(() => {
         console.warn(JSON.stringify({ event: "personal_source_recovery_lane_error" }));
       });
-      if (work.inbox || work.delivery || work.due || work.fanout) await kick(env, { inbox: Boolean(work.inbox), delivery: true, due: Boolean(work.due), fanout: Boolean(work.fanout) });
+      if (work.inbox || work.delivery || work.due || work.fanout) await kick(env, { inbox: Boolean(work.inbox), delivery: Boolean(work.delivery), due: Boolean(work.due), fanout: Boolean(work.fanout) });
     }).catch(() => {}));
   },
 };

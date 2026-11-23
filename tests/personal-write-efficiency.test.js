@@ -10,6 +10,32 @@ import { renderPersonal, nextRenderAt, nextPersonalPinAt } from '../src/personal
 const local = (time, day='2026-11-12') => new Date(`${day}T${time}:00+03:00`);
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
+test('inbox admission is idempotent and never exceeds the per-user limit under concurrent arrivals', async t => {
+  const f = await personalFixture();
+  t.after(() => f.close());
+  const submit = update_id => enqueuePersonalUpdate(new PersonalStore(f.db), { update_id, userId: 1, action: 'settings' });
+  const results = await Promise.all([1, 1, 2, 3, 4, 5, 6, 7].map(submit));
+  assert.equal(results.filter(Boolean).length, 5);
+  assert.equal(await submit(1), false);
+  assert.equal((await f.store.first("SELECT rows FROM security_storage_counts WHERE name='inbox'")).rows, 5);
+});
+
+test('stale staging and recovery cooldown keep idle cheap without missing the next eligible retry', async t => {
+  const f = await personalFixture();
+  t.after(() => f.close());
+  const now = local('08:00');
+  const store = new PersonalStore(f.db, { LEGACY: {} });
+  await store.run('INSERT INTO budgets(day) VALUES(?)', '2026-11-12');
+  await store.run("INSERT INTO datasets(id,date,generation,manifest,expected_count) VALUES('test','2026-11-11',1,'{}',1)");
+  assert.equal(await store.accountIdleTick(now), true);
+  await store.run("UPDATE datasets SET date='2026-11-12'");
+  await store.setSetting('recovery', { day: '2026-11-12', count: 1, at: +now });
+  assert.equal(await store.accountIdleTick(local('08:19')), true);
+  assert.equal(await store.accountIdleTick(local('08:20')), false);
+  await store.setSetting('recovery', { day: '2026-11-12', count: 3, at: +now });
+  assert.equal(await store.accountIdleTick(local('08:21')), true);
+});
+
 test('idle ticks take the cheap path until the first pending job is due', async t => {
   const f = await personalFixture();
   t.after(() => f.close());

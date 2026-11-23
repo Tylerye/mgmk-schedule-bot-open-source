@@ -1,4 +1,5 @@
 import { personalQuota } from './quota.js';
+import { dateInTimezone } from '../dates.js';
 const stoppedDays = new WeakMap();
 const idleReadEstimate = new WeakMap();
 export const JOB_CONFLICT_UPDATE = "ON CONFLICT(id) DO UPDATE SET epoch=excluded.epoch,priority=CASE WHEN jobs.status='pending' AND jobs.epoch=excluded.epoch THEN MIN(jobs.priority,excluded.priority) ELSE excluded.priority END,"
@@ -7,7 +8,7 @@ export const JOB_CONFLICT_UPDATE = "ON CONFLICT(id) DO UPDATE SET epoch=excluded
 // D1 and the future SQLite runtime share this small async SQL interface.
 // All mutable data below belongs to the separate personal database.
 export class PersonalStore {
-  constructor(db, env = {}) { this.db = db; this.quota = personalQuota(env); this.read = 0; this.written = 0; }
+  constructor(db, env = {}) { this.db = db; this.quota = personalQuota(env); this.canRecover = Boolean(env.LEGACY); this.read = 0; this.written = 0; }
   measure(result) {
     this.read += result?.meta?.rows_read ?? 0;
     this.written += result?.meta?.rows_written ?? 0;
@@ -51,6 +52,27 @@ export class PersonalStore {
   async groups() { return (await this.all("SELECT payload FROM catalog")).map(r => JSON.parse(r.payload)); }
   async schedules(group) {
     return (await this.all("SELECT s.payload FROM snapshots s JOIN active_versions a ON a.dataset_id=s.dataset_id WHERE s.group_id=? ORDER BY a.date", group)).map(r => JSON.parse(r.payload));
+  }
+  async schedule(group, date) {
+    const row = await this.first("SELECT s.payload FROM active_versions a JOIN snapshots s ON s.dataset_id=a.dataset_id WHERE a.date=? AND s.group_id=?", date, group);
+    return row ? JSON.parse(row.payload) : null;
+  }
+  async schedulesForDates(group, dates) {
+    if (dates.length === 1) {
+      const schedule = await this.schedule(group, dates[0]);
+      return schedule ? [schedule] : [];
+    }
+    const rows = await this.all("SELECT s.payload FROM json_each(?) dates CROSS JOIN active_versions a ON a.date=dates.value "
+      + "JOIN snapshots s ON s.dataset_id=a.dataset_id AND s.group_id=?", JSON.stringify(dates), group);
+    return rows.map(row => JSON.parse(row.payload));
+  }
+  campaignReceipt(userId, campaign, messageId = null) {
+    // The status index scans unrelated successful sends for a bound GLOB.
+    // Both bounds use the primary key. ':' immediately precedes ';' in ASCII.
+    const prefix = `${userId}:alert:${campaign}`;
+    return this.first("SELECT result FROM operations WHERE id>=? AND id<? AND method='sendMessage' AND +status='succeeded'"
+      + (messageId === null ? "" : " AND json_extract(result,'$.message_id')=?") + " ORDER BY rowid LIMIT 1",
+    prefix + ":", prefix + ";", ...(messageId === null ? [] : [messageId]));
   }
   async previewSchedules(group, date) {
     // Arrow buttons need only the neighboring published dates for this group.
@@ -100,6 +122,16 @@ export class PersonalStore {
       : lane === 'source' ? [26000, 900000, this.quota.source]
       : [27900, 948000, this.quota.written - 100];
   }
+  recoveryCandidate(now) {
+    if (!this.canRecover) return ["0"];
+    return ["((EXISTS(SELECT 1 FROM settings WHERE key='source-error' AND value<>'null') "
+      + "OR EXISTS(SELECT 1 FROM datasets WHERE status='staging' AND generation<? AND date>=?)) "
+      + "AND NOT EXISTS(SELECT 1 FROM settings WHERE key='recovery' AND "
+      + "(json_extract(value,'$.at')>? OR (json_extract(value,'$.day')=? AND "
+      + "COALESCE(json_extract(value,'$.count'),3)>=3))))",
+    now.getTime() - 300000, dateInTimezone(now, "Europe/Minsk"),
+    now.getTime() - 20 * 60000, now.toISOString().slice(0, 10)];
+  }
   async accountIdleTick(now) {
     const day = now.toISOString().slice(0, 10), cached = stoppedDays.get(this.db);
     if (cached?.day === day && cached.lane === 'interactive' && cached.until > now.getTime()) return false;
@@ -107,17 +139,18 @@ export class PersonalStore {
     // Unknown priorities conservatively wake the router, including legacy jobs.
     // Match the normal router admission headroom, even for the last idle tick.
     const estimate = idleReadEstimate.get(this.db) ?? 8;
+    const [recovery, ...recoveryArgs] = this.recoveryCandidate(now);
     const result = await this.run("UPDATE budgets SET requests=requests+2,rows_read=rows_read+?,rows_written=rows_written+2"
       + " WHERE day=? AND requests+2<22000 AND rows_read+2000<800000 AND rows_written+20<?"
       + " AND NOT EXISTS(SELECT 1 FROM inbox WHERE status='pending')"
-      + " AND NOT EXISTS(SELECT 1 FROM jobs WHERE status='pending' AND priority IN (-2,-1,0,1,2,3,4,5) AND due<=?)"
+      + " AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.status='pending' AND j.priority IN (-2,-1,0,1,2,3,4,5) AND j.due<=?"
+      + " AND EXISTS(SELECT 1 FROM users u WHERE u.user_id=j.user_id AND u.blocked=0))"
       + " AND NOT EXISTS(SELECT 1 FROM jobs WHERE status='pending' AND priority < -2)"
       + " AND NOT EXISTS(SELECT 1 FROM jobs WHERE status='pending' AND priority > 5)"
       + " AND NOT EXISTS(SELECT 1 FROM fanout WHERE status='pending')"
       + " AND NOT EXISTS(SELECT 1 FROM users WHERE paused=0 AND blocked=0 AND next_due<=?)"
-      + " AND NOT EXISTS(SELECT 1 FROM datasets WHERE status='staging')"
-      + " AND NOT EXISTS(SELECT 1 FROM settings WHERE key='source-error' AND value<>'null')",
-      estimate, day, this.quota.background, now.getTime(), now.getTime());
+      + " AND NOT (rows_written+220<? AND " + recovery + ")",
+      estimate, day, this.quota.background, now.getTime(), now.getTime(), this.quota.source, ...recoveryArgs);
     if (!result.meta.changes) return false;
     const measured = this.read + 1;
     if (estimate !== measured || this.written !== 1) {

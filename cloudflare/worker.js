@@ -455,10 +455,13 @@ async function handleMaintenance(request, env, pathname, context) {
 async function pollTeacherSource(env, config, logger, interval = null) {
   return withStateLock(env.DB, async () => {
     const files = await discoverTeacherFiles({ config, database: env.DB });
+    const documents = files.length ? (await env.DB.prepare(
+      "SELECT source_id,fingerprint FROM teacher_documents WHERE source_id IN (SELECT value FROM json_each(?))",
+    ).bind(JSON.stringify(files.map(file => file.id))).all()).results : [];
+    const fingerprints = new Map(documents.map(row => [row.source_id, row.fingerprint]));
     let dispatched = 0;
     for (const file of files) {
-      const document = await env.DB.prepare("SELECT fingerprint FROM teacher_documents WHERE source_id=?").bind(file.id).first();
-      if (document?.fingerprint === sourceFingerprint(file)) continue;
+      if (fingerprints.get(file.id) === sourceFingerprint(file)) continue;
       const job = await ensureParseJob(env.DB, file, new Date().toISOString());
       const retryAt = Date.parse(job.updated_at) + (job.status === "failed" ? 300000 : 1200000);
       if ((job.status === "pending" || (["failed", "dispatched"].includes(job.status) && retryAt < Date.now())) && job.attempts < 5 && dispatched < 2) {
