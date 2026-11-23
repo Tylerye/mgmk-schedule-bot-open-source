@@ -45,9 +45,10 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
       const [, campaign, choice] = rating;
       const key = campaign ? "rating-update-20261123-v1" : "rating-20261120-v1";
       const voteKey = key + ":" + row.user_id;
-      const receipt = update.messageId == null ? null : await store.campaignReceipt(row.user_id, key, update.messageId);
+      const receipt = update.messageId != null && await store.setting(voteKey) === null
+        && await store.campaignReceipt(row.user_id, key, update.messageId);
       const statements = [];
-      if (receipt && await store.setting(voteKey) === null) {
+      if (receipt) {
         const later = choice === "later";
         const en = user.language === "en";
         const low = Number(choice) <= 2;
@@ -67,6 +68,9 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
       return;
     }
     const original = { ...user };
+    const today = selectedDate([], "today", now);
+    const upcoming = group => store.upcomingSchedules(group, today);
+    const initial = async group => initialDates(await upcoming(group), now);
     let catalog;
     const groups = async () => catalog ??= (await store.groups()).sort((a, b) =>
       Number.parseInt(a.id, 10) - Number.parseInt(b.id, 10) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
@@ -104,7 +108,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
       if (user.language !== original.language) user.epoch++;
       user.screen = user.group_id ? "menu" : "groups";
       reply(user.group_id ? menuText() : groupText(), user.group_id ? mainMenu() : groupsKeyboard(await groups(), user, 0, brandedMenu));
-      if (user.group_id) initialCards = initialDates(await store.schedules(user.group_id), now);
+      if (user.group_id) initialCards = await initial(user.group_id);
       repeatedSelection = user.language === original.language;
     } else if (action.startsWith("groups:") || action.startsWith("search:")) {
       user.screen = "groups";
@@ -119,7 +123,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
         user.screen = "menu";
         reply(menuText());
         if (!user.support_seen) { reply(titled("support", t(user).supportText), supportKeyboard(user, brandedMenu)); user.support_seen = 1; }
-        initialCards = initialDates(await store.schedules(user.group_id), now);
+        initialCards = await initial(user.group_id);
         if (!initialCards.length) reply(missingText());
         repeatedSelection = group.id === original.group_id;
       }
@@ -136,7 +140,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
       }
       if (key === "paused") {
         user.epoch++; user.next_due = null;
-        if (!user.paused && user.group_id) for (const s of initialDates(await store.schedules(user.group_id), now)) jobs.push(job(user, "card", s.date, { priority: 0, payload: { manual: true } }));
+        if (!user.paused && user.group_id) for (const s of await initial(user.group_id)) jobs.push(job(user, "card", s.date, { priority: 0, payload: { manual: true } }));
       }
       reply(titled("settings", t(user).settingsText), settingsKeyboard(user, brandedMenu));
     } else if (action === "settings") reply(titled("settings", t(user).settingsText), settingsKeyboard(user, brandedMenu));
@@ -167,9 +171,9 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
           ] });
         } else {
           const target = action.slice("widget:".length);
-          const schedules = await store.schedules(widgetGroup);
-          const date = /^\d{4}-\d{2}-\d{2}$/u.test(target) ? target : selectedDate(schedules, target, now);
-          replies.push({ widgetDate: date, widgetSchedule: schedules.find(schedule => schedule.date === date) ?? null, editId: null });
+          const date = /^\d{4}-\d{2}-\d{2}$/u.test(target) ? target
+            : selectedDate(target === "next" ? await upcoming(widgetGroup) : [], target, now);
+          replies.push({ widgetDate: date, widgetSchedule: await store.schedule(widgetGroup, date), editId: null });
         }
       }
     } else if (action.startsWith("view:")) {
@@ -193,8 +197,8 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
         if (fromWidget) action = `preview:${action.slice("widget-text:".length)}:full`;
         const fixedDate = action.startsWith("preview:") ? action.split(":")[1]
           : ["today", "tomorrow"].includes(action) ? selectedDate([], action, now) : null;
-        const schedules = fixedDate ? await store.previewSchedules(user.group_id, fixedDate) : await store.schedules(user.group_id);
-        const date = fixedDate ?? selectedDate(schedules, action, now);
+        const date = fixedDate ?? selectedDate(await upcoming(user.group_id), action, now);
+        const schedules = await store.previewSchedules(user.group_id, date);
         if (!schedules.some(s => s.date === date)) reply(missingText(), mainMenu(), fromWidget ? null : update.messageId);
         else {
           const schedule = schedules.find(s => s.date === date);
@@ -234,7 +238,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
       }
     }
     const starting = update.action === "start" && user.group_id;
-    if (starting) initialCards = initialDates(await store.schedules(user.group_id), now);
+    if (starting) initialCards = await initial(user.group_id);
     if (initialCards.length) {
       for (const s of initialCards) {
         // An explicit /start can repair a deleted pin or a card overwritten by

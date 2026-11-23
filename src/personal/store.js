@@ -54,6 +54,11 @@ export class PersonalStore {
   async schedules(group) {
     return (await this.all("SELECT s.payload FROM snapshots s JOIN active_versions a ON a.dataset_id=s.dataset_id WHERE s.group_id=? ORDER BY a.date", group)).map(r => JSON.parse(r.payload));
   }
+  async upcomingSchedules(group, today) {
+    const rows = await this.all("SELECT s.payload FROM active_versions a CROSS JOIN snapshots s "
+      + "WHERE a.date>=? AND s.dataset_id=a.dataset_id AND s.group_id=? ORDER BY a.date LIMIT 2", today, group);
+    return rows.map(row => JSON.parse(row.payload));
+  }
   async schedule(group, date) {
     const row = await this.first("SELECT s.payload FROM active_versions a JOIN snapshots s ON s.dataset_id=a.dataset_id WHERE a.date=? AND s.group_id=?", date, group);
     return row ? JSON.parse(row.payload) : null;
@@ -77,7 +82,7 @@ export class PersonalStore {
   }
   async previewSchedules(group, date) {
     // Arrow buttons need only the neighboring published dates for this group.
-    const active = " FROM active_versions a JOIN snapshots s ON s.dataset_id=a.dataset_id AND s.group_id=? ";
+    const active = " FROM active_versions a CROSS JOIN snapshots s ON s.dataset_id=a.dataset_id AND s.group_id=? ";
     const rows = await this.all("SELECT a.date,s.payload" + active + "WHERE a.date=? "
       + "UNION ALL SELECT * FROM (SELECT a.date,NULL" + active + "WHERE a.date<? ORDER BY a.date DESC LIMIT 1) "
       + "UNION ALL SELECT * FROM (SELECT a.date,NULL" + active + "WHERE a.date>? ORDER BY a.date LIMIT 1)",

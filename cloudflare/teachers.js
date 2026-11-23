@@ -410,7 +410,9 @@ export async function teacherMaintenance(env, config, logger, teacherId, now = n
     // Bound work per invocation; subsequent ticks publish remaining dates.
     for (const row of schedules.slice(0, 3)) await publishTeacherDate({ ...context, row });
     await drainTeacherNotices(context);
-    const publications = (await env.DB.prepare("SELECT * FROM teacher_publications WHERE teacher_id=? AND message_id IS NOT NULL ORDER BY date").bind(teacher.id).all()).results;
+    // An earlier pin cannot veto a candidate dated today or later.
+    const publications = (await env.DB.prepare("SELECT date,message_id FROM teacher_publications WHERE teacher_id=? AND date>=? AND message_id IS NOT NULL ORDER BY date")
+      .bind(teacher.id, today).all()).results;
     const desired = chooseTeacherPin(publications, schedules, user.pinned_message_id,
       today, timeInTimezone(now, config.timezone), config.pinSwitchTime);
     if (desired && desired.message_id !== user.pinned_message_id) {
