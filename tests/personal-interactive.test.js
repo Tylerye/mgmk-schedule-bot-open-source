@@ -103,10 +103,11 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
       assert.equal(calls.length,expectedCalls);
     }
     await tap('updates:0',4,7);
-    assert.match(calls[6].body.text,/V1\.3.*<\/b>/u);
+    assert.match(calls[6].body.text,/V1\.4.*<\/b>/u);
+    assert.match(calls[6].body.text,/Мое ДЗ/u);
     assert.equal(calls[6].body.message_id,77);
     await tap('updates:history',5,8);
-    assert.match(calls[7].body.text,/V0\.1[\s\S]*11\.11\.2026[\s\S]*V1\.0/u);
+    assert.match(calls[7].body.text,/V0\.1[\s\S]*11\.11\.2026[\s\S]*V1\.4/u);
     await tap('updates:v0.1',6,9);
     assert.match(calls[8].body.text,/Первый открытый выпуск/u);
     await tap('table:'+date,7,10);
@@ -174,7 +175,8 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
     const practice = calls.at(-1).body.reply_markup.inline_keyboard.flat().find(button => /ПРАКТИКА/u.test(button.text));
     await tap(practice.callback_data.slice(9), 13, 17);
     const prompt = calls.at(-1).body;
-    assert.deepEqual(prompt.reply_markup, { force_reply: true });
+    assert.equal(prompt.reply_markup.force_reply, undefined);
+    assert.ok(prompt.reply_markup.inline_keyboard.flat().some(button => button.text === "Отмена"));
     assert.match(prompt.text, /^Запиши ДЗ · ПРАКТИКА/u);
     const submitted = await relayPersonalUpdate({
       BOT_TOKEN: "42:fixture", PERSONAL_ENABLED: "true", ADMIN_USER_ID: "100", PERSONAL_SHARED_SECRET: "local-test",
@@ -184,9 +186,8 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
     assert.deepEqual(await submitted.json(), { ok: true, queued: true });
     for (let i = 0; i < 25 && calls.length < 18; i++) await new Promise(resolve => setTimeout(resolve, 100));
     assert.match(calls.at(-1).body.text, /К какому уроку/u);
-    const dateAction = homeworkCallback(calls.at(-1), "date:");
+    const dateAction = homeworkCallback(calls.at(-1), "save:");
     await tap(dateAction, 15, 19);
-    await tap(homeworkCallback(calls.at(-1), "save:"), 16, 20);
     assert.match(calls.at(-1).body.text, /Сохранено/u);
     const saved = await db.prepare("SELECT value FROM settings WHERE key='homework:100'").first("value");
     assert.equal(JSON.parse(saved).items[0].text, "§ 8 https://example.org");

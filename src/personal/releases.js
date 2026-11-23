@@ -4,6 +4,19 @@ import { backToMenu, button, screenText, t } from "./view.js";
 // Add new releases at the top. Keep the version IDs stable for old buttons.
 const releases = [
   {
+    version: "V1.4", date: "23.11.2026",
+    ru: ["Мое ДЗ", [
+      "В главном меню появилось «Мое ДЗ». Выбери предмет, ответь боту текстом или ссылкой и нажми дату, чтобы сохранить",
+      "Задание видно только тебе в списке ДЗ и личном расписании на выбранный день. Его можно изменить, перенести или отметить выполненным",
+      "В кабинете преподавателя обновили карточку расписания и закреп",
+    ]],
+    en: ["My homework", [
+      "Open My homework in the main menu, choose a subject, reply with text or a link, and tap a date to save",
+      "Your assignments are private and appear in your homework list and personal timetable for the selected day. You can edit, move or complete them",
+      "Updated the timetable card and pin in the teacher view",
+    ]],
+  },
+  {
     version: "V1.3", date: "23.11.2026",
     ru: ["Вся неделя под рукой", [
       "В «На неделю» можно глянуть базовый план своей группы и свежие дневные PDF",

@@ -4,7 +4,7 @@ import { releasePage } from "./releases.js";
 import { findGroups } from "./catalog.js";
 import { screenHash, isTimetableMessage, richScreen } from './screen-state.js';
 import { hasLessonSummary, lessonDetailsChanges } from "./lesson-summary.js";
-import { homeworkOnCard, homeworkScreen, readCardHomework } from "./homework.js";
+import { discardHomeworkDraft, homeworkOnCard, homeworkScreen, readCardHomework } from "./homework.js";
 import { t, menu, button, backToMenu, screenText, supportKeyboard, settingsKeyboard, groupsKeyboard, initialDates, selectedDate, renderPersonal, informationText, informationKeyboard, widgetGroup, widgetLabel } from "./view.js";
 
 export { collectPersonalUpdate } from "./update.js";
@@ -88,6 +88,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
       + "payload=CASE WHEN json_extract(payload,'$.homework')=1 THEN '{}' ELSE payload END "
       + "WHERE user_id=? AND status='pending' AND kind IN ('reply','callback','commands')", user.user_id]);
     if (action === "start") action = user.group_id ? "menu" : "language";
+    if ((action === "menu" || update.action === "start") && user.has_homework) jobs.push(discardHomeworkDraft(user.user_id));
     if (action === "hw" || action.startsWith("hw:")) {
       const view = await homeworkScreen(store, user, update, now, brandedMenu, jobs);
       reply(view.text, view.keyboard, view.editId);

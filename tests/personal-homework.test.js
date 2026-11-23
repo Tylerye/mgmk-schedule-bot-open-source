@@ -10,9 +10,15 @@ test("private homework follows its dated lesson, stays scoped to the owner, and 
   t.after(() => f.close());
   const tomorrow = await sampleSchedule("8Са", "2026-11-24");
   const later = await sampleSchedule("8Са", "2026-12-01");
+  tomorrow.lessons[0].variants[0].subject = "БЕЛ.ЛИТ-РА";
+  tomorrow.timeline.find(lesson => lesson.type === "lesson").variants[0].subject = "БЕЛ.ЛИТ-РА";
   const plan = { effectiveFrom: "2026-11-23", groups: ["8СА"] };
   await f.store.setSetting("weekly:manifest", plan);
-  await f.store.setSetting("weekly:8СА", { days: { tuesday: { lessons: [[1, "Физика/Иванов", "210"], [2, "Физика/Иванов", "210"]], hours: [] } } });
+  await f.store.setSetting("weekly:8СА", { days: { tuesday: { lessons: [
+    [1, "Физика/Иванов", "210"], [2, "Белорусская литература/Иванов", "210"],
+    [3, "Белорусский язык", ""], [4, "Химия", ""], [5, "Электротехника", ""],
+    [6, "Информатика", ""], [7, "Основы технологии машиностроения", ""],
+  ], hours: [] } } });
   await installSchedules(f.store, [tomorrow]);
   await installSchedules(f.store, [later], { id: "b".repeat(64) });
   await f.store.run("INSERT INTO users(user_id,group_id) VALUES (100,'8СА'),(200,'8СА')");
@@ -41,11 +47,16 @@ test("private homework follows its dated lesson, stays scoped to the owner, and 
   const buttons = call => call.body.reply_markup.inline_keyboard.flat();
   await tap("hw");
   const list = await tap("hw:pick:0");
+  assert.deepEqual(buttons(list).filter(button => /лит/iu.test(button.text)).map(button => button.text), ["БЕЛ.ЛИТ-РА"]);
+  assert.ok(buttons(list).some(button => button.text === "Техмаш"));
+  assert.ok(buttons(list).filter(button => button.callback_data.startsWith("personal:hw:subject:")).length > 6);
+  assert.ok(!buttons(list).some(button => button.callback_data.startsWith("personal:hw:pick:")));
   const physics = buttons(list).filter(button => /физика/iu.test(button.text));
   assert.equal(physics.length, 1, "plan and PDF subject aliases deduplicate");
   const prompt = await tap(physics[0].callback_data.slice(9));
   assert.equal(prompt.method, "sendMessage");
-  assert.deepEqual(prompt.body.reply_markup, { force_reply: true });
+  assert.equal(prompt.body.reply_markup.force_reply, undefined);
+  assert.ok(buttons(prompt).some(button => button.text === "Отмена"));
   const promptId = 700 + calls.length;
   const text = '§ 12 и <пример> https://example.org';
   const answer = (message_id, content, id = 100) => ({ message: {
@@ -56,11 +67,9 @@ test("private homework follows its dated lesson, stays scoped to the owner, and 
   assert.match((await update(answer(promptId + 1, "old prompt"), 100)).body.text, /устарел/u);
   const dates = await update(answer(promptId, text), 100);
   assert.match(dates.body.text, /&lt;пример&gt; https:\/\/example.org/u);
-  assert.deepEqual(buttons(dates).filter(b => b.callback_data.startsWith("personal:hw:date:")).map(b => b.callback_data.slice(-10)),
+  assert.deepEqual(buttons(dates).filter(b => b.callback_data.startsWith("personal:hw:save:")).map(b => b.callback_data.slice(-10)),
     ["2026-11-24", "2026-12-01"]);
-  const select = buttons(dates).find(b => b.callback_data.endsWith("2026-11-24")).callback_data.slice(9);
-  const confirmation = await tap(select, 100, 700 + calls.length);
-  const save = buttons(confirmation).find(b => b.callback_data.startsWith("personal:hw:save:")).callback_data.slice(9);
+  const save = buttons(dates).find(b => b.callback_data.endsWith("2026-11-24")).callback_data.slice(9);
   assert.match((await tap(save)).body.text, /Сохранено/u);
   assert.match((await tap(save)).body.text, /устарел/u);
   const saved = await readHomework(f.store, 100);
@@ -78,4 +87,11 @@ test("private homework follows its dated lesson, stays scoped to the owner, and 
   assert.ok(buttons(calls.at(-1)).some(b => b.callback_data === "personal:hw:day:2026-11-24"));
   assert.match((await tap("hw:done:" + saved.items[0].id)).body.text, /Выполнено/u);
   assert.doesNotMatch((await tap("tomorrow")).body.text, /§ 12/u);
+  const abandoned = await tap(physics[0].callback_data.slice(9));
+  const abandonedId = 700 + calls.length;
+  await tap("menu");
+  assert.equal((await readHomework(f.store, 100)).draft, null);
+  const stale = answer(abandonedId, "personal message");
+  stale.message.reply_to_message.text = abandoned.body.text;
+  assert.match((await update(stale, 100)).body.text, /устарел/u);
 });

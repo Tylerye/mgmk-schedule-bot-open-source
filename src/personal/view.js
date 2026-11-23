@@ -68,7 +68,7 @@ export function menu(user, widgetEnabled = false, branded = false) {
   return { inline_keyboard: [
     [item(w.today, "today"), item(w.tomorrow, "tomorrow")],
     [item(w.next, "next"), item(w.week, "week")],
-    [button(user.language === "en" ? "My homework" : "Моё ДЗ", "hw", { branded, icon: "table", style: "success" })],
+    [button(user.language === "en" ? "My homework" : "Мое ДЗ", "hw", { branded, icon: "table", style: "success" })],
     ...(widgetEnabled && user.group_id === widgetGroup ? [[item(widgetLabel(user), "widget")]] : []),
     [item(w.settings, "settings"), item(w.help, "help")],
     [item(w.updates, "updates:0")],
@@ -82,7 +82,7 @@ export function informationText(user, action) {
   const text = t(user)[`${action}Text`].replaceAll("{contact}", escapeHtml(AUTHOR_USERNAME));
   if (action !== "privacy") return text;
   const homework = user.language === "en" ? "Homework you save is private and can be deleted in My homework."
-    : "Сохранённое ДЗ видно только тебе. Его можно удалить в разделе «Моё ДЗ».";
+    : "Сохранённое ДЗ видно только тебе. Его можно удалить в разделе «Мое ДЗ».";
   return text.replace("\n\n", "\n\n" + homework + "\n\n");
 }
 export const informationKeyboard = (user, branded) => ({ inline_keyboard: [

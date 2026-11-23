@@ -11,7 +11,31 @@ const pageSize = 6;
 const homeworkKey = id => "homework:" + id;
 const short = (value, max) => Array.from(value).slice(0, max).join("");
 const subjectName = name => short(name.replace(/\s+/gu, " ").trim(), 150);
-const subjectKey = name => createHash("sha256").update(subjectName(name).normalize("NFKC").toLowerCase().replaceAll("ё", "е")).digest("hex").slice(0, 16);
+const foldName = name => subjectName(name).normalize("NFKC").toLowerCase().replaceAll("ё", "е").replaceAll("і", "и");
+const subjectToken = name => foldName(name).replace(/[^\p{L}\p{N}]/gu, "");
+const aliases = new Map([
+  ["Белорусская литература", "Бел.лит-ра", "Белолитра"],
+  ["Белорусский язык", "Бел.язык", "Беляз"],
+  ["Русская литература", "Русск.лит-ра"],
+  ["Русский язык", "Русск.язык"],
+  ["Иностранный язык", "Ин.язык", "Иняз"],
+  ["История Беларуси в контексте всемирной истории", "История Беларуси", "История Бел"],
+  ["Допуски, посадки и технические измерения", "Допуски и пос.", "Допуски и посадки"],
+  ["Общий курс слесарного дела", "Слесарное дело", "Слесарка"],
+  ["Физическая культура и здоровье", "Физкультура", "Физическая культура"],
+  ["Электротехника", "Элтехника", "Эл.техн."],
+  ["Производственное обучение", "Произв.обуч", "Произв. обучение"],
+  ["Устройство транспортных средств", "Уст-во тр/сред"],
+  ["Специальная технология", "Спецтехнология"],
+  ["Основы технологии машиностроения", "Техмаш"],
+].flatMap(([full, ...variants]) => variants.map(variant => [subjectToken(variant), subjectToken(full)])));
+const hash = value => createHash("sha256").update(value).digest("hex").slice(0, 16);
+const subjectKey = name => {
+  const token = subjectToken(name);
+  return hash(aliases.get(token) ?? token);
+};
+const techmach = subjectKey("Техмаш");
+const legacyKey = name => hash(subjectName(name).normalize("NFKC").toLowerCase().replaceAll("ё", "е"));
 const subjectsOf = schedule => (schedule?.lessons ?? []).flatMap(lesson => lesson.variants.map(variant => subjectName(variant.subject)).filter(Boolean));
 
 export async function homeworkTimetable(store, group, now) {
@@ -23,9 +47,19 @@ export async function homeworkTimetable(store, group, now) {
 
 function listSubjects({ today, plan, published }) {
   const names = new Map();
-  const days = [...published.values(), ...Array.from({ length: 7 }, (_, i) => plannedDay(plan, addDays(today, i)))];
-  for (const day of days) for (const name of subjectsOf(day)) names.set(subjectKey(name), name);
-  return [...names].sort((a, b) => a[1].localeCompare(b[1], "ru"));
+  const planned = Array.from({ length: 7 }, (_, i) => plannedDay(plan, addDays(today, i)));
+  const addNames = (days, fromPlan) => {
+    for (const day of days) for (const name of subjectsOf(day)) {
+      const key = subjectKey(name);
+      const entry = names.get(key) ?? { key, legacy: new Set() };
+      entry.label = fromPlan && key === techmach ? "Техмаш" : name;
+      entry.legacy.add(legacyKey(name));
+      names.set(key, entry);
+    }
+  };
+  addNames(planned, true);
+  addNames(published.values(), false);
+  return [...names.values()].sort((a, b) => a.label.localeCompare(b.label, "ru"));
 }
 
 export function homeworkDates({ today, rangeEnd, plan, published }, key, now) {
@@ -41,12 +75,14 @@ export function homeworkDates({ today, rangeEnd, plan, published }, key, now) {
 
 export const readHomework = (store, id) => store.setting(homeworkKey(id), { items: [], draft: null });
 export const readCardHomework = (store, user) => user.has_homework ? readHomework(store, user.user_id) : null;
+export const discardHomeworkDraft = id => ["UPDATE settings SET value=json_set(value,'$.draft',NULL) "
+  + "WHERE key=? AND json_type(value,'$.draft')='object'", homeworkKey(id)];
 
 export async function homeworkScreen(store, user, update, now, branded, statements) {
   const en = user.language === "en", tr = (ru, english) => en ? english : ru;
   const itemButton = (label, action, options = {}) => button(label, action, { branded, ...options });
   const back = itemButton(t(user).back, "hw", { icon: "back" });
-  const header = screenText("table", "<b>" + tr("Моё ДЗ", "My homework") + "</b>", branded);
+  const header = screenText("table", "<b>" + tr("Мое ДЗ", "My homework") + "</b>", branded);
   const screen = (text, rows = []) => ({ text: header + "\n\n" + text, keyboard: { inline_keyboard: [...rows, [back]] } });
   const [_, action = "list", arg, value] = update.action.split(":");
   const state = await readHomework(store, user.user_id);
@@ -57,28 +93,30 @@ export async function homeworkScreen(store, user, update, now, branded, statemen
     + "ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE settings.value IS NOT excluded.value",
   homeworkKey(user.user_id), JSON.stringify({ items, draft: nextDraft })]);
   const timetable = () => homeworkTimetable(store, user.group_id, now);
-  const expired = () => screen(tr("Этот шаг устарел. Открой «Моё ДЗ» и попробуй ещё раз.", "This step has expired. Open My homework and try again."));
+  const expired = () => screen(tr("Этот шаг устарел. Открой «Мое ДЗ» и попробуй снова.", "This step has expired. Open My homework and try again."));
   const dateLabel = date => personalDateLabel({ date }, user);
   const buttons = (count, page, prefix) => {
     const last = Math.max(0, Math.ceil(count / pageSize) - 1);
     return [page > 0 && itemButton("‹", prefix + (page - 1), { plain: true }),
       page < last && itemButton("›", prefix + (page + 1), { plain: true })].filter(Boolean);
   };
-  const dateChoices = async (key, callback) => (await homeworkDates(await timetable(), key, now)).map((day, i) => [
-    itemButton(tr(i === 0 ? "Ближайший" : "Следующий после него", i === 0 ? "Next class" : "One after that")
-      + " · " + dateLabel(day.date) + (day.preliminary ? tr(" (по плану)", " (planned)") : ""), callback(day.date), { plain: true }),
+  const dateRows = (dates, callback, saving = false) => dates.map((day, i) => [
+    itemButton((saving ? tr("Сохранить на ", "Save for ") + dateLabel(day.date)
+      : tr(i === 0 ? "Ближайший" : "Следующий после него", i === 0 ? "Next class" : "One after that") + " · " + dateLabel(day.date))
+      + (day.preliminary ? tr(" (по плану)", " (planned)") : ""), callback(day.date), { plain: true }),
   ]);
   const askText = (subject, editing, date) => {
     const first = tr(editing ? "Замени текст ДЗ" : "Запиши ДЗ", editing ? "Replace homework text" : "Write homework")
       + " · " + subject + (date ? " · " + dateLabel(date) : "");
-    return { first, view: { text: escapeHtml(first) + "\n\n" + tr("Ответь на это сообщение. Можно добавить ссылку, до 1 000 символов.", "Reply to this message. Links are welcome, up to 1,000 characters."),
-      keyboard: { force_reply: true }, editId: null } };
+    return { first, view: { text: escapeHtml(first) + "\n\n" + tr("Смахни сообщение влево или выбери «Ответить». Можно добавить ссылку, до 1 000 символов.", "Swipe this message or choose Reply. Links are welcome, up to 1,000 characters."),
+      keyboard: { inline_keyboard: [[itemButton(tr("Отмена", "Cancel"), "hw:cancel:" + update.update_id, { plain: true })],
+        [itemButton(t(user).main, "menu")]] }, editId: null } };
   };
   const detail = async (item, notice = "") => {
     const label = item.done ? tr("Выполнено", "Done") : tr("К сроку", "Due");
     const current = item.group === user.group_id && !item.done && item.date >= dateInTimezone(now, zone)
       ? await store.schedule(item.group, item.date) : null;
-    const moved = current && !subjectsOf(current).some(name => subjectKey(name) === item.key);
+    const moved = current && !subjectsOf(current).some(name => subjectKey(name) === subjectKey(item.subject));
     return screen([notice, "<b>" + escapeHtml(item.subject) + "</b> · " + label + " " + dateLabel(item.date), escapeHtml(item.text),
       moved && tr("В новом расписании на эту дату предмета нет. Можно выбрать другой срок.", "The updated timetable has no class on this date. You can move the due date.")].filter(Boolean).join("\n\n"), [
       [itemButton(tr(item.done ? "Вернуть в список" : "Выполнено", item.done ? "Reopen" : "Mark done"),
@@ -100,8 +138,9 @@ export async function homeworkScreen(store, user, update, now, branded, statemen
     if (action === "list" && state.draft) rows.push([itemButton(tr("Отменить черновик", "Discard draft"),
       "hw:cancel:" + state.draft.promptUpdate, { plain: true })]);
     rows.push([itemButton(t(user).main, "menu")]);
-    return { text: header + "\n\n" + (all.length ? tr("Выбери задание.", "Choose an assignment.") : tr("Здесь пока пусто.", "No assignments here yet."))
-      + (action === "day" && all.length > pageSize ? "\n" + tr("Остальные задания доступны в общем списке.", "More assignments are in the full list.") : ""),
+    const hint = !all.length ? tr("Здесь пока пусто", "No assignments yet")
+      : action === "day" && all.length > pageSize ? tr("Остальные задания в общем списке", "More assignments are in the full list") : "";
+    return { text: header + (hint ? "\n\n" + hint : ""),
     keyboard: { inline_keyboard: action === "day" ? [...rows, [back]] : rows } };
   }
   if (action === "cancel") {
@@ -115,16 +154,20 @@ export async function homeworkScreen(store, user, update, now, branded, statemen
     const subjects = listSubjects(await timetable());
     if (action === "pick") {
       if (!subjects.length) return screen(tr("Пока нет списка предметов для твоей группы.", "There are no subjects for your group yet."));
-      const page = Math.min(Number(arg), Math.ceil(subjects.length / pageSize) - 1);
-      const rows = subjects.slice(page * pageSize, (page + 1) * pageSize)
-        .map(([key, name]) => [itemButton(short(name, 58), "hw:subject:" + key, { plain: true })]);
-      if (subjects.length > pageSize) rows.push(buttons(subjects.length, page, "hw:pick:"));
-      return screen(tr("По какому предмету ДЗ?", "Which subject?"), rows);
+      const rows = [];
+      for (const { key, label } of subjects) {
+        const choice = itemButton(short(label, 58), "hw:subject:" + key, { plain: true });
+        const row = rows.at(-1);
+        if (row?.length === 1 && row[0].text.length <= 20 && choice.text.length <= 20) row.push(choice);
+        else rows.push([choice]);
+      }
+      return screen(tr("Выбери предмет", "Choose a subject"), rows);
     }
-    const subject = subjects.find(([key]) => key === arg)?.[1];
-    if (!subject) return expired();
+    const selected = subjects.find(({ key, legacy }) => key === arg || legacy.has(arg));
+    if (!selected) return expired();
+    const { label: subject, key } = selected;
     const prompt = askText(subject);
-    persist({ group: user.group_id, key: arg, subject, prompt: prompt.first, promptUpdate: update.update_id, until: now.getTime() + 86_400_000 });
+    persist({ group: user.group_id, key, subject, prompt: prompt.first, promptUpdate: update.update_id, until: now.getTime() + 86_400_000 });
     return prompt.view;
   }
   if (action === "edit") {
@@ -145,8 +188,8 @@ export async function homeworkScreen(store, user, update, now, branded, statemen
     const id = update.update_id;
     persist({ ...draft, id, text: content });
     const rows = draft.edit !== undefined ? [[itemButton(tr("Сохранить", "Save"), "hw:save:" + id, { style: "success", icon: "completed" })]]
-      : await dateChoices(draft.key, date => "hw:date:" + id + ":" + date);
-    return screen(escapeHtml(content) + "\n\n" + (draft.edit !== undefined ? tr("Сохранить новый текст?", "Save the new text?")
+      : dateRows(homeworkDates(await timetable(), subjectKey(draft.subject), now), date => "hw:save:" + id + ":" + date, true);
+    return screen("<b>" + escapeHtml(draft.subject) + "</b>\n" + escapeHtml(content) + "\n\n" + (draft.edit !== undefined ? tr("Сохранить новый текст?", "Save the new text?")
       : rows.length ? tr("К какому уроку?", "Which class is it due for?") : tr("Ближайших уроков пока не видно. Отправь текст ещё раз, когда появится расписание.", "No upcoming classes are listed. Reply again when the timetable is available.")), rows);
   }
   if (action === "date" || action === "save") {
@@ -159,13 +202,14 @@ export async function homeworkScreen(store, user, update, now, branded, statemen
       return detail(edited, tr("Сохранено", "Saved"));
     }
     if (items.length >= limit || !value) return expired();
-    const dates = homeworkDates(await timetable(), draft.key, now);
+    const key = subjectKey(draft.subject);
+    const dates = homeworkDates(await timetable(), key, now);
     if (!dates.some(day => day.date === value)) return screen(tr("Дата изменилась. Выбери актуальный урок.", "This date has changed. Pick an available class."),
-      dates.map(day => [itemButton(dateLabel(day.date), "hw:date:" + arg + ":" + day.date, { plain: true })]));
+      dateRows(dates, date => "hw:save:" + arg + ":" + date, true));
     if (action === "date") return screen("<b>" + escapeHtml(draft.subject) + "</b> · " + dateLabel(value) + "\n\n" + escapeHtml(draft.text), [
       [itemButton(tr("Сохранить", "Save"), "hw:save:" + arg + ":" + value, { style: "success", icon: "completed" })],
     ]);
-    const saved = { id: draft.id, group: draft.group, subject: draft.subject, key: draft.key, date: value, text: draft.text, done: false };
+    const saved = { id: draft.id, group: draft.group, subject: draft.subject, key, date: value, text: draft.text, done: false };
     items.push(saved);
     persist(null);
     return detail(saved, tr("Сохранено", "Saved"));
@@ -188,8 +232,8 @@ export async function homeworkScreen(store, user, update, now, branded, statemen
   }
   if (action === "move" && !entry.done && entry.group === user.group_id) {
     if (!value) return screen(tr("Выбери новый срок.", "Choose a new due date."),
-      await dateChoices(entry.key, date => "hw:move:" + entry.id + ":" + date));
-    const matches = homeworkDates(await timetable(), entry.key, now);
+      dateRows(homeworkDates(await timetable(), subjectKey(entry.subject), now), date => "hw:move:" + entry.id + ":" + date));
+    const matches = homeworkDates(await timetable(), subjectKey(entry.subject), now);
     if (!matches.some(day => day.date === value)) return expired();
     if (entry.date !== value) { entry.date = value; persist(state.draft); }
     return detail(entry, tr("Срок обновлён", "Due date updated"));
@@ -200,7 +244,7 @@ export async function homeworkScreen(store, user, update, now, branded, statemen
 export function homeworkOnCard(rendered, schedule, user, state) {
   if (!state?.items.length) return rendered;
   const keys = new Set(subjectsOf(schedule).map(subjectKey));
-  const tasks = state.items.filter(item => !item.done && item.group === user.group_id && item.date === schedule.date && keys.has(item.key));
+  const tasks = state.items.filter(item => !item.done && item.group === user.group_id && item.date === schedule.date && keys.has(subjectKey(item.subject)));
   if (!tasks.length) return rendered;
   const en = user.language === "en";
   const lines = tasks.slice(0, 3).map(item => "<b>" + escapeHtml(short(item.subject, 45)) + "</b> · "
