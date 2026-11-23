@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatScheduleMessage } from "../src/schedule/format.js";
+import { formatScheduleMessage, renderSchedule } from "../src/schedule/format.js";
 
 const schedule = {
   displayGroup: "8-Сба",
@@ -59,4 +59,12 @@ test("marks a corrected schedule", () => {
   assert.doesNotMatch(onlyRoom, /Что изменилось|кабинет: 328 → 329/);
   const escaped = formatScheduleMessage(schedule, { updated: true, changeSummary: ["1 урок: Биология → <Математика>"] });
   assert.match(escaped, /Биология → &lt;Математика&gt;/);
+});
+
+test("renders the branded group card with the existing schedule callback", () => {
+  const { text, replyMarkup } = renderSchedule(schedule, { withKeyboard: true });
+  assert.match(text, /<tg-emoji[^>]+>📚<\/tg-emoji> <b>Расписание — 8-Сба<\/b>/u);
+  assert.match(text, /<b>1-й урок<\/b> · 08:15–09:00\n<b>МАТЕМАТИКА<\/b>\n<i>Каб\. 245 · Чуприс А\.В\.<\/i>/u);
+  assert.deepEqual(replyMarkup.inline_keyboard[0].map(({ callback_data, style }) => [callback_data, style]),
+    [["schedule:2026-09-15:full", "success"]]);
 });

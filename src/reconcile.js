@@ -1,5 +1,5 @@
 import { cutoffReached, dateInTimezone, timeInTimezone } from "./dates.js";
-import { renderSchedule } from "./schedule/format.js";
+import { GROUP_SCHEDULE_STYLE, renderSchedule } from "./schedule/format.js";
 import { describeScheduleChanges } from "./schedule/changes.js";
 import { prepareChangeNotification, deliverChangeNotifications } from "./schedule/notifications.js";
 import { isMessageNotModified, isMessageUneditable, isPinPermissionError } from "./telegram.js";
@@ -30,7 +30,7 @@ function renderingFor(record, config, now, pinned) {
   }
   const completed = dayFinished;
   const mode = pinned || completed ? (record.viewMode ?? "compact") : "full";
-  const inputKey = JSON.stringify([scheduleHash(record), mode, pinned, completed, Boolean(record.corrected),
+  const inputKey = JSON.stringify([GROUP_SCHEDULE_STYLE, scheduleHash(record), mode, pinned, completed, Boolean(record.corrected),
     record.changeSummary ?? [],
     pinned || completed ? events.filter(event => event.end && (record.schedule.date < today
       || (record.schedule.date === today && event.end <= currentTime))).length : 0]);

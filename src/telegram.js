@@ -2,6 +2,7 @@ import { addDays, dateInTimezone, eventHasEnded } from "./dates.js";
 import { escapeHtml, formatScheduleMessage, renderSchedule } from "./schedule/format.js";
 import { formatNextMessage } from "./schedule/next.js";
 import { formatDaySummary } from "./schedule/day.js";
+import { sendWithThemeFallback } from "./chat-theme.js";
 
 export class TelegramApiError extends Error {
   constructor(method, description, errorCode = null, parameters = {}) {
@@ -86,25 +87,25 @@ export class TelegramClient {
   }
 
   sendMessage(chatId, text, { replyMarkup, replyToMessageId } = {}) {
-    return this.call("sendMessage", {
+    return sendWithThemeFallback((body, markup) => this.call("sendMessage", {
       chat_id: chatId,
-      text,
+      text: body,
       parse_mode: "HTML",
       disable_web_page_preview: true,
-      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      ...(markup ? { reply_markup: markup } : {}),
       ...(replyToMessageId ? { reply_parameters: { message_id: replyToMessageId, allow_sending_without_reply: false } } : {}),
-    });
+    }), text, replyMarkup);
   }
 
   editMessage(chatId, messageId, text, { replyMarkup } = {}) {
-    return this.call("editMessageText", {
+    return sendWithThemeFallback((body, markup) => this.call("editMessageText", {
       chat_id: chatId,
       message_id: messageId,
-      text,
+      text: body,
       parse_mode: "HTML",
       disable_web_page_preview: true,
-      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-    });
+      ...(markup ? { reply_markup: markup } : {}),
+    }), text, replyMarkup);
   }
 
   pinMessage(chatId, messageId) {

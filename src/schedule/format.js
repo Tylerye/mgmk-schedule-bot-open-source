@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import { dateInTimezone, timeInTimezone } from "../dates.js";
 import { eventDuration } from "./timeline.js";
 import { scheduleViewTimeline } from "./view-timeline.js";
+import { heading, lessonHeading, themedButton, themeIcon } from "../chat-theme.js";
+
+export const GROUP_SCHEDULE_STYLE = "group-card-v2";
 
 const WEEKDAYS = ["Воскресенье", "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"];
 const MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
@@ -22,9 +25,19 @@ function joinValues(values = []) {
   return escapeHtml(values.filter(Boolean).join(" / "));
 }
 
-function formatEvent(event, completed = false) {
+function formatEvent(event, completed, branded) {
   let block;
   if (event.type === "lesson") {
+    if (branded) {
+      const marker = completed ? "  " + themeIcon("completed", true) : "";
+      const lines = [
+        lessonHeading(event) + marker,
+        "<b>" + joinValues([event.subject, ...(event.subjectVariants ?? [])]) + "</b>",
+      ];
+      const details = [event.rooms?.length ? "Каб. " + joinValues(event.rooms) : "", joinValues(event.teachers)].filter(Boolean);
+      if (details.length) lines.push("<i>" + details.join(" · ") + "</i>");
+      return lines.join("\n");
+    }
     const time = event.start && event.end ? ` · ${event.start}–${event.end}` : "";
     if (completed) {
       const lines = [
@@ -44,9 +57,9 @@ function formatEvent(event, completed = false) {
     return lines.join("\n");
   }
   if (event.type === "break") block = `<u>☕ Перемена · ${eventDuration(event)} минут · ${event.start}–${event.end}</u>`;
-  else if (event.type === "large_break") block = `<u>🌿 Большая перемена · ${eventDuration(event)} минут · ${event.start}–${event.end}</u>`;
+  else if (event.type === "large_break") block = `<u>${branded ? themeIcon("large_break", true) : "🌿"} Большая перемена · ${eventDuration(event)} минут · ${event.start}–${event.end}</u>`;
   else if (event.type === "lunch") {
-    const lunch = `🍽 ОБЕД · ${eventDuration(event)} минут · ${event.start}–${event.end}`;
+    const lunch = `${branded ? themeIcon("lunch", true) : "🍽"} ОБЕД · ${eventDuration(event)} минут · ${event.start}–${event.end}`;
     block = `<u>${lunch}</u>`;
   }
   else if (event.type === "curator_hour" || event.type === "information_hour") {
@@ -65,8 +78,10 @@ function formatEvent(event, completed = false) {
   return block;
 }
 
-export function scheduleKeyboard(date, mode, { completed = false } = {}) {
+export function scheduleKeyboard(date, mode, { completed = false, branded = false } = {}) {
   const full = mode === "full";
+  if (branded) return { inline_keyboard: [[themedButton(full ? "Только актуальное" : completed ? "Показать всё" : "Прошедшие уроки",
+    { callback_data: `schedule:${date}:${full ? "compact" : "full"}` }, full ? "back" : "view", { branded, style: "success" })]] };
   return {
     inline_keyboard: [[{
       text: full ? "↩️ Только актуальное" : completed ? "📋 Показать всё" : "🕘 Прошедшие уроки",
@@ -90,6 +105,7 @@ export function formatScheduleMessage(schedule, {
   now = null,
   timezone = "Europe/Minsk",
   completed = false,
+  branded = false,
 } = {}) {
   const blocks = [];
   if (updated && !completed) {
@@ -101,7 +117,8 @@ export function formatScheduleMessage(schedule, {
   }
   const group = escapeHtml(schedule.displayGroup ?? "8-Сба");
   const title = completed && mode === "full" ? `📚 Прошедшие уроки — ${group}` : `📚 Расписание — ${group}`;
-  blocks.push(`${title}\n📅 ${dateTitle(schedule.date)}`);
+  const titleLine = branded ? heading("schedule", title.slice("📚 ".length), true) : title;
+  blocks.push(`${titleLine}\n${themeIcon("today", branded)} ${dateTitle(schedule.date)}`);
 
   const timeline = scheduleViewTimeline(schedule);
   const today = now ? dateInTimezone(now, timezone) : null;
@@ -115,15 +132,16 @@ export function formatScheduleMessage(schedule, {
   if (completed && mode === "compact") blocks.push("✅ Учебный день завершён");
   else if (visible.length === 0 && mode === "compact") blocks.push("✅ Учебный день завершён");
   else {
-    blocks.push(...visible.map(({ event, completed }) => formatEvent(event, mode === "full" && completed)));
+    blocks.push(...visible.map(({ event, completed }) => formatEvent(event, mode === "full" && completed, branded)));
   }
   return blocks.join("\n\n");
 }
 
 export function renderSchedule(schedule, options = {}) {
-  const text = formatScheduleMessage(schedule, options);
+  const branded = options.branded ?? true;
+  const text = formatScheduleMessage(schedule, { ...options, branded });
   const replyMarkup = options.withKeyboard
-    ? scheduleKeyboard(schedule.date, options.mode ?? "compact", { completed: options.completed })
+    ? scheduleKeyboard(schedule.date, options.mode ?? "compact", { completed: options.completed, branded })
     : { inline_keyboard: [] };
   const hash = createHash("sha256").update(JSON.stringify({ text, replyMarkup })).digest("hex");
   return { text, replyMarkup, hash };

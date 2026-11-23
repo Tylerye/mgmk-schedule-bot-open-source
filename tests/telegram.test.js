@@ -190,8 +190,8 @@ test("completed schedule callback edits its historical message after its pin rot
   assert.ok(edit, "callback should directly edit the historical Telegram message");
   assert.equal(String(edit[1]), "-300");
   assert.equal(edit[2], 55);
-  assert.match(edit[3], /✅ 1 урок/);
-  assert.deepEqual(edit[4].replyMarkup.inline_keyboard[0][0].text, "↩️ Только актуальное");
+  assert.match(edit[3], /1-й урок.*>✅<\/tg-emoji>/);
+  assert.deepEqual(edit[4].replyMarkup.inline_keyboard[0][0].text, "Только актуальное");
   assert.equal(typeof record.renderHash, "string");
 });
 

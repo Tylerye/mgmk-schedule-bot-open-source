@@ -74,7 +74,7 @@ test("cached renders still hide lessons at their exact end after a state reload"
   const edits = context.calls.filter(call => call.method === "edit");
   assert.equal(edits.length, 1);
   assert.match(edits[0].text, /Учебный день завершён/);
-  assert.doesNotMatch(edits[0].text, /1 урок/);
+  assert.doesNotMatch(edits[0].text, /1-й урок/);
 });
 
 test("publishes a future schedule immediately but keeps today's pin before 16:00", async () => {
@@ -331,7 +331,7 @@ test("after the final lesson, today's unpinned message is a completion card with
   assert.match(edit.text, /Вторник, 15 сентября/);
   assert.match(edit.text, /Учебный день завершён/);
   assert.doesNotMatch(edit.text, /Расписание обновлено/);
-  assert.equal(edit.options.replyMarkup.inline_keyboard[0][0].text, "📋 Показать всё");
+  assert.equal(edit.options.replyMarkup.inline_keyboard[0][0].text, "Показать всё");
   assert.equal(context.calls.filter(({ method }) => method === "send").length, 0);
   assert.equal(context.store.state.pinnedSchedule.date, "2026-09-16");
 });
@@ -355,8 +355,8 @@ test("user can expand a completed schedule after the next day's pin rotation", a
   assert.equal(today.viewMode, "full");
   const edit = context.calls.find((call) => call.method === "edit" && call.messageId === 93);
   assert.ok(edit);
-  assert.match(edit.text, /1 урок/);
-  assert.equal(edit.options.replyMarkup.inline_keyboard[0][0].text, "↩️ Только актуальное");
+  assert.match(edit.text, /1-й урок/);
+  assert.equal(edit.options.replyMarkup.inline_keyboard[0][0].text, "Только актуальное");
 });
 
 test("reconcile refreshes an already expanded historical schedule without reposting it", async () => {
