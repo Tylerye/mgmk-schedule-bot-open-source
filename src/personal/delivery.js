@@ -285,13 +285,17 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
         return;
       }
       if (await applyOutcome(store, job, result)) {
-        const statements = [["UPDATE users SET pin_message_id=?,pin_date=? WHERE user_id=?", desired.messageId, desired.date, id]];
-        if (user.pin_message_id && user.pin_message_id !== desired.messageId) statements.push(store.jobStatement(user, "unpin", String(user.pin_message_id), { priority: 1, due: now.getTime(), payload: { messageId: user.pin_message_id } }));
         // Pin announcements removed: the automatic pin itself is sufficient
         const decoded = cards.map(c => ({ ...c, parts: JSON.parse(c.parts), schedule: c.schedule_payload ? JSON.parse(c.schedule_payload) : null }));
         const schedules = await store.schedulesForDates(user.group_id, cards.map(c => c.date));
         const next = nextDue({ ...user, pin_message_id: desired.messageId, pin_date: desired.date }, schedules, decoded, now);
-        if (user.next_due !== next) statements.push(dueStatement(user, next));
+        // Persist the new pin and its deadline in one row update. Leave the
+        // indexed deadline out of the statement when it is already current.
+        const pin = user.next_due === next
+          ? ["UPDATE users SET pin_message_id=?,pin_date=? WHERE user_id=?", desired.messageId, desired.date, id]
+          : ["UPDATE users SET pin_message_id=?,pin_date=?,next_due=? WHERE user_id=?", desired.messageId, desired.date, next, id];
+        const statements = [pin];
+        if (user.pin_message_id && user.pin_message_id !== desired.messageId) statements.push(store.jobStatement(user, "unpin", String(user.pin_message_id), { priority: 1, due: now.getTime(), payload: { messageId: user.pin_message_id } }));
         statements.push(doneJob(job));
         await store.batch(statements);
       }

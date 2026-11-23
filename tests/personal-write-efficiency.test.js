@@ -187,6 +187,22 @@ test('pin deadline is independent, switches once at 16:30, remains monotonic at 
   assert.equal((await f.store.user(100)).pin_message_id,98);
 });
 
+test('a confirmed pin persists the message and changed deadline in one user update', async t => {
+  const f = await fixture(t);
+  const now = local('16:30');
+  await f.store.enqueue(await f.store.user(100), 'pin', '', { due: +now });
+  f.sqlite.exec(`CREATE TABLE pin_updates(n INTEGER);
+    CREATE TRIGGER track_pin_update AFTER UPDATE ON users
+    WHEN OLD.pin_message_id IS NOT NEW.pin_message_id OR OLD.next_due IS NOT NEW.next_due
+    BEGIN INSERT INTO pin_updates VALUES(1); END;`);
+  await deliverUser(f.store, f.client, 100, { now });
+  const user = await f.store.user(100);
+  assert.equal(user.pin_message_id, 98);
+  assert.ok(user.next_due > +now);
+  assert.equal((await f.store.first('SELECT COUNT(*) n FROM pin_updates')).n, 1);
+  assert.deepEqual(f.calls.map(c => c.method), ['pinChatMessage']);
+});
+
 test('only the pilot includes starts in full-view deadlines',async()=>{
   const s=await sampleSchedule('8ТС');
   assert.equal(nextRenderAt(s,local('08:16')),local('09:00').getTime());
