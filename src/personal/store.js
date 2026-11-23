@@ -2,9 +2,10 @@ import { personalQuota } from './quota.js';
 import { dateInTimezone } from '../dates.js';
 const stoppedDays = new WeakMap();
 const idleReadEstimate = new WeakMap();
+const replaceJob = "payload=excluded.payload,revision=excluded.revision,status='pending',completed_at=NULL";
 export const JOB_CONFLICT_UPDATE = "ON CONFLICT(id) DO UPDATE SET epoch=excluded.epoch,priority=CASE WHEN jobs.status='pending' AND jobs.epoch=excluded.epoch THEN MIN(jobs.priority,excluded.priority) ELSE excluded.priority END,"
   + "due=CASE WHEN jobs.status='pending' AND jobs.epoch=excluded.epoch THEN MIN(jobs.due,excluded.due) ELSE excluded.due END,"
-  + "payload=excluded.payload,revision=excluded.revision,status='pending',completed_at=NULL";
+  + replaceJob;
 // D1 and the future SQLite runtime share this small async SQL interface.
 // All mutable data below belongs to the separate personal database.
 export class PersonalStore {
@@ -105,10 +106,13 @@ export class PersonalStore {
     const row = await this.first("SELECT * FROM cards WHERE user_id=? AND group_id=? AND date=?", user.user_id, user.group_id, date);
     return row ? { ...row, parts: JSON.parse(row.parts), schedule: row.schedule_payload ? JSON.parse(row.schedule_payload) : null } : null;
   }
-  jobStatement(user, kind, date = "", { priority = 2, due = Date.now(), payload = {} } = {}) {
+  jobStatement(user, kind, date = "", { priority = 2, due = Date.now(), payload = {}, replacePending = false } = {}) {
     const id = `${user.user_id}:${kind}:${date}`;
+    const conflict = replacePending
+      ? "ON CONFLICT(id) DO UPDATE SET epoch=excluded.epoch,priority=excluded.priority,due=excluded.due," + replaceJob
+      : JOB_CONFLICT_UPDATE;
     return ["INSERT INTO jobs(id,user_id,epoch,kind,date,priority,due,payload) VALUES(?,?,?,?,?,?,?,?) "
-      + JOB_CONFLICT_UPDATE.replace('revision=excluded.revision', 'revision=jobs.revision+1'), id, user.user_id, user.epoch, kind, date, priority, due, JSON.stringify(payload)];
+      + conflict.replace('revision=excluded.revision', 'revision=jobs.revision+1'), id, user.user_id, user.epoch, kind, date, priority, due, JSON.stringify(payload)];
   }
   async enqueue(user, kind, date, options) { return this.batch([this.jobStatement(user, kind, date, options)]); }
   async lock(id, now, action) {

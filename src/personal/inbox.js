@@ -88,9 +88,10 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     let action = update.action;
     if (action.startsWith("table:")) action = "preview:" + action.slice("table:".length) + ":full";
     // Only the latest navigation request should survive rapid taps
-    jobs.push(["UPDATE jobs SET status='superseded',completed_at=COALESCE(completed_at,unixepoch()*1000),"
+    const supersedeNavigation = ["UPDATE jobs SET status='superseded',completed_at=COALESCE(completed_at,unixepoch()*1000),"
       + "payload=CASE WHEN json_extract(payload,'$.homework')=1 THEN '{}' ELSE payload END "
-      + "WHERE user_id=? AND status='pending' AND kind IN ('reply','callback','commands')", user.user_id]);
+      + "WHERE user_id=? AND status='pending' AND kind IN ('reply','callback','commands')", user.user_id];
+    jobs.push(supersedeNavigation);
     if (action === "start") action = user.group_id ? "menu" : "language";
     if ((action === "menu" || update.action === "start") && user.has_homework) jobs.push(discardHomeworkDraft(user.user_id));
     if (action === "hw" || action.startsWith("hw:")) {
@@ -271,9 +272,18 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     const unchanged = only && !only.supportDetails && update.acknowledged && !changed.length && jobs.length === 1
       && only.editId && String(user.user_id) !== String(ownerId) && !await isTimetableMessage(store, user, only.editId)
       && await store.setting(`screen-v1:${user.user_id}:${only.editId}`) === screenHash(richScreen(only.richHtml) ?? only.text, only.keyboard);
-    if (!unchanged) for (const [index, payload] of replies.entries()) jobs.push(job(user, "reply", payload.editId ? "screen" : `${row.update_id}:${index}`, {
-      priority: -2, payload: { ...payload, manual: true, ...(action === "hw" || action.startsWith("hw:") ? { homework: true } : {}) },
-    }));
+    if (!unchanged) {
+      const screenId = `${user.user_id}:reply:screen`;
+      if (replies.some(payload => payload.editId)) {
+        // Replace the screen in one write instead of closing and reopening it.
+        supersedeNavigation[0] += " AND id<>?";
+        supersedeNavigation.push(screenId);
+      }
+      for (const [index, payload] of replies.entries()) jobs.push(job(user, "reply", payload.editId ? "screen" : `${row.update_id}:${index}`, {
+        priority: -2, replacePending: Boolean(payload.editId),
+        payload: { ...payload, manual: true, ...(action === "hw" || action.startsWith("hw:") ? { homework: true } : {}) },
+      }));
+    }
     // Insert after superseding older navigation jobs. Keep the visible reply
     // first; the transient acknowledgement must not delay the screen edit.
     if (update.callbackId && !update.acknowledged) jobs.push(job(user, "callback", String(row.update_id), { priority: -1, payload: { callbackId: update.callbackId, manual: true } }));
