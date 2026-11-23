@@ -26,6 +26,7 @@ export function parseTeacherSchedules(pdf, { expectedDate, bells }) {
   for (const teacher of TEACHERS) {
     const matches = pdf.pages.flatMap(page => page.rows.map(row => ({ row, page: page.pageNumber })))
       .filter(({ row }) => teacherNameKey(teacherRowText(row).split(/[¦|]/)[1]) === teacherNameKey(teacher.name));
+    if (teacher.optionalSourceRow && matches.length !== 1) continue;
     if (matches.length !== 1) throw new Error(`Expected one exact teacher row: ${teacher.name}, got ${matches.length}`);
     const { row, page } = matches[0];
     const cells = teacherRowText(row).split(/[¦|]/).slice(2, -1).map(v => v.trim());

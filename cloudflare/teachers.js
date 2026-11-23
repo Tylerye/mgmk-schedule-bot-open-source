@@ -31,7 +31,10 @@ export async function collectTeacherUpdate(database, update, config = {}) {
   const from = callback?.from ?? message?.from;
   if (message?.chat?.type !== "private" || from?.is_bot || !Number.isSafeInteger(from?.id) || from.id <= 0 || message.chat.id !== from.id) return null;
   const route = callback && /^teacher:(today|tomorrow|next|previous|full|compact|pause|resume|list)(?::(\d{4}-\d{2}-\d{2}))?(?::([a-z]+))?$/u.exec(callback.data ?? "");
-  const action = callback ? route?.[1] : commands.get(String(message.text ?? "").trim().split(/\s/u)[0].split("@")[0].toLowerCase());
+  const command = String(message.text ?? "").trim().split(/\s/u)[0].split("@")[0].toLowerCase();
+  const usernameSeat = !callback && from.id !== numeric(config.ADMIN_USER_ID) && accounts.find(t =>
+    t.allowUsernameEnrollment && !t.userId && t.username === from.username?.toLowerCase());
+  const action = callback ? route?.[1] : commands.get(command) ?? (usernameSeat && "next");
   const target = route?.[3];
   if (target && ["pause", "resume", "list"].includes(action)) return null;
   if ((!actions.has(action) && action !== "list") || (target && !TEACHERS.some(teacher => teacher.id === target))) return null;
@@ -40,10 +43,14 @@ export async function collectTeacherUpdate(database, update, config = {}) {
 
   // Persisted numeric enrollment survives username changes and absent optional configuration.
   const enrolled = await database.prepare("SELECT * FROM teacher_users WHERE user_id=?").bind(from.id).first();
+  if (enrolled && !callback && !commands.has(command)) return null;
   let teacher = enrolled && accounts.find(t => t.id === enrolled.teacher_id);
+  let enrolledByUsername = false;
   if (!teacher) {
-    teacher = accounts.find(t => Number.isSafeInteger(t.userId) && t.userId > 0 && t.userId === from.id);
-    if (!teacher || callback || !/^\/start(?:@\w+)?(?:\s|$)/iu.test(message.text ?? "")) return null;
+    const numericSeat = accounts.find(t => t.userId === from.id);
+    teacher = numericSeat ?? usernameSeat;
+    if (!teacher || callback || (numericSeat && command !== "/start")) return null;
+    enrolledByUsername = !numericSeat;
     if (teacher.userId && teacher.userId !== from.id) return null;
     await database.prepare("INSERT OR IGNORE INTO teacher_users(teacher_id,user_id,enrolled_at) VALUES(?,?,?)")
       .bind(teacher.id, from.id, new Date().toISOString()).run();
@@ -54,7 +61,7 @@ export async function collectTeacherUpdate(database, update, config = {}) {
   if (teacher.sourceTeacherId && (!teacher.userId || teacher.userId !== from.id)) return null;
   if (teacher.userId && teacher.userId !== from.id) return null;
   return { update_id: update.update_id, teacherId: teacher.id, action, userId: from.id,
-    ...(!callback && /^\/start(?:@\w+)?(?:\s|$)/iu.test(message.text ?? "") ? { welcome: true } : {}),
+    ...(!callback && (command === "/start" || enrolledByUsername) ? { welcome: true } : {}),
     ...(callback ? { callbackId: String(callback.id).slice(0, 256), messageId: message.message_id, date: route[2] ?? null, ...(target ? { target } : {}) } : {}) };
 }
 
@@ -130,15 +137,21 @@ export function chooseTeacherPin(publications, schedules, pinnedMessageId, today
 
 export async function storeTeacherResult(database, job, payload) {
   const schedules = payload?.teacherSchedules;
-  if (payload?.document?.id !== job.source_id || !Array.isArray(schedules) || schedules.length !== TEACHERS.length
-    || TEACHERS.some(t => schedules.filter(s => s.teacherId === t.id).length !== 1)
+  if (payload?.document?.id !== job.source_id || !Array.isArray(schedules) || schedules.length > TEACHERS.length
+    || schedules.some(s => !TEACHERS.some(t => t.id === s?.teacherId))
+    || TEACHERS.some(t => {
+      const count = schedules.filter(s => s.teacherId === t.id).length;
+      return count > 1 || (!t.optionalSourceRow && count === 0);
+    })
     || schedules.some(s => s.date !== job.schedule_date || !/^[a-f0-9]{64}$/.test(s.hash ?? "") || typeof s.status !== "string" || s.status.length > 500
       || !Array.isArray(s.lessons) || s.lessons.length > 24 || s.lessons.some(l => !Number.isInteger(l.number) || l.number < 1 || l.number > 24
         || typeof l.group !== "string" || l.group.length > 50 || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(l.start) || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(l.end) || l.start >= l.end))) return false;
   const statements = schedules.map(s => database.prepare(
     "INSERT INTO teacher_schedules(teacher_id,date,hash,payload,source_created_at) VALUES(?,?,?,?,?) "
     + "ON CONFLICT(teacher_id,date) DO UPDATE SET hash=excluded.hash,payload=excluded.payload,source_created_at=excluded.source_created_at "
-    + "WHERE teacher_schedules.source_created_at <= excluded.source_created_at",
+    + "WHERE teacher_schedules.source_created_at <= excluded.source_created_at "
+    + "AND (teacher_schedules.source_created_at IS NOT excluded.source_created_at "
+    + "OR teacher_schedules.hash IS NOT excluded.hash OR teacher_schedules.payload IS NOT excluded.payload)",
   ).bind(s.teacherId, s.date, s.hash, JSON.stringify(s), job.created_at));
   statements.push(database.prepare("INSERT INTO teacher_documents(source_id,fingerprint,source_created_at) VALUES(?,?,?) "
     + "ON CONFLICT(source_id) DO UPDATE SET fingerprint=excluded.fingerprint,source_created_at=excluded.source_created_at "
