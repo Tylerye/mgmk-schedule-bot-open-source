@@ -4,6 +4,7 @@ import { releasePage } from "./releases.js";
 import { findGroups } from "./catalog.js";
 import { screenHash, isTimetableMessage, richScreen } from './screen-state.js';
 import { hasLessonSummary, lessonDetailsChanges } from "./lesson-summary.js";
+import { homeworkOnCard, homeworkScreen, readCardHomework } from "./homework.js";
 import { t, menu, button, backToMenu, screenText, supportKeyboard, settingsKeyboard, groupsKeyboard, initialDates, selectedDate, renderPersonal, informationText, informationKeyboard, widgetGroup, widgetLabel } from "./view.js";
 
 export { collectPersonalUpdate } from "./update.js";
@@ -77,13 +78,20 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     const groupText = () => titled("group", t(user).choose);
     const missingText = () => titled("view", t(user).missing);
     let initialCards = [];
+    let homework;
+    const cardHomework = async () => homework === undefined ? (homework = await readCardHomework(store, user)) : homework;
     let repeatedSelection = false;
     let action = update.action;
     if (action.startsWith("table:")) action = "preview:" + action.slice("table:".length) + ":full";
     // Only the latest navigation request should survive rapid taps
-    jobs.push(["UPDATE jobs SET status='superseded',completed_at=COALESCE(completed_at,unixepoch()*1000) WHERE user_id=? AND status='pending' AND kind IN ('reply','callback','commands')", user.user_id]);
+    jobs.push(["UPDATE jobs SET status='superseded',completed_at=COALESCE(completed_at,unixepoch()*1000),"
+      + "payload=CASE WHEN json_extract(payload,'$.homework')=1 THEN '{}' ELSE payload END "
+      + "WHERE user_id=? AND status='pending' AND kind IN ('reply','callback','commands')", user.user_id]);
     if (action === "start") action = user.group_id ? "menu" : "language";
-    if (action === "language") {
+    if (action === "hw" || action.startsWith("hw:")) {
+      const view = await homeworkScreen(store, user, update, now, brandedMenu, jobs);
+      reply(view.text, view.keyboard, view.editId);
+    } else if (action === "language") {
       const en = user.language === "en";
       reply(titled("language", en ? "<b>Pick a language</b>" : "<b>На каком языке будем общаться?</b>"), {
         inline_keyboard: [[button(en ? "Русский" : "Русский ✓", "lang:ru", { branded: brandedMenu, style: "primary" }),
@@ -190,8 +198,9 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
         else {
           const schedule = schedules.find(s => s.date === date);
           const card = hasLessonSummary(schedule) ? await store.card(user, date) : null;
-          const rendered = renderPersonal(schedule, user, { now, branded: brandedMenu, previewTimer: true, lessonChanges: lessonDetailsChanges(schedule, card),
+          const base = renderPersonal(schedule, user, { now, branded: brandedMenu, previewTimer: true, lessonChanges: lessonDetailsChanges(schedule, card),
             mode: action.startsWith("preview:") ? action.split(":")[2] : "compact" });
+          const rendered = homeworkOnCard(base, schedule, user, await cardHomework());
           const keyboard = structuredClone(rendered.keyboard);
           for (const row of keyboard.inline_keyboard) for (const item of row) {
             const target = item.callback_data.slice("personal:".length).replace(/^view:/u, "preview:");
@@ -211,6 +220,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
           const days = publishedDayButtons(schedules, date, user, brandedMenu);
           if (days.length) keyboard.inline_keyboard.splice(-1, 0, days);
           reply(rendered.parts[page], keyboard, fromWidget ? null : update.messageId);
+          if (rendered !== base) replies.at(-1).homework = true;
         }
       }
     } else reply(menuText());
@@ -234,7 +244,8 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
         if (canSkip && !verifyMessageId && !original.blocked && original.next_due > now.getTime()) {
           const card = await store.card(user, s.date);
           if (card?.schedule_hash === s.hash && card.schedule_payload === JSON.stringify(s)) {
-            const rendered = renderPersonal(s, user, { now, branded: brandedMenu, mode: card.mode, lessonChanges: lessonDetailsChanges(s, card) });
+            const base = renderPersonal(s, user, { now, branded: brandedMenu, mode: card.mode, lessonChanges: lessonDetailsChanges(s, card) });
+            const rendered = homeworkOnCard(base, s, user, await cardHomework());
             const count = Math.max(rendered.parts.length, card.parts.length);
             const current = Array.from({ length: count }, (_, index) => card.parts[index]?.id
               && card.parts[index].hash === screenHash(rendered.parts[index] ?? t(user).emptyPart, index ? undefined : rendered.keyboard));
@@ -255,7 +266,9 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     const unchanged = only && !only.supportDetails && update.acknowledged && !changed.length && jobs.length === 1
       && only.editId && String(user.user_id) !== String(ownerId) && !await isTimetableMessage(store, user, only.editId)
       && await store.setting(`screen-v1:${user.user_id}:${only.editId}`) === screenHash(richScreen(only.richHtml) ?? only.text, only.keyboard);
-    if (!unchanged) for (const [index, payload] of replies.entries()) jobs.push(job(user, "reply", payload.editId ? "screen" : `${row.update_id}:${index}`, { priority: -2, payload: { ...payload, manual: true } }));
+    if (!unchanged) for (const [index, payload] of replies.entries()) jobs.push(job(user, "reply", payload.editId ? "screen" : `${row.update_id}:${index}`, {
+      priority: -2, payload: { ...payload, manual: true, ...(action === "hw" || action.startsWith("hw:") ? { homework: true } : {}) },
+    }));
     // Insert after superseding older navigation jobs. Keep the visible reply
     // first; the transient acknowledgement must not delay the screen edit.
     if (update.callbackId && !update.acknowledged) jobs.push(job(user, "callback", String(row.update_id), { priority: -1, payload: { callbackId: update.callbackId, manual: true } }));

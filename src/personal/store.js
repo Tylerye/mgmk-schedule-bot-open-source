@@ -46,7 +46,8 @@ export class PersonalStore {
     return this.run("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE settings.value IS NOT excluded.value", key, JSON.stringify(value));
   }
   async user(id) {
-    const row = await this.first("SELECT u.*, p.value AS auto_pin FROM users u LEFT JOIN settings p ON p.key=? WHERE u.user_id=?", `auto-pin:${id}`, id);
+    const row = await this.first("SELECT u.*, p.value AS auto_pin, EXISTS(SELECT 1 FROM settings WHERE key=?) AS has_homework "
+      + "FROM users u LEFT JOIN settings p ON p.key=? WHERE u.user_id=?", `homework:${id}`, `auto-pin:${id}`, id);
     return row && { ...row, auto_pin: row.auto_pin === null ? true : JSON.parse(row.auto_pin) };
   }
   async groups() { return (await this.all("SELECT payload FROM catalog")).map(r => JSON.parse(r.payload)); }

@@ -168,6 +168,30 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
     assert.match(calls[14].body.text,/<\/b>\n<i>Кабинет 245/u);
     assert.match(calls[14].body.text,/Пока нет расписания/u);
     assert.equal(calls[14].body.rich_message,undefined);
+    const homeworkCallback = (call, prefix) => call.body.reply_markup.inline_keyboard.flat()
+      .find(button => button.callback_data.startsWith("personal:hw:" + prefix)).callback_data.slice(9);
+    await tap("hw:pick:0", 12, 16);
+    const practice = calls.at(-1).body.reply_markup.inline_keyboard.flat().find(button => /ПРАКТИКА/u.test(button.text));
+    await tap(practice.callback_data.slice(9), 13, 17);
+    const prompt = calls.at(-1).body;
+    assert.deepEqual(prompt.reply_markup, { force_reply: true });
+    assert.match(prompt.text, /^Запиши ДЗ · ПРАКТИКА/u);
+    const submitted = await relayPersonalUpdate({
+      BOT_TOKEN: "42:fixture", PERSONAL_ENABLED: "true", ADMIN_USER_ID: "100", PERSONAL_SHARED_SECRET: "local-test",
+      PERSONAL: { fetch: (url, options) => mf.dispatchFetch("http://localhost/inbox", options) },
+    }, { update_id: 14, message: { message_id: 701, chat: { type: "private", id: 100 }, from: { id: 100 },
+      text: "§ 8 https://example.org", reply_to_message: { message_id: 700, from: { id: 42, is_bot: true }, text: prompt.text } } });
+    assert.deepEqual(await submitted.json(), { ok: true, queued: true });
+    for (let i = 0; i < 25 && calls.length < 18; i++) await new Promise(resolve => setTimeout(resolve, 100));
+    assert.match(calls.at(-1).body.text, /К какому уроку/u);
+    const dateAction = homeworkCallback(calls.at(-1), "date:");
+    await tap(dateAction, 15, 19);
+    await tap(homeworkCallback(calls.at(-1), "save:"), 16, 20);
+    assert.match(calls.at(-1).body.text, /Сохранено/u);
+    const saved = await db.prepare("SELECT value FROM settings WHERE key='homework:100'").first("value");
+    assert.equal(JSON.parse(saved).items[0].text, "§ 8 https://example.org");
+    assert.equal(JSON.parse(saved).items[0].date, dateAction.slice(-10));
+    assert.equal(JSON.parse(saved).draft, null);
     await db.prepare('UPDATE budgets SET rows_written=36000').run();
     assert.equal((await route('/source-status')).status,503,'uncommitted upload cannot be acknowledged as successful');
   } finally {await mf.dispose();}

@@ -5,6 +5,7 @@ import { deliverUser, diagnosticText } from "../src/personal/delivery.js";
 import { TelegramClient } from "../src/telegram.js";
 import { activateWeeklyPlan, weeklySourceStatus } from "../src/personal/weekly-plan.js";
 import { readJson, InputError } from "../cloudflare/request-json.js";
+import { validHomeworkUpdate } from "../src/personal/update.js";
 import { pilotAllowed } from "../cloudflare/personal-relay.js";
 import { manualJobsOnly } from '../src/personal/quota.js';
 import { backgroundPolicy } from '../src/background-policy.js';
@@ -170,9 +171,10 @@ export default {
       }
       if (path === "/inbox") {
         if (budget.mode === "stopped") return json({ ok: true, limited: true });
-        const update = await readJson(request, 4096);
+        const update = await readJson(request, 8192);
         if (!Number.isSafeInteger(update.update_id) || update.update_id < 0 || !Number.isSafeInteger(update.userId) || update.userId <= 0
-          || !pilotAllowed(env, update.userId) || typeof update.action !== "string" || update.action.length > 100) return json({ ok: false }, 400);
+          || !pilotAllowed(env, update.userId) || typeof update.action !== "string" || update.action.length > 100
+          || !validHomeworkUpdate(update)) return json({ ok: false }, 400);
         // Revalidate the sanitized schema; this endpoint is private and also
         // authenticated independently from the main webhook/parser secret.
         const admitted = await enqueuePersonalUpdate(store, update);

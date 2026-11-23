@@ -12,7 +12,7 @@ export function weekRange(now) {
   return { today, start, end: addDays(start, 6) };
 }
 
-function plannedDay(plan, date) {
+export function plannedDay(plan, date) {
   const day = date >= plan?.effectiveFrom ? plan.days[dayKey(date)] : null;
   if (!day) return null;
   const lessons = day.lessons.map(([number, entry, room]) => {

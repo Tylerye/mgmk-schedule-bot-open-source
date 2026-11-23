@@ -6,7 +6,7 @@ export function pilotAllowed(env, id) {
 }
 export async function relayPersonalUpdate(env, update, teacherAccounts = []) {
   if (env.PERSONAL_ENABLED !== "true" || !env.PERSONAL || !env.PERSONAL_SHARED_SECRET) return null;
-  const collected = collectPersonalUpdate(update);
+  const collected = collectPersonalUpdate(update, Number(env.BOT_TOKEN?.split(":", 1)[0]));
   if (!collected || !pilotAllowed(env, collected.userId)) return null;
   if (collected.action === "diagnostics" && String(collected.userId) !== String(env.ADMIN_USER_ID)) return null;
   const from = update.callback_query?.from ?? update.message?.from;

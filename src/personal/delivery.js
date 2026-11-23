@@ -7,6 +7,7 @@ import { escapeHtml } from "../schedule/format.js";
 import { manualJobsOnly } from './quota.js';
 import { backgroundPolicy } from '../background-policy.js';
 import { isTimetableMessage, screenHash as hashScreen, richScreen } from './screen-state.js';
+import { homeworkOnCard, readCardHomework } from "./homework.js";
 
 const updateSurvey = "rating-update-20261123-v1";
 const surveyFormatJob = "format-" + updateSurvey;
@@ -98,7 +99,9 @@ export async function telegramOperation(store, client, user, key, method, body, 
 
 async function finishJob(store, job, status = "done") {
   const complete = ['done','superseded','cancelled'].includes(status) ? ',completed_at=COALESCE(completed_at,unixepoch()*1000)' : '';
-  await store.run("UPDATE jobs SET status=?" + complete + " WHERE id=? AND revision=?", status, job.id, job.revision);
+  const clearHomework = job.kind === "reply"
+    ? ",payload=CASE WHEN json_extract(payload,'$.homework')=1 THEN '{}' ELSE payload END" : "";
+  await store.run("UPDATE jobs SET status=?" + complete + clearHomework + " WHERE id=? AND revision=?", status, job.id, job.revision);
 }
 const doneJob = job => ["UPDATE jobs SET status='done',completed_at=COALESCE(completed_at,unixepoch()*1000) WHERE id=? AND revision=?", job.id, job.revision];
 async function applyOutcome(store, job, outcome) {
@@ -304,7 +307,8 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       if (!schedule) { await finishJob(store, job, "cancelled"); return; }
       const card = await store.card(user, job.date) ?? { parts: [], mode: "compact", schedule: null };
       const lessonChanges = lessonDetailsChanges(schedule, card);
-      const rendered = renderPersonal(schedule, user, { mode: card.mode, now, branded: brandedMenu, lessonChanges });
+      const base = renderPersonal(schedule, user, { mode: card.mode, now, branded: brandedMenu, lessonChanges });
+      const rendered = homeworkOnCard(base, schedule, user, await readCardHomework(store, user));
       const parts = [...card.parts];
       const count = Math.max(parts.length, rendered.parts.length);
       let changed = false;
@@ -427,13 +431,15 @@ async function editDueCard(store, user, candidate, next, date, { client, clock, 
 
 async function enqueueDueLocked(store, fresh, date, brandedMenu, direct) {
   const now = date.getTime(), { schedules, cards } = await loadCards(store, fresh);
+  const homework = schedules.length ? await readCardHomework(store, fresh) : null;
   const statements = [];
   let candidate;
   for (const schedule of schedules) {
     const card = cards.find(c => c.date === schedule.date);
     // New publications are queued by durable fanout, never by a clock tick.
     if (!card) continue;
-    const rendered = renderPersonal(schedule, fresh, { mode: card.mode, now: date, branded: brandedMenu, lessonChanges: lessonDetailsChanges(schedule, card) });
+    const base = renderPersonal(schedule, fresh, { mode: card.mode, now: date, branded: brandedMenu, lessonChanges: lessonDetailsChanges(schedule, card) });
+    const rendered = homeworkOnCard(base, schedule, fresh, homework);
     const count = Math.max(card.parts.length, rendered.parts.length);
     if (!Array.from({ length: count }, (_, i) => card.parts[i]?.hash === digest([rendered.parts[i] ?? t(fresh).emptyPart, i ? { inline_keyboard: [] } : rendered.keyboard])).every(Boolean)) {
       const pending = await store.first("SELECT 1 FROM jobs WHERE id=? AND status='pending' AND epoch=?", `${fresh.user_id}:card:${schedule.date}`, fresh.epoch);
