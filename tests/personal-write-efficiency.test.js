@@ -71,16 +71,29 @@ async function fixture(t, { cards=true }={}) {
   const calls=[],client={async call(method,body){calls.push({method,body});return method==='sendMessage'?{message_id:1000+calls.length}:true;}};
   return {...f,s,tomorrow,user,calls,client};
 }
-async function drain(f, now) {
+async function drain(f, now, mode = "normal") {
   let ms=now.getTime();
   for(let i=0;i<30;i++) {
     const job=await f.store.first("SELECT due FROM jobs WHERE status='pending' ORDER BY due LIMIT 1");
     if(!job) return;
     ms=Math.max(ms+2000,job.due);
-    await deliverUser(f.store,f.client,100,{now:new Date(ms)});
+    await deliverUser(f.store,f.client,100,{now:new Date(ms),mode});
   }
   assert.fail('delivery must converge');
 }
+
+for (const existingCard of [false, true]) test(`manual onboarding completes the automatic pin in saving mode, existing card=${existingCard}`, async t => {
+  const f = await fixture(t, { cards: existingCard });
+  const now = local('08:59');
+  await f.store.run('UPDATE users SET pin_message_id=NULL,pin_date=NULL WHERE user_id=100');
+  await enqueuePersonalUpdate(f.store, { update_id:1, userId:100, action:existingCard ? 'start' : 'group:'+f.s.canonicalGroup });
+  await processPersonalInbox(f.store, await f.store.first('SELECT * FROM inbox WHERE update_id=1'), now);
+  await drain(f,now,'saving');
+  const card = await f.store.card(f.user,f.s.date);
+  assert.equal((await f.store.user(100)).pin_message_id,card.parts[0].id);
+  assert.equal(f.calls.filter(c=>c.method==='pinChatMessage').length,1);
+  assert.equal(f.calls.filter(c=>c.method==='sendMessage' && c.body.text.includes('МАТЕМАТИКА')).length,existingCard ? 0 : 2);
+});
 
 test('unchanged cards finish once without metadata writes, pin jobs or deadline rewrites',async t=>{
   const f=await fixture(t);

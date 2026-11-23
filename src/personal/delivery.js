@@ -134,11 +134,17 @@ function nextDue(user, schedules, cards, now) {
 function dueStatement(user, value) {
   return ["UPDATE users SET next_due=? WHERE user_id=? AND next_due IS NOT ?", value, user.user_id, value];
 }
-async function pinStatement(store, user, cards, now) {
+async function pinStatement(store, user, cards, now, manual = false) {
   if (!user.auto_pin || user.paused || !choosePersonalPin(pinCards(cards), currentPin(user), now)) return [];
   // A pending check reads current cards; replacing it would only bump revisions.
-  const pending = await store.first("SELECT 1 FROM jobs WHERE user_id=? AND kind='pin' AND status='pending' AND epoch=? LIMIT 1", user.user_id, user.epoch);
-  return pending ? [] : [store.jobStatement(user, "pin", "", { priority: 1, due: now.getTime() })];
+  const pending = await store.first("SELECT id, json_extract(payload,'$.manual') AS manual FROM jobs WHERE id=? AND status='pending' AND epoch=?",
+    `${user.user_id}:pin:`, user.epoch);
+  if (pending) {
+    if (!manual || pending.manual) return [];
+    // Keep the same revision and retry deadline, including a Telegram cooldown.
+    return [["UPDATE jobs SET payload=json_set(payload,'$.manual',json('true')) WHERE id=?", pending.id]];
+  }
+  return [store.jobStatement(user, "pin", "", { priority: 1, due: now.getTime(), ...(manual ? { payload: { manual: true } } : {}) })];
 }
 
 export async function deliverUser(store, client, id, { now = new Date(), mode = "normal", ownerId, supportDetails, clock, catchUp = false, widgetEnabled = false, brandedMenu = false } = {}) {
@@ -298,7 +304,9 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
           ? ["UPDATE users SET pin_message_id=?,pin_date=? WHERE user_id=?", desired.messageId, desired.date, id]
           : ["UPDATE users SET pin_message_id=?,pin_date=?,next_due=? WHERE user_id=?", desired.messageId, desired.date, next, id];
         const statements = [pin];
-        if (user.pin_message_id && user.pin_message_id !== desired.messageId) statements.push(store.jobStatement(user, "unpin", String(user.pin_message_id), { priority: 1, due: now.getTime(), payload: { messageId: user.pin_message_id } }));
+        if (user.pin_message_id && user.pin_message_id !== desired.messageId) statements.push(store.jobStatement(user, "unpin", String(user.pin_message_id), { priority: 1, due: now.getTime(), payload: {
+          messageId: user.pin_message_id, ...(payload.manual ? { manual: true } : {}),
+        } }));
         statements.push(doneJob(job));
         await store.batch(statements);
       }
@@ -371,7 +379,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       if (!user.paused && !payload.history) {
         const { cards, schedules } = await loadCards(store, user, job.date);
         cards.push({ ...card, date: job.date, parts, schedule });
-        statements.push(...await pinStatement(store, user, cards, now));
+        statements.push(...await pinStatement(store, user, cards, now, payload.manual === true));
         schedules.push(schedule);
         const next = nextDue(user, schedules, cards, now);
         if (user.next_due !== next) statements.push(dueStatement(user, next));

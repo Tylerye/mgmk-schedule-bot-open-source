@@ -135,7 +135,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
         jobs.push(["INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", 'auto-pin:'+user.user_id, JSON.stringify(Boolean(user.auto_pin))]);
         if (!user.auto_pin && user.pin_message_id) {
           jobs.push(job(user,'unpin',String(user.pin_message_id),{priority:0,payload:{messageId:user.pin_message_id,manual:true}}));
-          jobs.push(["UPDATE users SET pin_message_id=NULL,pin_date=NULL WHERE user_id=?",user.user_id]);
+          user.pin_message_id=null;
           user.pin_date=null;
         } else if(user.auto_pin) { jobs.push(["UPDATE jobs SET status='superseded' WHERE user_id=? AND kind='unpin' AND status='pending'",user.user_id]); jobs.push(job(user,'pin','',{priority:1,payload:{manual:true}})); }
       }
@@ -246,7 +246,8 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
         // an older bot version, even when the saved render hash still matches.
         const verifyMessageId = starting && user.pin_date === s.date ? user.pin_message_id : null;
         // Keep the first selected card on the normal path to reconcile pins and deadlines.
-        const canSkip = starting || (repeatedSelection && s !== initialCards[0]);
+        const needsFirstPin = user.auto_pin && !user.paused && !user.pin_message_id && s === initialCards[0];
+        const canSkip = !needsFirstPin && (starting || (repeatedSelection && s !== initialCards[0]));
         if (canSkip && !verifyMessageId && !original.blocked && original.next_due > now.getTime()) {
           const card = await store.card(user, s.date);
           if (card?.schedule_hash === s.hash && card.schedule_payload === JSON.stringify(s)) {
@@ -263,7 +264,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
         jobs.push(job(user, "card", s.date, { priority: 0, payload: starting ? { manual: true, verifyMessageId } : { manual: true } }));
       }
     }
-    const keys = ["language", "group_id", "epoch", "screen", "sound", "changes", "pin", "paused", "blocked", "support_seen", "pin_date", "next_due"];
+    const keys = ["language", "group_id", "epoch", "screen", "sound", "changes", "pin", "paused", "blocked", "support_seen", "pin_message_id", "pin_date", "next_due"];
     const changed = keys.filter(key => user[key] !== original[key]);
     // Only skip a proven standalone screen, using its durable successful receipt.
     // User/card/source state is freshly read under the same lock as delivery.
