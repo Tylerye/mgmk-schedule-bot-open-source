@@ -106,7 +106,8 @@ export async function withStateLock(database, task, { name = "state", leaseMs = 
     + " ON CONFLICT(name) DO UPDATE SET owner=" + nextOwner + ",locked_until=excluded.locked_until WHERE runtime_locks.locked_until<=?"
     + (interval === null ? '' : " AND COALESCE(json_extract(" + saved + ",'$.interval'),-1)<?"),
   ).bind(name, owner, now + leaseMs, ...(interval === null ? [] : [`maintenance-admission:${lane}`, interval]), now, ...(interval === null ? [] : [interval])).run();
-  if ((acquired.meta?.changes ?? 0) !== 1) return { acquired: false };
+  // An inserted lock can also update its durable storage counter.
+  if (!(acquired.meta?.changes > 0)) return { acquired: false };
   try { return { acquired: true, value: await task() }; }
   finally {
     const persistent = name === 'state' || name === 'source' || name === 'teacher-source' || name.startsWith('teacher:');

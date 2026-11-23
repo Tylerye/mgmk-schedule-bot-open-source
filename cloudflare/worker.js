@@ -421,7 +421,7 @@ async function handleMaintenance(request, env, pathname, context) {
   if (request.method !== "POST") return json({ ok: false }, 405);
   const interval = Math.floor(Number(request.headers.get("x-maintenance-time")) / 60000);
   const combinedSourceLease = lane === "source" || lane === "teacher-source";
-  const claim = async () => (await env.DB.prepare("INSERT INTO runtime_locks(name,owner,locked_until) VALUES(?,'maintenance',?) ON CONFLICT(name) DO UPDATE SET locked_until=excluded.locked_until WHERE runtime_locks.locked_until<excluded.locked_until").bind(`maintenance-admission:${lane}`, interval).run()).meta?.changes === 1;
+  const claim = async () => (await env.DB.prepare("INSERT INTO runtime_locks(name,owner,locked_until) VALUES(?,'maintenance',?) ON CONFLICT(name) DO UPDATE SET locked_until=excluded.locked_until WHERE runtime_locks.locked_until<excluded.locked_until").bind(`maintenance-admission:${lane}`, interval).run()).meta?.changes > 0;
   // Idle probes only read current state and coalesce health. Claim the signed
   // minute only when there is actual work, before its execution lease/API calls.
   const deferredAdmission = ["live", "queues", "attention"].includes(lane)
