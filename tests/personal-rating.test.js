@@ -22,7 +22,7 @@ test('survey binds to its Telegram receipt and saves only one decision', async t
   await tap(100, 42, '5');
   await tap(200, 42, 'later');
   assert.equal(await f.store.setting('rating-20261120-v1:100'), 2);
-  assert.match(await diagnosticText(f.store, now), /Rating: 2 \/ 5 · 1 votes/u);
+  assert.doesNotMatch(await diagnosticText(f.store, now, null, { showUpdateRating: true }), /Rating:/u);
   const calls = [];
   const client = { async call(method, body) { calls.push({ method, body }); return true; } };
   await deliverUser(f.store, client, 100, { now });
@@ -48,4 +48,32 @@ test('update rating is isolated from the previous survey and visible only in own
   assert.equal(await f.store.setting(campaign + ':123'), 5);
   assert.doesNotMatch(await diagnosticText(f.store, now), /Оценка обновления/u);
   assert.match(await diagnosticText(f.store, now, null, { showUpdateRating: true }), /Оценка обновления · 5 \/ 5 · голосов 1/u);
+});
+
+test('the update notice repairs paragraphs and never reopens a voted message', async t => {
+  const f = await personalFixture(); t.after(() => f.close());
+  const now = new Date();
+  const campaign = 'rating-update-20261123-v1';
+  const collapsed = '<b>Ребят, бот обновился</b>Переделал меню и добавил просмотр на неделюНажмите /start еще раз, чтобы открыть новое меню<b>Как вам обновление?</b>Поставьте от 1 до 5 звезд ниже';
+  const keyboard = { inline_keyboard: [[{ text: '5 ⭐', callback_data: 'personal:rating:update-20261123:5' }]] };
+  await f.store.run('INSERT INTO users(user_id) VALUES(100),(101),(102)');
+  for (const id of [100,101,102]) {
+    await f.store.enqueue(await f.store.user(id), 'alert', campaign, { due: +now, payload: { manual: true, text: collapsed, keyboard } });
+  }
+  await f.store.run("UPDATE jobs SET status='done' WHERE user_id<>100");
+  for (const id of [101,102]) {
+    await f.store.run("INSERT INTO operations(id,user_id,method,status,result,started_at) VALUES(?,?,'sendMessage','succeeded',?,?)",
+      id + ':alert:' + campaign + ':1:0:receipt', id, JSON.stringify({message_id:42}), +now);
+    await f.store.enqueue(await f.store.user(id), 'alert', 'format-' + campaign, { due: +now, payload: { manual: true } });
+  }
+  await f.store.setSetting(campaign + ':102', 5);
+  const calls = [];
+  const client = { async call(method, body) { calls.push([method, body]); return { message_id: 123 }; } };
+  for (const [i,id] of [100,101,102].entries()) await deliverUser(f.store, client, id, { now: new Date(+now + 2000 * i) });
+  assert.deepEqual(calls.map(([method, body]) => [method, body.chat_id, body.message_id]), [['sendMessage',100,undefined],['editMessageText',101,42]]);
+  for (const [, body] of calls) {
+    assert.equal(body.text.split('\n\n').length, 4);
+    assert.match(body.text, /обновление\?<\/b>\nПоставьте/u);
+    assert.deepEqual(body.reply_markup, keyboard);
+  }
 });
