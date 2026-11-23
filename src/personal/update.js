@@ -1,5 +1,6 @@
 const homeworkAction = /^hw(?::(?:list|pick):\d{1,2}|:subject:[a-f0-9]{16}|:(?:show|edit|done|reopen|remove|delete|move|cancel):\d{1,16}|:save:\d{1,16}(?::\d{4}-\d{2}-\d{2})?|:(?:date|move):\d{1,16}:\d{4}-\d{2}-\d{2}|:day:\d{4}-\d{2}-\d{2}(?::\d{1,2})?)?$/u;
 const homeworkPrompt = /^(?:Запиши ДЗ|Замени текст ДЗ|Write homework|Replace homework text) · .+\n/u;
+const manualHomeworkPrompt = /\n\n(?:Смахни сообщение|Swipe this message)/u;
 export const homeworkTextLimit = 1000;
 
 export function validHomeworkUpdate(update) {
@@ -29,6 +30,8 @@ export function collectPersonalUpdate(update, botId) {
     const prompt = message.reply_to_message;
     if (!command.startsWith("/") && Number.isSafeInteger(botId) && prompt?.from?.id === botId && prompt.from.is_bot
       && Number.isSafeInteger(prompt.message_id) && prompt.message_id > 0 && homeworkPrompt.test(prompt.text ?? "")) {
+      // Old ForceReply prompts can remain selected in Telegram's saved draft.
+      if (!manualHomeworkPrompt.test(prompt.text)) return null;
       const title = prompt.text.split("\n", 1)[0];
       if (title.length > 220) return null;
       const content = typeof message.text === "string" ? message.text.trim() : "";

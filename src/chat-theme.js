@@ -27,6 +27,7 @@ const themeEmoji = {
 };
 
 const fallback = {
+  homework: "📝",
   completed: "✅", live: "🟠",
   github: "💻", lunch: "🍴", large_break: "☕",
   today: "📅", tomorrow: "🗓", next: "⏭", schedule: "📚", settings: "⚙️",

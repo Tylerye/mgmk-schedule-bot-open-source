@@ -100,15 +100,18 @@ function homeworkBlock({ item, number }, en, preview = false) {
 }
 
 function homeworkHeading(en, branded) {
-  return screenText("support", "<b>" + (en ? "Homework" : "ДЗ") + "</b>", branded);
+  return screenText("homework", "<b>" + (en ? "Homework" : "ДЗ") + "</b>", branded);
 }
 
 export async function homeworkScreen(store, user, update, now, branded, statements) {
   const en = user.language === "en", tr = (ru, english) => en ? english : ru;
   const itemButton = (label, action, options = {}) => button(label, action, { branded, ...options });
   const back = itemButton(t(user).back, "hw", { icon: "back" });
-  const header = screenText("table", "<b>" + tr("Мое ДЗ", "My homework") + "</b>", branded);
-  const screen = (text, rows = []) => ({ text: header + "\n\n" + text, keyboard: { inline_keyboard: [...rows, [back]] } });
+  const main = itemButton(t(user).main, "menu");
+  const header = screenText("homework", "<b>" + tr("Мое ДЗ", "My homework") + "</b>", branded);
+  const screen = (text, rows = [], withMenu = false) => ({
+    text: header + "\n\n" + text, keyboard: { inline_keyboard: [...rows, withMenu ? [back, main] : [back]] },
+  });
   const [_, action = "list", arg, value] = update.action.split(":");
   const state = await readHomework(store, user.user_id);
   const { items } = state;
@@ -118,7 +121,7 @@ export async function homeworkScreen(store, user, update, now, branded, statemen
     + "ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE settings.value IS NOT excluded.value",
   homeworkKey(user.user_id), JSON.stringify({ items, draft: nextDraft })]);
   const timetable = () => homeworkTimetable(store, user.group_id, now);
-  const expired = () => screen(tr("Этот шаг устарел. Открой «Мое ДЗ» и попробуй снова.", "This step has expired. Open My homework and try again."));
+  const expired = () => screen(tr("Этот шаг устарел\nОткрой «Мое ДЗ» и попробуй еще раз", "Open My homework and try again"));
   const dateLabel = date => personalDateLabel({ date }, user);
   const buttons = (count, page, prefix) => {
     const last = Math.max(0, Math.ceil(count / pageSize) - 1);
@@ -133,9 +136,9 @@ export async function homeworkScreen(store, user, update, now, branded, statemen
   const askText = (subject, editing, date) => {
     const first = tr(editing ? "Замени текст ДЗ" : "Запиши ДЗ", editing ? "Replace homework text" : "Write homework")
       + " · " + subject + (date ? " · " + dateLabel(date) : "");
-    return { first, view: { text: escapeHtml(first) + "\n\n" + tr("Смахни сообщение влево или выбери «Ответить». Можно добавить ссылку, до 1 000 символов.", "Swipe this message or choose Reply. Links are welcome, up to 1,000 characters."),
+    return { first, view: { text: escapeHtml(first) + "\n\n" + tr("Смахни сообщение влево или выбери «Ответить»\nМожно написать текст или вставить ссылку · до 1 000 символов", "Swipe this message or choose Reply\nUse text or a link · up to 1,000 characters"),
       keyboard: { inline_keyboard: [[itemButton(tr("Отмена", "Cancel"), "hw:cancel:" + update.update_id, { plain: true })],
-        [itemButton(t(user).main, "menu")]] }, editId: null } };
+        [main]] }, editId: null } };
   };
   const detail = async (item, notice = "") => {
     const label = item.done ? tr("Выполнено", "Done") : tr("К сроку", "Due");
@@ -143,13 +146,13 @@ export async function homeworkScreen(store, user, update, now, branded, statemen
       ? await store.schedule(item.group, item.date) : null;
     const moved = current && !subjectsOf(current).some(name => subjectKey(name) === subjectKey(item.subject));
     return screen([notice, "<b>" + escapeHtml(item.subject) + "</b> · " + label + " " + dateLabel(item.date), escapeHtml(item.text),
-      moved && tr("В новом расписании на эту дату предмета нет. Можно выбрать другой срок.", "The updated timetable has no class on this date. You can move the due date.")].filter(Boolean).join("\n\n"), [
+      moved && tr("В новом расписании на этот день пары нет\nЕсли нужно, перенеси ДЗ", "The updated timetable has no class that day\nYou can move the assignment")].filter(Boolean).join("\n\n"), [
       [itemButton(tr(item.done ? "Вернуть в список" : "Выполнено", item.done ? "Reopen" : "Mark done"),
         "hw:" + (item.done ? "reopen:" : "done:") + item.id, { style: "success", icon: "completed" })],
       [itemButton(tr("Изменить текст", "Edit text"), "hw:edit:" + item.id, { icon: "table" }),
         ...(item.group === user.group_id && !item.done ? [itemButton(tr("Перенести", "Move"), "hw:move:" + item.id, { plain: true })] : [])],
       [itemButton(tr("Удалить", "Delete"), "hw:remove:" + item.id, { style: "danger", plain: true })],
-    ]);
+    ], true);
   };
 
   if (action === "day") {
@@ -168,8 +171,9 @@ export async function homeworkScreen(store, user, update, now, branded, statemen
       page > 0 && itemButton("‹", "hw:day:" + arg + ":" + (page - 1), { plain: true }),
       page + 1 < pages.length && itemButton("›", "hw:day:" + arg + ":" + (page + 1), { plain: true }),
     ].filter(Boolean)] : [];
-    rows.push([itemButton(tr("Все ДЗ", "All homework"), "hw", { icon: "table" })],
-      [itemButton(tr("К расписанию", "Back to timetable"), "preview:" + arg + ":compact", { icon: "back" })]);
+    rows.push([itemButton(tr("Все ДЗ", "All homework"), "hw", { icon: "homework" }),
+      itemButton(tr("К расписанию", "Back to timetable"), "preview:" + arg + ":compact", { icon: "back" })],
+    [main]);
     const title = homeworkHeading(en, branded) + " · " + dateLabel(arg) + (pages.length > 1 ? " · " + (page + 1) + "/" + pages.length : "");
     return { text: title + "\n\n" + (pages[page].join("\n\n") || tr("На этот день ДЗ нет", "No homework on this date")),
       keyboard: { inline_keyboard: rows } };
@@ -183,7 +187,7 @@ export async function homeworkScreen(store, user, update, now, branded, statemen
     if (user.group_id) rows.push([itemButton(tr("Записать ДЗ", "Add homework"), "hw:pick:0", { style: "success", icon: "table" })]);
     if (state.draft) rows.push([itemButton(tr("Отменить черновик", "Discard draft"),
       "hw:cancel:" + state.draft.promptUpdate, { plain: true })]);
-    rows.push([itemButton(t(user).main, "menu")]);
+    rows.push([main]);
     const hint = !all.length ? tr("Здесь пока пусто", "No assignments yet") : "";
     return { text: header + (hint ? "\n\n" + hint : ""),
     keyboard: { inline_keyboard: rows } };
@@ -191,14 +195,14 @@ export async function homeworkScreen(store, user, update, now, branded, statemen
   if (action === "cancel") {
     if (!state.draft || String(state.draft.promptUpdate) !== arg) return expired();
     persist(null);
-    return screen(tr("Черновик отменён.", "Draft discarded."));
+    return screen(tr("Черновик отменен", "Draft discarded"));
   }
   if (action === "pick" || action === "subject") {
     if (!user.group_id) return expired();
-    if (items.length >= limit) return screen(tr("У тебя уже 100 заданий. Удали одно старое, чтобы добавить новое.", "You have 100 assignments. Delete an old one before adding another."));
+    if (items.length >= limit) return screen(tr("У тебя уже 100 заданий\nУдали одно старое, чтобы добавить новое", "You have 100 assignments\nDelete an old one to add another"));
     const subjects = listSubjects(await timetable());
     if (action === "pick") {
-      if (!subjects.length) return screen(tr("Пока нет списка предметов для твоей группы.", "There are no subjects for your group yet."));
+      if (!subjects.length) return screen(tr("Пока нет списка предметов для твоей группы", "There are no subjects for your group yet"));
       const rows = [];
       for (const { key, label } of subjects) {
         const choice = itemButton(short(label, 58), "hw:subject:" + key, { plain: true });
@@ -229,13 +233,13 @@ export async function homeworkScreen(store, user, update, now, branded, statemen
       + "AND json_extract(result,'$.message_id')=? LIMIT 1", prefix, prefix.slice(0, -1) + ";", update.homeworkPromptId);
     if (!prompt) return expired();
     const content = update.homeworkText.trim();
-    if (!content) return screen(tr("Ответь на первоначальный запрос текстом до 1 000 символов.", "Reply to the original prompt with text up to 1,000 characters."));
+    if (!content) return screen(tr("Ответь на то же сообщение текстом до 1 000 символов", "Reply to the same message with text up to 1,000 characters"));
     const id = update.update_id;
     persist({ ...draft, id, text: content });
     const rows = draft.edit !== undefined ? [[itemButton(tr("Сохранить", "Save"), "hw:save:" + id, { style: "success", icon: "completed" })]]
       : dateRows(homeworkDates(await timetable(), subjectKey(draft.subject), now), date => "hw:save:" + id + ":" + date, true);
     return screen("<b>" + escapeHtml(draft.subject) + "</b>\n" + escapeHtml(content) + "\n\n" + (draft.edit !== undefined ? tr("Сохранить новый текст?", "Save the new text?")
-      : rows.length ? tr("К какому уроку?", "Which class is it due for?") : tr("Ближайших уроков пока не видно. Отправь текст ещё раз, когда появится расписание.", "No upcoming classes are listed. Reply again when the timetable is available.")), rows);
+      : rows.length ? tr("К какому уроку?", "Which class is it due for?") : tr("Этой пары пока нет в расписании\nОтветь еще раз, когда появится дата", "No upcoming classes yet\nReply again when a date is available")), rows);
   }
   if (action === "date" || action === "save") {
     if (!draft?.text || String(draft.id) !== arg) return expired();
@@ -249,7 +253,7 @@ export async function homeworkScreen(store, user, update, now, branded, statemen
     if (items.length >= limit || !value) return expired();
     const key = subjectKey(draft.subject);
     const dates = homeworkDates(await timetable(), key, now);
-    if (!dates.some(day => day.date === value)) return screen(tr("Дата изменилась. Выбери актуальный урок.", "This date has changed. Pick an available class."),
+    if (!dates.some(day => day.date === value)) return screen(tr("Дата поменялась\nВыбери урок из нового расписания", "The date has changed\nPick a class from the updated timetable"),
       dateRows(dates, date => "hw:save:" + arg + ":" + date, true));
     if (action === "date") return screen("<b>" + escapeHtml(draft.subject) + "</b> · " + dateLabel(value) + "\n\n" + escapeHtml(draft.text), [
       [itemButton(tr("Сохранить", "Save"), "hw:save:" + arg + ":" + value, { style: "success", icon: "completed" })],
@@ -273,10 +277,10 @@ export async function homeworkScreen(store, user, update, now, branded, statemen
   if (action === "delete") {
     items.splice(items.indexOf(entry), 1);
     persist(state.draft?.edit === entry.id ? null : state.draft);
-    return screen(tr("Задание удалено.", "Assignment deleted."));
+    return screen(tr("Задание удалено", "Assignment deleted"));
   }
   if (action === "move" && !entry.done && entry.group === user.group_id) {
-    if (!value) return screen(tr("Выбери новый срок.", "Choose a new due date."),
+    if (!value) return screen(tr("Выбери новую дату", "Choose a new date"),
       dateRows(homeworkDates(await timetable(), subjectKey(entry.subject), now), date => "hw:move:" + entry.id + ":" + date));
     const matches = homeworkDates(await timetable(), subjectKey(entry.subject), now);
     if (!matches.some(day => day.date === value)) return expired();
@@ -303,7 +307,7 @@ export function homeworkOnCard(rendered, schedule, user, state, branded) {
   if (summary) parts[last] += heading + summary;
   return { ...rendered, parts, keyboard: {
     inline_keyboard: [...rendered.keyboard.inline_keyboard.slice(0, -1),
-      [button(en ? "Homework for this date" : "ДЗ к этому дню", "hw:day:" + schedule.date, { branded, icon: "support" })],
+      [button(en ? "Homework for this date" : "ДЗ к этому дню", "hw:day:" + schedule.date, { branded, icon: "homework" })],
       ...rendered.keyboard.inline_keyboard.slice(-1)],
   } };
 }

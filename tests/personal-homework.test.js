@@ -70,7 +70,9 @@ test("private homework follows its dated lesson, stays scoped to the owner, and 
   assert.deepEqual(buttons(dates).filter(b => b.callback_data.startsWith("personal:hw:save:")).map(b => b.callback_data.slice(-10)),
     ["2026-11-24", "2026-12-01"]);
   const save = buttons(dates).find(b => b.callback_data.endsWith("2026-11-24")).callback_data.slice(9);
-  assert.match((await tap(save)).body.text, /Сохранено/u);
+  const savedScreen = await tap(save);
+  assert.match(savedScreen.body.text, /Сохранено/u);
+  assert.deepEqual(savedScreen.body.reply_markup.inline_keyboard.at(-1).map(button => button.callback_data), ["personal:hw", "personal:menu"]);
   assert.match((await tap(save)).body.text, /устарел/u);
   const saved = await readHomework(f.store, 100);
   assert.equal(saved.items.length, 1);
@@ -82,11 +84,11 @@ test("private homework follows its dated lesson, stays scoped to the owner, and 
     { id: 10001, group: "8СА", subject: "Белорусская литература", key: "legacy", date: tomorrow.date, text: "Прочитать рассказ", done: false },
     { id: 10002, group: "8СА", subject: "Физика", key: "legacy", date: later.date, text: "Другая дата", done: false },
   ] });
-  assert.match((await tap("tomorrow")).body.text, /\n\n\n💛 <b>ДЗ<\/b>\n\n[\s\S]*1-й урок[\s\S]*Прочитать рассказ\n\n[\s\S]*8-й урок[\s\S]*§ 12/u);
+  assert.match((await tap("tomorrow")).body.text, /\n\n\n📝 <b>ДЗ<\/b>\n\n[\s\S]*1-й урок[\s\S]*Прочитать рассказ\n\n[\s\S]*8-й урок[\s\S]*§ 12/u);
   const day = await tap("hw:day:" + tomorrow.date);
   assert.match(day.body.text, /1-й урок[\s\S]*Прочитать рассказ\n\n[\s\S]*8-й урок[\s\S]*§ 12 и &lt;пример&gt;/u);
   assert.doesNotMatch(day.body.text, /Другая дата|Мое ДЗ/u);
-  assert.deepEqual(buttons(day).map(button => button.callback_data), ["personal:hw", "personal:preview:" + tomorrow.date + ":compact"]);
+  assert.deepEqual(buttons(day).map(button => button.callback_data), ["personal:hw", "personal:preview:" + tomorrow.date + ":compact", "personal:menu"]);
   assert.equal((await f.store.first("SELECT COUNT(*) n FROM jobs WHERE payload LIKE '%example.org%'")).n, 0);
   const user = await f.store.user(100);
   await f.store.enqueue(user, "card", tomorrow.date, { due: ms });
@@ -102,4 +104,14 @@ test("private homework follows its dated lesson, stays scoped to the owner, and 
   const stale = answer(abandonedId, "personal message");
   stale.message.reply_to_message.text = abandoned.body.text;
   assert.match((await update(stale, 100)).body.text, /устарел/u);
+  const edit = await tap("hw:edit:" + saved.items[0].id);
+  assert.equal(edit.body.reply_markup.force_reply, undefined);
+  assert.match(edit.body.text, /^Замени текст ДЗ/u);
+  const editId = 700 + calls.length;
+  const legacy = answer(editId, "6-6-6");
+  legacy.message.reply_to_message.text = "Замени текст ДЗ · ФИЗИКА\n\nОтветь на это сообщение. Можно добавить ссылку";
+  assert.equal(collectPersonalUpdate({ update_id: 1000, ...legacy }, 42), null);
+  const editAnswer = answer(editId, "Новый текст");
+  editAnswer.message.reply_to_message.text = edit.body.text;
+  assert.match((await update(editAnswer, 100)).body.text, /Сохранить новый текст/u);
 });

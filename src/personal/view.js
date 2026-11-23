@@ -13,15 +13,15 @@ export const words = {
     settings: "Настройки", help: "Как пользоваться", support: "Поддержать автора", group: "Группа", language: "Язык",
     feedback: "Обратная связь", privacy: "О боте и данных", contact: "Написать автору",
     feedbackText: "<b>Есть идея или что-то не работает?</b>\n\nНапиши @{contact}\nЕсли дело в расписании, скинь группу и дату — так проще найти, что случилось",
-    privacyText: "<b>О боте и данных</b>\n\nБот берет расписание из PDF колледжа\nС 20:00 до 06:30 по Минску он проверяет PDF раз в 15 минут\nСамо расписание можно открыть в любое время\n\nЕсли пару перенесли или отменили, лучше свериться с куратором — в PDF правка может появиться позже\n\n<blockquote expandable><b>Что хранит бот</b>\nТвой Telegram ID, группу, язык, настройки и отметки о доставке\nЕсли поставишь оценку, она сохранится один раз\nБот не хранит историю переписки и юзернейм\n\nБот работает в Telegram и Cloudflare, PDF обрабатывает GitHub Actions\nЕсли хочешь удалить свои данные, напиши @{contact}</blockquote>",
+    privacyText: "<b>О боте и данных</b>\n\nБот берет расписание из PDF колледжа\nС 20:00 до 06:30 по Минску проверяет PDF раз в 15 минут\nРасписание можно открыть в любое время\n\nЕсли пару перенесли или отменили, уточни у куратора\nВ PDF изменения могут появиться позже\n\n<blockquote expandable><b>Что хранит бот</b>\nТвой Telegram ID, группу, язык, настройки и отметки о доставке\nЕсли поставишь оценку, бот сохранит ее один раз\nИсторию переписки и имя пользователя бот не хранит\n\nБот работает в Telegram и Cloudflare\nPDF обрабатывает GitHub Actions\nХочешь удалить свои данные? Напиши @{contact}</blockquote>",
     sound: "Звук", changes: "Замены", auto_pin: "Закреп", pin: "Сообщение о закрепе", pause: "Автообновления",
     resume: "Возобновить автообновления", back: "Назад", more: "Далее", choose: "<b>В какой ты группе?</b>\n\nНайди свою в списке или просто напиши ее название сюда",
     missing: "<b>Пока не вижу расписание на этот день</b>\n\nЕсли есть пары или замены, пришлю их сюда, как только появится расписание",
     full: "Показать все пары", compact: "Скрывать прошедшие", past: "Прошедшие пары", remaining: "Оставшиеся пары", ended: "На сегодня все", lesson: "урок", room: "Кабинет",
     break: "Перемена", large_break: "Большая перемена", lunch: "Обед", curator_hour: "Кураторский час", information_hour: "Информационный час",
-    supportText: "<b>Хочешь поддержать бота?</b>\n\nРасписание бесплатное для всех\nЕсли хочешь помочь с развитием, реквизиты ниже",
+    supportText: "<b>Поддержать автора</b>\n\nРасписание бесплатное для всех\nХочешь помочь боту? Реквизиты ниже",
     channel: "ТГК автора", donate: "Реквизиты", later: "Позже", details: "<b>Реквизитов пока нет</b>", closed: "<b>Привет! Это расписание МГМК</b>\n\nКакой день посмотрим?",
-    helpText: "<b>Как пользоваться</b>\n\n<b>Нужны пары на сегодня или завтра?</b>\nЖми «Сегодня» или «Завтра»\nЕсли впереди выходные, жми «Ближайший день»\n\n<b>Хочешь посмотреть весь день?</b>\n«Показать все пары» вернет прошедшие уроки\n«Скрывать прошедшие» снова оставит только то, что еще идет или впереди\nСтрелками можно листать дни\n\n<blockquote expandable><b>Как работают замены и закреп</b>\nКогда в PDF что-то поменяется, я напишу сюда\nПосле 16:30 по Минску могу закрепить следующий учебный день\nЕсли пара идет после 16:30, она видна до конца\n\nЧтобы выключить закреп или уведомления, зайди в настройки</blockquote>",
+    helpText: "<b>Как пользоваться</b>\n\n<b>Расписание</b>\nЖми «Сегодня» или «Завтра»\nЕсли впереди выходные, жми «Ближайший день»\nСтрелками можно листать дни\n\n<b>Хочешь посмотреть весь день?</b>\n«Показать все пары» вернет прошедшие уроки\n«Скрывать прошедшие» оставит текущие и следующие пары\n\n<b>Мое ДЗ</b>\nВыбери предмет, ответь боту текстом или ссылкой и нажми нужную дату\n\n<blockquote expandable><b>Замены и закреп</b>\nКогда в PDF что-то поменяется, бот напишет сюда\nПосле 16:30 по Минску бот может закрепить следующий учебный день\nЕсли пара идет после 16:30, она видна до конца\n\nЗакреп и уведомления можно выключить в настройках</blockquote>",
     settingsText: "<b>Настройки</b>\n\nСмотри на значок рядом с подписью\n🟢 вкл · 🔴 выкл\n\n<blockquote expandable><b>Что тут можно поменять</b>\nЗакреп — расписание будет сверху чата\nЗвук — новое расписание придет со звуком\nЗамены — я напишу отдельно, если пара поменяется\nАвтообновления — выключи, если пока не нужны новые карточки\nКнопками дни можно смотреть всегда</blockquote>",
     changed: "Изменения в расписании", added: "добавлен", removed: "отменен", on: "вкл", off: "выкл", saving: "Автообновления пока на паузе\nРасписание можно открыть кнопками",
     part: "часть", emptyPart: "Остальное расписание теперь в предыдущих сообщениях", pinned: "Закреплено расписание", pilot: "Этот экран пока открыт для участников теста" },
@@ -68,7 +68,7 @@ export function menu(user, widgetEnabled = false, branded = false) {
   return { inline_keyboard: [
     [item(w.today, "today"), item(w.tomorrow, "tomorrow")],
     [item(w.next, "next"), item(w.week, "week")],
-    [button(user.language === "en" ? "My homework" : "Мое ДЗ", "hw", { branded, icon: "table", style: "success" })],
+    [button(user.language === "en" ? "My homework" : "Мое ДЗ", "hw", { branded, icon: "homework", style: "success" })],
     ...(widgetEnabled && user.group_id === widgetGroup ? [[item(widgetLabel(user), "widget")]] : []),
     [item(w.settings, "settings"), item(w.help, "help")],
     [item(w.updates, "updates:0")],
@@ -81,8 +81,8 @@ export const backToMenu = (user, branded) => ({ inline_keyboard: [[button(t(user
 export function informationText(user, action) {
   const text = t(user)[`${action}Text`].replaceAll("{contact}", escapeHtml(AUTHOR_USERNAME));
   if (action !== "privacy") return text;
-  const homework = user.language === "en" ? "Homework you save is private and can be deleted in My homework."
-    : "Сохранённое ДЗ видно только тебе. Его можно удалить в разделе «Мое ДЗ».";
+  const homework = user.language === "en" ? "Only you can see your homework\nYou can delete it in My homework"
+    : "Твое ДЗ видишь только ты\nУдалить его можно в «Мое ДЗ»";
   return text.replace("\n\n", "\n\n" + homework + "\n\n");
 }
 export const informationKeyboard = (user, branded) => ({ inline_keyboard: [
@@ -107,9 +107,9 @@ export function supportDetailsText(user, binding) {
   const english = user.language === "en";
   return [
     w.supportText,
-    `<blockquote expandable><b>МТБанк · ЕРИП и карта</b>\n${erip} → МТБанк → Пополнение карты\n${english ? "Contract number" : "Номер договора"} <code>${mtbankContract}</code>\n${english ? "Card transfer" : "Перевод на карту"} ${card(mtbankCard)}</blockquote>`,
-    `<blockquote expandable><b>Беларусбанк · ${english ? "Card" : "Карта"}</b>\n${english ? "Card transfer" : "Перевод на карту"} ${card(belarusbankCard)}</blockquote>`,
-    english ? "<i>Thanks for your support!</i>" : "<i>Спасибо, что поддерживаешь!</i>",
+    `<blockquote expandable><b>МТБанк · ЕРИП и карта</b>\n${erip} → МТБанк → Пополнение карты\n${english ? "Contract number" : "Номер договора"} · <code>${mtbankContract}</code>\n${english ? "Card number" : "Номер карты"} · ${card(mtbankCard)}</blockquote>`,
+    `<blockquote expandable><b>Беларусбанк · ${english ? "Card" : "Карта"}</b>\n${english ? "Card number" : "Номер карты"} · ${card(belarusbankCard)}</blockquote>`,
+    english ? "<i>Thanks for your support</i>" : "<i>Спасибо за поддержку</i>",
   ].join("\n\n");
 }
 export function settingsKeyboard(user, branded) {
