@@ -1,4 +1,4 @@
-import { lessonHeading, themeIcon, themedButton, sendWithThemeFallback } from "../src/chat-theme.js";
+import { lessonHeading, themeIcon, themedButton } from "../src/chat-theme.js";
 import { TEACHERS, escapeHtml } from "../src/teachers.js";
 import { dateTitle } from "../src/schedule/format.js";
 import { addDays, dateInTimezone, timeInTimezone } from "../src/dates.js";
@@ -116,9 +116,11 @@ export function formatTeacherSchedule(schedule, teacher, { now = new Date(), ful
   return lines.join("\n");
 }
 
-const showTeacherMessage = (client, userId, messageId, text, markup) => sendWithThemeFallback(
-  (body, replyMarkup) => messageId ? client.editMessage(userId, messageId, body, { replyMarkup })
-    : client.sendMessage(userId, body, { replyMarkup }), text, markup, { customEmojiOnly: true });
+const showTeacherMessage = (client, userId, messageId, text, replyMarkup) => {
+  const options = { replyMarkup, customEmojiOnly: true };
+  return messageId ? client.editMessage(userId, messageId, text, options)
+    : client.sendMessage(userId, text, options);
+};
 
 // A pin advances through teaching days. Midnight and missing/empty days must
 // never make it fall back to an older card or rotate through non-teaching days.
