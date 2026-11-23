@@ -201,7 +201,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
           const card = hasLessonSummary(schedule) ? await store.card(user, date) : null;
           const base = renderPersonal(schedule, user, { now, branded: brandedMenu, previewTimer: true, lessonChanges: lessonDetailsChanges(schedule, card),
             mode: action.startsWith("preview:") ? action.split(":")[2] : "compact" });
-          const rendered = homeworkOnCard(base, schedule, user, await cardHomework());
+          const rendered = homeworkOnCard(base, schedule, user, await cardHomework(), brandedMenu);
           const keyboard = structuredClone(rendered.keyboard);
           for (const row of keyboard.inline_keyboard) for (const item of row) {
             const target = item.callback_data.slice("personal:".length).replace(/^view:/u, "preview:");
@@ -246,7 +246,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
           const card = await store.card(user, s.date);
           if (card?.schedule_hash === s.hash && card.schedule_payload === JSON.stringify(s)) {
             const base = renderPersonal(s, user, { now, branded: brandedMenu, mode: card.mode, lessonChanges: lessonDetailsChanges(s, card) });
-            const rendered = homeworkOnCard(base, s, user, await cardHomework());
+            const rendered = homeworkOnCard(base, s, user, await cardHomework(), brandedMenu);
             const count = Math.max(rendered.parts.length, card.parts.length);
             const current = Array.from({ length: count }, (_, index) => card.parts[index]?.id
               && card.parts[index].hash === screenHash(rendered.parts[index] ?? t(user).emptyPart, index ? undefined : rendered.keyboard));

@@ -7,12 +7,12 @@ const releases = [
     version: "V1.4", date: "23.11.2026",
     ru: ["Мое ДЗ", [
       "В главном меню появилось «Мое ДЗ». Выбери предмет, ответь боту текстом или ссылкой и нажми дату, чтобы сохранить",
-      "Задание видно только тебе в списке ДЗ и личном расписании на выбранный день. Его можно изменить, перенести или отметить выполненным",
+      "В расписании задания идут по порядку уроков. Кнопка «ДЗ к этому дню» открывает личную сводку на эту дату",
       "В кабинете преподавателя обновили карточку расписания и закреп",
     ]],
     en: ["My homework", [
       "Open My homework in the main menu, choose a subject, reply with text or a link, and tap a date to save",
-      "Your assignments are private and appear in your homework list and personal timetable for the selected day. You can edit, move or complete them",
+      "Assignments appear in lesson order. Tap Homework for this date to open a private summary for that day",
       "Updated the timetable card and pin in the teacher view",
     ]],
   },

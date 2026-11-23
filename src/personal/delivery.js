@@ -308,7 +308,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       const card = await store.card(user, job.date) ?? { parts: [], mode: "compact", schedule: null };
       const lessonChanges = lessonDetailsChanges(schedule, card);
       const base = renderPersonal(schedule, user, { mode: card.mode, now, branded: brandedMenu, lessonChanges });
-      const rendered = homeworkOnCard(base, schedule, user, await readCardHomework(store, user));
+      const rendered = homeworkOnCard(base, schedule, user, await readCardHomework(store, user), brandedMenu);
       const parts = [...card.parts];
       const count = Math.max(parts.length, rendered.parts.length);
       let changed = false;
@@ -439,7 +439,7 @@ async function enqueueDueLocked(store, fresh, date, brandedMenu, direct) {
     // New publications are queued by durable fanout, never by a clock tick.
     if (!card) continue;
     const base = renderPersonal(schedule, fresh, { mode: card.mode, now: date, branded: brandedMenu, lessonChanges: lessonDetailsChanges(schedule, card) });
-    const rendered = homeworkOnCard(base, schedule, fresh, homework);
+    const rendered = homeworkOnCard(base, schedule, fresh, homework, brandedMenu);
     const count = Math.max(card.parts.length, rendered.parts.length);
     if (!Array.from({ length: count }, (_, i) => card.parts[i]?.hash === digest([rendered.parts[i] ?? t(fresh).emptyPart, i ? { inline_keyboard: [] } : rendered.keyboard])).every(Boolean)) {
       const pending = await store.first("SELECT 1 FROM jobs WHERE id=? AND status='pending' AND epoch=?", `${fresh.user_id}:card:${schedule.date}`, fresh.epoch);

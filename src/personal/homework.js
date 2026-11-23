@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { addDays, dateInTimezone, timeInTimezone } from "../dates.js";
 import { escapeHtml } from "../schedule/format.js";
 import { plannedDay } from "./week.js";
+import { lessonHeading } from "../chat-theme.js";
 import { button, personalDateLabel, screenText, t } from "./view.js";
 import { homeworkTextLimit } from "./update.js";
 
@@ -78,6 +79,30 @@ export const readCardHomework = (store, user) => user.has_homework ? readHomewor
 export const discardHomeworkDraft = id => ["UPDATE settings SET value=json_set(value,'$.draft',NULL) "
   + "WHERE key=? AND json_type(value,'$.draft')='object'", homeworkKey(id)];
 
+function orderedHomework(items, schedule, group, date, includeUnscheduled = false) {
+  const due = items.filter(item => !item.done && item.group === group && item.date === date);
+  if (!due.length) return [];
+  const lessonNumbers = new Map();
+  for (const lesson of schedule?.lessons ?? []) for (const { subject } of lesson.variants) {
+    const key = subjectKey(subject);
+    lessonNumbers.set(key, Math.min(lesson.number, lessonNumbers.get(key) ?? Infinity));
+  }
+  return due.map(item => ({ item, number: lessonNumbers.get(subjectKey(item.subject)) }))
+    .filter(task => includeUnscheduled || task.number !== undefined)
+    .sort((a, b) => (a.number ?? 99) - (b.number ?? 99) || a.item.id - b.item.id);
+}
+
+function homeworkBlock({ item, number }, en, preview = false) {
+  const text = preview ? item.text.replace(/\s+/gu, " ") : item.text;
+  const excerpt = preview && text.length > 160 ? short(text, 160) + "…" : text;
+  const title = number ? lessonHeading({ number }, en) + " · " : "";
+  return title + "<b>" + escapeHtml(item.subject) + "</b>\n" + escapeHtml(excerpt);
+}
+
+function homeworkHeading(en, branded) {
+  return screenText("support", "<b>" + (en ? "Homework" : "ДЗ") + "</b>", branded);
+}
+
 export async function homeworkScreen(store, user, update, now, branded, statements) {
   const en = user.language === "en", tr = (ru, english) => en ? english : ru;
   const itemButton = (label, action, options = {}) => button(label, action, { branded, ...options });
@@ -127,21 +152,41 @@ export async function homeworkScreen(store, user, update, now, branded, statemen
     ]);
   };
 
-  if (action === "list" || action === "day") {
-    const all = items.filter(item => action === "list" || (item.date === arg && item.group === user.group_id))
-      .sort((a, b) => Number(a.done) - Number(b.done) || a.date.localeCompare(b.date));
-    const page = action === "day" ? 0 : Math.min(Number(arg ?? 0), Math.max(0, Math.ceil(all.length / pageSize) - 1));
-    const shown = action === "day" ? all.slice(0, pageSize) : all.slice(page * pageSize, (page + 1) * pageSize);
+  if (action === "day") {
+    const schedule = user.group_id ? await store.schedule(user.group_id, arg) : null;
+    const tasks = orderedHomework(items, schedule, user.group_id, arg, true);
+    const pages = [[]];
+    let length = 0;
+    for (const task of tasks) {
+      const size = task.item.text.length + task.item.subject.length + 40;
+      if (length + size > 3500) { pages.push([]); length = 0; }
+      pages.at(-1).push(homeworkBlock(task, en));
+      length += size;
+    }
+    const page = Math.min(Number(value ?? 0), pages.length - 1);
+    const rows = pages.length > 1 ? [[
+      page > 0 && itemButton("‹", "hw:day:" + arg + ":" + (page - 1), { plain: true }),
+      page + 1 < pages.length && itemButton("›", "hw:day:" + arg + ":" + (page + 1), { plain: true }),
+    ].filter(Boolean)] : [];
+    rows.push([itemButton(tr("Все ДЗ", "All homework"), "hw", { icon: "table" })],
+      [itemButton(tr("К расписанию", "Back to timetable"), "preview:" + arg + ":compact", { icon: "back" })]);
+    const title = homeworkHeading(en, branded) + " · " + dateLabel(arg) + (pages.length > 1 ? " · " + (page + 1) + "/" + pages.length : "");
+    return { text: title + "\n\n" + (pages[page].join("\n\n") || tr("На этот день ДЗ нет", "No homework on this date")),
+      keyboard: { inline_keyboard: rows } };
+  }
+  if (action === "list") {
+    const all = [...items].sort((a, b) => Number(a.done) - Number(b.done) || a.date.localeCompare(b.date));
+    const page = Math.min(Number(arg ?? 0), Math.max(0, Math.ceil(all.length / pageSize) - 1));
+    const shown = all.slice(page * pageSize, (page + 1) * pageSize);
     const rows = shown.map(item => [itemButton((item.done ? "✓ " : "") + dateLabel(item.date) + " · " + short(item.subject, 45), "hw:show:" + item.id, { plain: true })]);
-    if (action === "list" && all.length > pageSize) rows.push(buttons(all.length, page, "hw:list:"));
+    if (all.length > pageSize) rows.push(buttons(all.length, page, "hw:list:"));
     if (user.group_id) rows.push([itemButton(tr("Записать ДЗ", "Add homework"), "hw:pick:0", { style: "success", icon: "table" })]);
-    if (action === "list" && state.draft) rows.push([itemButton(tr("Отменить черновик", "Discard draft"),
+    if (state.draft) rows.push([itemButton(tr("Отменить черновик", "Discard draft"),
       "hw:cancel:" + state.draft.promptUpdate, { plain: true })]);
     rows.push([itemButton(t(user).main, "menu")]);
-    const hint = !all.length ? tr("Здесь пока пусто", "No assignments yet")
-      : action === "day" && all.length > pageSize ? tr("Остальные задания в общем списке", "More assignments are in the full list") : "";
+    const hint = !all.length ? tr("Здесь пока пусто", "No assignments yet") : "";
     return { text: header + (hint ? "\n\n" + hint : ""),
-    keyboard: { inline_keyboard: action === "day" ? [...rows, [back]] : rows } };
+    keyboard: { inline_keyboard: rows } };
   }
   if (action === "cancel") {
     if (!state.draft || String(state.draft.promptUpdate) !== arg) return expired();
@@ -241,19 +286,24 @@ export async function homeworkScreen(store, user, update, now, branded, statemen
   return expired();
 }
 
-export function homeworkOnCard(rendered, schedule, user, state) {
+export function homeworkOnCard(rendered, schedule, user, state, branded) {
   if (!state?.items.length) return rendered;
-  const keys = new Set(subjectsOf(schedule).map(subjectKey));
-  const tasks = state.items.filter(item => !item.done && item.group === user.group_id && item.date === schedule.date && keys.has(subjectKey(item.subject)));
+  const tasks = orderedHomework(state.items, schedule, user.group_id, schedule.date);
   if (!tasks.length) return rendered;
   const en = user.language === "en";
-  const lines = tasks.slice(0, 3).map(item => "<b>" + escapeHtml(short(item.subject, 45)) + "</b> · "
-    + escapeHtml(short(item.text.replace(/\s+/gu, " "), 100)));
-  const summary = "\n\n<b>" + (en ? "Homework" : "Домашнее задание") + "</b>\n" + lines.join("\n");
-  const [first, ...rest] = rendered.parts;
-  return { ...rendered, parts: [first.length + summary.length <= 4000 ? first + summary : first, ...rest], keyboard: {
+  const parts = [...rendered.parts];
+  const last = parts.length - 1;
+  const heading = "\n\n\n" + homeworkHeading(en, branded);
+  let summary = "";
+  for (const task of tasks) {
+    const block = "\n\n" + homeworkBlock(task, en, true);
+    if (parts[last].length + heading.length + summary.length + block.length > 4000) break;
+    summary += block;
+  }
+  if (summary) parts[last] += heading + summary;
+  return { ...rendered, parts, keyboard: {
     inline_keyboard: [...rendered.keyboard.inline_keyboard.slice(0, -1),
-      [button(en ? "Homework" : "ДЗ к этому дню", "hw:day:" + schedule.date, { icon: "table" })],
+      [button(en ? "Homework for this date" : "ДЗ к этому дню", "hw:day:" + schedule.date, { branded, icon: "support" })],
       ...rendered.keyboard.inline_keyboard.slice(-1)],
   } };
 }

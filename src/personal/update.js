@@ -1,4 +1,4 @@
-const homeworkAction = /^hw(?::(?:list|pick):\d{1,2}|:subject:[a-f0-9]{16}|:(?:show|edit|done|reopen|remove|delete|move|cancel):\d{1,16}|:save:\d{1,16}(?::\d{4}-\d{2}-\d{2})?|:(?:date|move):\d{1,16}:\d{4}-\d{2}-\d{2}|:day:\d{4}-\d{2}-\d{2})?$/u;
+const homeworkAction = /^hw(?::(?:list|pick):\d{1,2}|:subject:[a-f0-9]{16}|:(?:show|edit|done|reopen|remove|delete|move|cancel):\d{1,16}|:save:\d{1,16}(?::\d{4}-\d{2}-\d{2})?|:(?:date|move):\d{1,16}:\d{4}-\d{2}-\d{2}|:day:\d{4}-\d{2}-\d{2}(?::\d{1,2})?)?$/u;
 const homeworkPrompt = /^(?:Запиши ДЗ|Замени текст ДЗ|Write homework|Replace homework text) · .+\n/u;
 export const homeworkTextLimit = 1000;
 

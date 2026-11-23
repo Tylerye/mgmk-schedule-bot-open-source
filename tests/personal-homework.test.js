@@ -78,12 +78,20 @@ test("private homework follows its dated lesson, stays scoped to the owner, and 
   assert.equal(saved.draft, null);
   assert.match((await tap("hw:show:" + saved.items[0].id, 200)).body.text, /устарел/u);
   assert.doesNotMatch((await tap("tomorrow", 200)).body.text, /§ 12/u);
-  assert.match((await tap("tomorrow")).body.text, /§ 12/u);
+  await f.store.setSetting("homework:100", { ...saved, items: [...saved.items,
+    { id: 10001, group: "8СА", subject: "Белорусская литература", key: "legacy", date: tomorrow.date, text: "Прочитать рассказ", done: false },
+    { id: 10002, group: "8СА", subject: "Физика", key: "legacy", date: later.date, text: "Другая дата", done: false },
+  ] });
+  assert.match((await tap("tomorrow")).body.text, /\n\n\n💛 <b>ДЗ<\/b>\n\n[\s\S]*1-й урок[\s\S]*Прочитать рассказ\n\n[\s\S]*8-й урок[\s\S]*§ 12/u);
+  const day = await tap("hw:day:" + tomorrow.date);
+  assert.match(day.body.text, /1-й урок[\s\S]*Прочитать рассказ\n\n[\s\S]*8-й урок[\s\S]*§ 12 и &lt;пример&gt;/u);
+  assert.doesNotMatch(day.body.text, /Другая дата|Мое ДЗ/u);
+  assert.deepEqual(buttons(day).map(button => button.callback_data), ["personal:hw", "personal:preview:" + tomorrow.date + ":compact"]);
   assert.equal((await f.store.first("SELECT COUNT(*) n FROM jobs WHERE payload LIKE '%example.org%'")).n, 0);
   const user = await f.store.user(100);
   await f.store.enqueue(user, "card", tomorrow.date, { due: ms });
   await deliverUser(f.store, client, 100, { now: new Date(ms += 2000) });
-  assert.match(calls.at(-1).body.text, /Домашнее задание[\s\S]*§ 12/u);
+  assert.match(calls.at(-1).body.text, /<b>ДЗ<\/b>[\s\S]*§ 12/u);
   assert.ok(buttons(calls.at(-1)).some(b => b.callback_data === "personal:hw:day:2026-11-24"));
   assert.match((await tap("hw:done:" + saved.items[0].id)).body.text, /Выполнено/u);
   assert.doesNotMatch((await tap("tomorrow")).body.text, /§ 12/u);
