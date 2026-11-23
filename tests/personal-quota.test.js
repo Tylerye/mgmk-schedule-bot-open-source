@@ -25,14 +25,14 @@ test('background and source cannot consume the manual reserve or poison its admi
   assert.equal((await create().budget(new Date('2026-11-14T00:00:00Z'))).mode,'normal');
 });
 
-test('personal allocations allow up to 65000 writes and reject invalid tiers',()=>{
+test('personal allocations allow up to 73000 writes and reject invalid tiers',()=>{
   assert.equal(personalQuota().written,28000);
   assert.deepEqual(personalQuota(allocation),{written:45000,background:30000,source:35000});
   assert.deepEqual(personalQuota({
-    PERSONAL_DAILY_WRITES: '65000',
-    PERSONAL_BACKGROUND_WRITES: '57000',
-    PERSONAL_SOURCE_WRITES: '60000',
-  }), {written:65000,background:57000,source:60000});
-  for(const env of [{PERSONAL_DAILY_WRITES:'65001'},{PERSONAL_BACKGROUND_WRITES:'27000'},{PERSONAL_SOURCE_WRITES:'x'}])
+    PERSONAL_DAILY_WRITES: '73000',
+    PERSONAL_BACKGROUND_WRITES: '63000',
+    PERSONAL_SOURCE_WRITES: '67000',
+  }), {written:73000,background:63000,source:67000});
+  for(const env of [{PERSONAL_DAILY_WRITES:'73001'},{PERSONAL_BACKGROUND_WRITES:'27000'},{PERSONAL_SOURCE_WRITES:'x'}])
     assert.throws(()=>personalQuota(env),/allocation/u);
 });
