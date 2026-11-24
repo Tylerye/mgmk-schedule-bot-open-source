@@ -5,6 +5,7 @@ const themeEmoji = {
   github: "5195296753112363722",
   lunch: "5197633344170405759",
   large_break: "5195319567978637499",
+  break: "5202158723576934145",
   today: "5197680953882883689",
   tomorrow: "5197618530828202500",
   settings: "5197388333466041903",
@@ -30,7 +31,7 @@ const themeEmoji = {
 const fallback = {
   homework: "📝",
   completed: "✅", live: "🟠",
-  github: "💻", lunch: "🍴", large_break: "☕",
+  github: "💻", lunch: "🍴", large_break: "☕", break: "⏳",
   today: "📅", tomorrow: "🗓", next: "⏭", schedule: "📚", settings: "⚙️",
   help: "💡", support: "💛", feedback: "💬", privacy: "ℹ️", updates: "✨",
   menu: "🏠", table: "📋", view: "🕘", group: "👥", language: "🌐",

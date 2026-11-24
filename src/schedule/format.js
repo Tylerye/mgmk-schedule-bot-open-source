@@ -58,7 +58,7 @@ function formatEvent(event, completed, branded) {
   }
   if (event.type === "break") {
     const label = `Перемена · ${eventDuration(event)} минут · ${event.start}–${event.end}`;
-    block = branded ? `<u><i>${label}</i></u>` : `<u>☕ ${label}</u>`;
+    block = branded ? `${themeIcon("break", true)} <u><i>${label}</i></u>` : `<u>☕ ${label}</u>`;
   }
   else if (event.type === "large_break") block = `<u>${branded ? themeIcon("large_break", true) : "🌿"} Большая перемена · ${eventDuration(event)} минут · ${event.start}–${event.end}</u>`;
   else if (event.type === "lunch") {

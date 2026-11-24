@@ -202,7 +202,7 @@ export function personalEventLines(event, user, { branded = false, completed = f
   const time = event.start && event.end ? " · " + event.start + "–" + event.end : "";
   if (event.type !== "lesson") {
     const label = w[event.type] + time;
-    if (event.type === "break") return ["<u><i>" + label + "</i></u>"];
+    if (event.type === "break") return [(branded ? themeIcon("break", true) + " " : "") + "<u><i>" + label + "</i></u>"];
     if (event.type === "lunch" || event.type === "large_break")
       return [heading(event.type, "<u>" + label + "</u>", branded)];
     return [heading("view", label, branded)];

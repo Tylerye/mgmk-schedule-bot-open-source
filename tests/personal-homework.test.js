@@ -5,6 +5,7 @@ import { collectPersonalUpdate, enqueuePersonalUpdate, processPersonalInbox } fr
 import { deliverUser } from "../src/personal/delivery.js";
 import { homeworkScreen, readHomework } from "../src/personal/homework.js";
 import { sendWithThemeFallback } from "../src/chat-theme.js";
+import { personalEventLines } from "../src/personal/view.js";
 
 test("private homework follows its dated lesson, stays scoped to the owner, and is saved once", async t => {
   const f = await personalFixture();
@@ -90,7 +91,7 @@ test("private homework follows its dated lesson, stays scoped to the owner, and 
     { id: 10001, group: "8СА", subject: "Белорусская литература", key: "legacy", date: tomorrow.date, text: "Прочитать рассказ", done: false },
     { id: 10002, group: "8СА", subject: "Физика", key: "legacy", date: later.date, text: "Другая дата", done: false },
   ] });
-  assert.match((await tap("tomorrow")).body.text, /\n\n\n📝 <b>ДЗ<\/b>\n\n[\s\S]*1-й урок[\s\S]*Прочитать рассказ\n\n[\s\S]*8-й урок[\s\S]*§ 12/u);
+  assert.match((await tap("tomorrow")).body.text, /\n\n\n📝 <b><u>Домашнее задание<\/u><\/b>\n\n[\s\S]*1-й урок[\s\S]*:<\/b>\nПрочитать рассказ\n\n[\s\S]*8-й урок[\s\S]*:<\/b>\n§ 12/u);
   const day = await tap("hw:day:" + tomorrow.date);
   assert.match(day.body.text, /1-й урок[\s\S]*Прочитать рассказ\n\n[\s\S]*8-й урок[\s\S]*§ 12 и &lt;пример&gt;/u);
   assert.doesNotMatch(day.body.text, /Другая дата|Мое ДЗ/u);
@@ -99,7 +100,7 @@ test("private homework follows its dated lesson, stays scoped to the owner, and 
   const user = await f.store.user(100);
   await f.store.enqueue(user, "card", tomorrow.date, { due: ms });
   await deliverUser(f.store, client, 100, { now: new Date(ms += 2000) });
-  assert.match(calls.at(-1).body.text, /<b>ДЗ<\/b>[\s\S]*§ 12/u);
+  assert.match(calls.at(-1).body.text, /<b><u>Домашнее задание<\/u><\/b>[\s\S]*§ 12/u);
   assert.ok(buttons(calls.at(-1)).some(b => b.callback_data === "personal:hw:day:2026-11-24"));
   assert.match((await tap("hw:done:" + saved.items[0].id)).body.text, /Выполнено/u);
   assert.doesNotMatch((await tap("tomorrow")).body.text, /§ 12/u);
@@ -176,6 +177,16 @@ test("saving during a lesson edits the pinned card and both dated views follow t
   await deliver();
   assert.equal(calls.at(-1).body.message_id, pinned);
   assert.doesNotMatch(calls.at(-1).body.text, /Решить пример/u);
+  await f.store.run("UPDATE cards SET parts=json_set(parts,'$[0].hash','previous-theme') WHERE user_id=100 AND date=?", day.date);
+  await tap("today");
+  await deliver();
+  assert.equal(calls.at(-1).method, "editMessageText");
+  assert.equal(calls.at(-1).body.message_id, pinned, "opening the day refreshes the old pin without a mode toggle");
+  assert.equal((await f.store.card(await f.store.user(100), day.date)).mode, "compact");
+  await tap("today");
+  const count = calls.length;
+  await deliver();
+  assert.equal(calls.length, count, "no further edit when the pin already matches");
 
   ms = Date.parse(day.date + "T" + lesson.end + ":15+03:00");
   const saved = await readHomework(f.store, 100);
@@ -197,6 +208,13 @@ test("Telegram timer rejection preserves the timetable's custom emoji", async ()
   await sendWithThemeFallback(send, emoji + ' <tg-time unix="12" format="r">08:00</tg-time>', keyboard, { customEmojiOnly: true });
   assert.equal(calls.length, 2);
   assert.deepEqual(calls[1], { text: emoji + " 08:00", keyboard });
+});
+
+test("only ordinary breaks get the hourglass emoji", () => {
+  const render = type => personalEventLines({ type, start: "09:00", end: "09:10" }, { language: "ru" }, { branded: true })[0];
+  assert.match(render("break"), /<tg-emoji emoji-id="5202158723576934145">⏳<\/tg-emoji> <u><i>Перемена/u);
+  assert.match(render("lunch"), /<tg-emoji emoji-id="5197633344170405759">🍴<\/tg-emoji> <b><u>Обед/u);
+  assert.match(render("large_break"), /<tg-emoji emoji-id="5195319567978637499">☕<\/tg-emoji> <b><u>Большая перемена/u);
 });
 
 test("a weekly forecast stores the selected occurrence and recalculates it from daily publications", async t => {

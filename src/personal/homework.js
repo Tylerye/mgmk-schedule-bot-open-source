@@ -167,7 +167,7 @@ function homeworkBlock({ item, number }, en, preview = false) {
   const text = preview ? item.text.replace(/\s+/gu, " ") : item.text;
   const excerpt = preview && text.length > 160 ? short(text, 160) + "…" : text;
   const title = number ? lessonHeading({ number }, en) + " · " : "";
-  return title + "<b>" + escapeHtml(item.subject) + "</b>\n" + escapeHtml(excerpt);
+  return title + "<b>" + escapeHtml(item.subject) + (preview ? ":" : "") + "</b>\n" + escapeHtml(excerpt);
 }
 
 function homeworkHeading(en, branded) {
@@ -399,7 +399,7 @@ export function homeworkOnCard(rendered, schedule, user, state, branded) {
   const en = user.language === "en";
   const parts = [...rendered.parts];
   const last = parts.length - 1;
-  const heading = "\n\n\n" + homeworkHeading(en, branded);
+  const heading = "\n\n\n" + screenText("homework", "<b><u>" + (en ? "Homework" : "Домашнее задание") + "</u></b>", branded);
   let summary = "";
   for (const task of tasks) {
     const block = "\n\n" + homeworkBlock(task, en, true);

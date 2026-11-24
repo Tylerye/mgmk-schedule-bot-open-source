@@ -147,7 +147,7 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
     assert.match(week.rich_message.html,/Дневной PDF/u);
     assert.match(week.rich_message.html,/По плану/u);
     assert.match(week.rich_message.html,/<p><b>1-й урок<\/b> · 08:15–09:00<br><b>ПРАКТИКА<\/b><br><i>Кабинет 321 · Петров И И<\/i><\/p>/u);
-    assert.match(week.rich_message.html,/<p><u><i>Перемена · 09:00–09:10<\/i><\/u><\/p>/u);
+    assert.match(week.rich_message.html,/<p><tg-emoji emoji-id="5202158723576934145">⏳<\/tg-emoji> <u><i>Перемена · 09:00–09:10<\/i><\/u><\/p>/u);
     assert.match(week.rich_message.html,/<h2><tg-emoji/u);
     assert.doesNotMatch(week.rich_message.html,/УСТАРЕВШИЙ ПРЕДМЕТ/u);
     assert.match(week.rich_message.html,/<details><summary>/u);

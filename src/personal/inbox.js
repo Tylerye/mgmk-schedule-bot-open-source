@@ -101,6 +101,17 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     let initialCards = [];
     let homework;
     const cardHomework = async through => homework === undefined ? (homework = await readCardHomework(store, user, now, through)) : homework;
+    const refreshExistingCards = async dates => {
+      const cards = await store.all("SELECT c.date,j.id AS pending,json_extract(j.payload,'$.manual') AS manual "
+        + "FROM json_each(?) d CROSS JOIN cards c ON c.user_id=? AND c.group_id=? AND c.date=d.value "
+        + "LEFT JOIN jobs j ON j.id=?||c.date AND j.epoch=? AND j.status='pending' "
+        + "WHERE json_extract(c.parts,'$[0].id') IS NOT NULL",
+      JSON.stringify(dates), user.user_id, user.group_id, `${user.user_id}:card:`, user.epoch);
+      for (const card of cards) {
+        if (!card.pending) jobs.push(job(user, "card", card.date, { priority: 0, payload: { manual: true, existingOnly: true } }));
+        else if (!card.manual) jobs.push(["UPDATE jobs SET priority=MIN(priority,0),payload=json_set(payload,'$.manual',json('true')) WHERE id=?", card.pending]);
+      }
+    };
     let repeatedSelection = false;
     let action = update.action;
     if (action.startsWith("table:")) action = "preview:" + action.slice("table:".length) + ":full";
@@ -114,17 +125,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     if (action === "hw" || action.startsWith("hw:")) {
       const refreshDates = new Set();
       const view = await homeworkScreen(store, user, update, now, brandedMenu, jobs, homeworkState, refreshDates);
-      if (refreshDates.size) {
-        const cards = await store.all("SELECT c.date,j.id AS pending,json_extract(j.payload,'$.manual') AS manual "
-          + "FROM json_each(?) d CROSS JOIN cards c ON c.user_id=? AND c.group_id=? AND c.date=d.value "
-          + "LEFT JOIN jobs j ON j.id=?||c.date AND j.epoch=? AND j.status='pending' "
-          + "WHERE json_extract(c.parts,'$[0].id') IS NOT NULL",
-        JSON.stringify([...refreshDates]), user.user_id, user.group_id, `${user.user_id}:card:`, user.epoch);
-        for (const card of cards) {
-          if (!card.pending) jobs.push(job(user, "card", card.date, { priority: 0, payload: { manual: true, existingOnly: true } }));
-          else if (!card.manual) jobs.push(["UPDATE jobs SET priority=MIN(priority,0),payload=json_set(payload,'$.manual',json('true')) WHERE id=?", card.pending]);
-        }
-      }
+      if (refreshDates.size) await refreshExistingCards([...refreshDates]);
       reply(view.text, view.keyboard, view.editId);
     } else if (action === "language") {
       const en = user.language === "en";
@@ -232,10 +233,20 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
         if (!schedules.some(s => s.date === date)) reply(missingText(), mainMenu(), fromWidget ? null : update.messageId);
         else {
           const schedule = schedules.find(s => s.date === date);
-          const card = hasLessonSummary(schedule) ? await store.card(user, date) : null;
-          const base = renderPersonal(schedule, user, { now, branded: brandedMenu, previewTimer: true, lessonChanges: lessonDetailsChanges(schedule, card),
+          const pinned = brandedMenu && user.auto_pin && !user.paused && user.pin_message_id && user.pin_date === date;
+          const card = pinned || hasLessonSummary(schedule) ? await store.card(user, date) : null;
+          const lessonChanges = lessonDetailsChanges(schedule, card);
+          const base = renderPersonal(schedule, user, { now, branded: brandedMenu, previewTimer: true, lessonChanges,
             mode: action.startsWith("preview:") ? action.split(":")[2] : "compact" });
-          const rendered = homeworkOnCard(base, schedule, user, await cardHomework(schedule.date), brandedMenu);
+          const assignments = await cardHomework(schedule.date);
+          const rendered = homeworkOnCard(base, schedule, user, assignments, brandedMenu);
+          if (pinned && card?.parts[0]?.id === user.pin_message_id) {
+            const fresh = renderPersonal(schedule, user, { now, branded: brandedMenu, mode: card.mode, lessonChanges });
+            const expected = homeworkOnCard(fresh, schedule, user, assignments, brandedMenu);
+            if (expected.parts.length <= card.parts.length && expected.parts.some((text, i) =>
+              card.parts[i]?.id && card.parts[i].hash !== screenHash(text, i ? undefined : expected.keyboard)))
+              await refreshExistingCards([date]);
+          }
           const keyboard = structuredClone(rendered.keyboard);
           for (const row of keyboard.inline_keyboard) for (const item of row) {
             const target = item.callback_data.slice("personal:".length).replace(/^view:/u, "preview:");
