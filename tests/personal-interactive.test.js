@@ -79,11 +79,11 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
     assert.deepEqual(branded.map(button=>button.style), ['success','success']);
     assert.deepEqual(branded.map(button=>button.callback_data), ['personal:today','personal:tomorrow']);
     assert.ok(branded.every(button=>/^\d+$/.test(button.icon_custom_emoji_id)));
-    assert.deepEqual(fallback.map(button=>button.text), ['📅 Сегодня','🗓 Завтра']);
+    assert.deepEqual(fallback.map(button=>button.text), ['Сегодня','Завтра']);
     assert.deepEqual(fallback.map(button=>button.style), ['success','success']);
     assert.ok(fallback.every(button=>!Object.hasOwn(button,'icon_custom_emoji_id')));
     assert.match(calls[4].body.text,/<tg-emoji/u);
-    assert.doesNotMatch(calls[5].body.text,/<tg-emoji/u);
+    assert.equal(calls[5].body.text,calls[4].body.text);
     assert.match(calls[5].body.text,/Привет!/u);
     const menu = calls[4].body.reply_markup.inline_keyboard.flat();
     assert.ok(menu.some(button => button.callback_data === 'personal:updates:0'));

@@ -5,10 +5,17 @@ import { personalFixture, sampleSchedule, installSchedules } from './helpers/per
 import { enqueuePersonalUpdate, processPersonalInbox } from '../src/personal/inbox.js';
 import { PersonalStore } from '../src/personal/store.js';
 import { deliverUser, enqueueDue } from '../src/personal/delivery.js';
-import { renderPersonal, nextRenderAt, nextPersonalPinAt } from '../src/personal/view.js';
+import { renderPersonal, nextRenderAt, nextPersonalPinAt, choosePersonalPin } from '../src/personal/view.js';
 
 const local = (time, day='2026-11-12') => new Date(`${day}T${time}:00+03:00`);
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+
+test('manual verification keeps an eligible future pin when the normal target is older', () => {
+  const today = { date: '2026-11-12', messageId: 1, hasLessons: true };
+  const future = { date: '2026-11-13', messageId: 2, hasLessons: true };
+  assert.equal(choosePersonalPin([today, future], future, local('08:00')), null);
+  assert.equal(choosePersonalPin([today, future], future, local('08:00'), true), future);
+});
 
 test('inbox admission is idempotent and never exceeds the per-user limit under concurrent arrivals', async t => {
   const f = await personalFixture();

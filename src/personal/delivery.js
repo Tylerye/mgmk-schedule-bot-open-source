@@ -66,7 +66,7 @@ export async function telegramOperation(store, client, user, key, method, body, 
     const result = body.text === undefined || strictTheme ? await client.call(method, body)
       : await sendWithThemeFallback((text, markup) => client.call(method, {
         ...body, text, ...(markup ? { reply_markup: markup } : {}),
-      }), body.text, body.reply_markup);
+      }), body.text, body.reply_markup, { customEmojiOnly: true });
     const themedReceipt = strictTheme && {
       custom_emoji: Boolean(result?.entities?.some(entity => entity.type === "custom_emoji" && entity.custom_emoji_id === homeworkEmojiId)),
     };

@@ -75,8 +75,9 @@ export async function sendWithThemeFallback(send, text, keyboard, { customEmojiO
       .replace(/<tg-time unix="\d+" format="r">([^<]*)<\/tg-time>/gu, "$1");
     const markup = plainKeyboard(keyboard, customEmojiOnly);
     if (customEmojiOnly && plain !== text && markup !== keyboard) {
+      const buttonRejected = /button[^\n]*emoji/iu.test(error.description ?? "");
       try {
-        return await send(plain, keyboard);
+        return buttonRejected ? await send(text, markup) : await send(plain, keyboard);
       } catch (retry) {
         if (!retry.apiRejected || retry.errorCode !== 400 || !/emoji|entities|reply markup|button.type.invalid/iu.test(retry.description ?? "")) throw retry;
       }

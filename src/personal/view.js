@@ -146,8 +146,10 @@ export function choosePersonalPin(cards, current, now = new Date(), verify = fal
   const future = eligible.find(c => c.date > today);
   const scheduled = time >= "16:30" ? future ?? (!current?.messageId ? todayCard : undefined)
     : todayCard ?? (!current?.messageId ? future : undefined);
-  const desired = scheduled ?? (verify ? eligible.find(c => c.messageId === current?.messageId) : null);
-  return desired && (!current?.date || desired.date >= current.date) && (verify || desired.messageId !== current?.messageId) ? desired : null;
+  if (scheduled && (!current?.date || scheduled.date >= current.date)) {
+    return verify || scheduled.messageId !== current?.messageId ? scheduled : null;
+  }
+  return verify ? eligible.find(c => c.messageId === current?.messageId) ?? null : null;
 }
 export function initialDates(schedules, now = new Date()) {
   const today = dateInTimezone(now, "Europe/Minsk");
