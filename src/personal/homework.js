@@ -103,7 +103,7 @@ function homeworkHeading(en, branded) {
   return screenText("homework", "<b>" + (en ? "Homework" : "ДЗ") + "</b>", branded);
 }
 
-export async function homeworkScreen(store, user, update, now, branded, statements) {
+export async function homeworkScreen(store, user, update, now, branded, statements, savedState) {
   const en = user.language === "en", tr = (ru, english) => en ? english : ru;
   const itemButton = (label, action, options = {}) => button(label, action, { branded, ...options });
   const back = itemButton(t(user).back, "hw", { icon: "back" });
@@ -113,7 +113,7 @@ export async function homeworkScreen(store, user, update, now, branded, statemen
     text: header + "\n\n" + text, keyboard: { inline_keyboard: [...rows, withMenu ? [back, main] : [back]] },
   });
   const [_, action = "list", arg, value] = update.action.split(":");
-  const state = await readHomework(store, user.user_id);
+  const state = savedState ?? await readHomework(store, user.user_id);
   const { items } = state;
   const draft = state.draft?.until > now.getTime() && state.draft?.group === user.group_id ? state.draft : null;
   const entry = items.find(item => String(item.id) === arg);
@@ -136,7 +136,8 @@ export async function homeworkScreen(store, user, update, now, branded, statemen
   const askText = (subject, editing, date) => {
     const first = tr(editing ? "Замени текст ДЗ" : "Запиши ДЗ", editing ? "Replace homework text" : "Write homework")
       + " · " + subject + (date ? " · " + dateLabel(date) : "");
-    return { first, view: { text: escapeHtml(first) + "\n\n" + tr("Смахни сообщение влево или выбери «Ответить»\nМожно написать текст или вставить ссылку · до 1 000 символов", "Swipe this message or choose Reply\nUse text or a link · up to 1,000 characters"),
+    return { first, view: { text: escapeHtml(first) + "\n\n<b>" + tr("Напиши здесь в чате или ответь на это сообщение (смахни влево или выбери «Ответить»).", "Type in this chat or reply to this message (swipe or choose Reply).")
+      + "</b>\n" + tr("Текст или ссылка · до 1 000 символов", "Text or a link · up to 1,000 characters"),
       keyboard: { inline_keyboard: [[itemButton(tr("Отмена", "Cancel"), "hw:cancel:" + update.update_id, { plain: true })],
         [main]] }, editId: null } };
   };
@@ -216,30 +217,32 @@ export async function homeworkScreen(store, user, update, now, branded, statemen
     if (!selected) return expired();
     const { label: subject, key } = selected;
     const prompt = askText(subject);
-    persist({ group: user.group_id, key, subject, prompt: prompt.first, promptUpdate: update.update_id, until: now.getTime() + 86_400_000 });
+    persist({ group: user.group_id, key, subject, prompt: prompt.first, promptUpdate: update.update_id, until: now.getTime() + 86_400_000, plainUntil: now.getTime() + 600_000 });
     return prompt.view;
   }
   if (action === "edit") {
     if (!entry || !user.group_id) return expired();
     const prompt = askText(entry.subject, true, entry.date);
     persist({ group: user.group_id, edit: entry.id, subject: entry.subject, date: entry.date, prompt: prompt.first,
-      promptUpdate: update.update_id, until: now.getTime() + 86_400_000 });
+      promptUpdate: update.update_id, until: now.getTime() + 86_400_000, plainUntil: now.getTime() + 600_000 });
     return prompt.view;
   }
-  if (action === "text") {
-    if (!draft || draft.prompt !== update.homeworkPrompt) return expired();
+  if (action === "text" || action === "plain") {
+    if (!draft || draft.text || (action === "text" && draft.prompt !== update.homeworkPrompt)) return expired();
     const prefix = user.user_id + ":reply:" + draft.promptUpdate + ":0:";
     const prompt = await store.first("SELECT 1 FROM operations WHERE id>=? AND id<? AND method='sendMessage' AND +status='succeeded' "
-      + "AND json_extract(result,'$.message_id')=? LIMIT 1", prefix, prefix.slice(0, -1) + ";", update.homeworkPromptId);
+      + (action === "text" ? "AND json_extract(result,'$.message_id')=? " : "") + "LIMIT 1",
+      prefix, prefix.slice(0, -1) + ";", ...(action === "text" ? [update.homeworkPromptId] : []));
     if (!prompt) return expired();
     const content = update.homeworkText.trim();
-    if (!content) return screen(tr("Ответь на то же сообщение текстом до 1 000 символов", "Reply to the same message with text up to 1,000 characters"));
+    if (!content) return screen(tr("Напиши в чат или ответь на приглашение текстом до 1 000 символов", "Type in chat or reply to the prompt with up to 1,000 characters"));
     const id = update.update_id;
-    persist({ ...draft, id, text: content });
     const rows = draft.edit !== undefined ? [[itemButton(tr("Сохранить", "Save"), "hw:save:" + id, { style: "success", icon: "completed" })]]
       : dateRows(homeworkDates(await timetable(), subjectKey(draft.subject), now), date => "hw:save:" + id + ":" + date, true);
+    if (!rows.length) return screen(tr("Этой пары пока нет в расписании. Попробуй снова, когда появится дата.", "No upcoming classes yet. Try again when a date is available."));
+    persist({ ...draft, id, text: content });
     return screen("<b>" + escapeHtml(draft.subject) + "</b>\n" + escapeHtml(content) + "\n\n" + (draft.edit !== undefined ? tr("Сохранить новый текст?", "Save the new text?")
-      : rows.length ? tr("К какому уроку?", "Which class is it due for?") : tr("Этой пары пока нет в расписании\nОтветь еще раз, когда появится дата", "No upcoming classes yet\nReply again when a date is available")), rows);
+      : tr("К какому уроку?", "Which class is it due for?")), rows);
   }
   if (action === "date" || action === "save") {
     if (!draft?.text || String(draft.id) !== arg) return expired();

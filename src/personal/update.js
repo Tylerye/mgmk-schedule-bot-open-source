@@ -1,9 +1,12 @@
 const homeworkAction = /^hw(?::(?:list|pick):\d{1,2}|:subject:[a-f0-9]{16}|:(?:show|edit|done|reopen|remove|delete|move|cancel):\d{1,16}|:save:\d{1,16}(?::\d{4}-\d{2}-\d{2})?|:(?:date|move):\d{1,16}:\d{4}-\d{2}-\d{2}|:day:\d{4}-\d{2}-\d{2}(?::\d{1,2})?)?$/u;
 const homeworkPrompt = /^(?:Запиши ДЗ|Замени текст ДЗ|Write homework|Replace homework text) · .+\n/u;
-const manualHomeworkPrompt = /\n\n(?:Смахни сообщение|Swipe this message)/u;
+const manualHomeworkPrompt = /\n\n(?:<b>)?(?:Смахни сообщение|Swipe this message|Напиши здесь в чате|Type in this chat)/u;
 export const homeworkTextLimit = 1000;
+export const groupSearch = text => /^[\d\p{L}\s._-]{1,30}$/u.test(text) && /\d/u.test(text) ? `search:${text}` : null;
 
 export function validHomeworkUpdate(update) {
+  if (update.action === "hw:plain") return typeof update.homeworkText === "string" && update.homeworkText.length <= homeworkTextLimit
+    && !Object.hasOwn(update, "homeworkPrompt") && !Object.hasOwn(update, "homeworkPromptId");
   if (update.action === "hw:text") return typeof update.homeworkText === "string" && update.homeworkText.length <= homeworkTextLimit
     && typeof update.homeworkPrompt === "string" && update.homeworkPrompt.length <= 220
     && /^[^\r\n]+$/u.test(update.homeworkPrompt) && Number.isSafeInteger(update.homeworkPromptId) && update.homeworkPromptId > 0;
@@ -39,7 +42,10 @@ export function collectPersonalUpdate(update, botId) {
         homeworkPrompt: title, homeworkPromptId: prompt.message_id, homeworkText: content.length <= homeworkTextLimit ? content : "" };
     }
     action = ({ "/student": "start", "/start": "start", "/today": "today", "/day": "today", "/tomorrow": "tomorrow", "/next": "next", "/latest": "schedule", "/stop": "pause", "/status": "diagnostics" })[command];
-    if (!action && /^[\d\p{L}\s._-]{1,30}$/u.test(String(message.text ?? "")) && /\d/u.test(message.text)) action = `search:${message.text.trim()}`;
+    if (!action && !command.startsWith("/") && !prompt && typeof message.text === "string" && message.text.trim()) {
+      const content = message.text.trim();
+      return { update_id: update.update_id, userId: from.id, action: "hw:plain", homeworkText: content.length <= homeworkTextLimit ? content : "" };
+    }
   }
   if (!action) return null;
   // No username, chat history, arbitrary messages, or forwarded content.

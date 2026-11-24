@@ -139,14 +139,15 @@ export function groupsKeyboard(groups, user, page = 0, branded) {
 
 // Pick pins from known OWN publications, keep the current pin if no future
 // lesson is published, and never backtrack at midnight or over missing dates.
-export function choosePersonalPin(cards, current, now = new Date()) {
+export function choosePersonalPin(cards, current, now = new Date(), verify = false) {
   const today = dateInTimezone(now, "Europe/Minsk"), time = timeInTimezone(now, "Europe/Minsk");
   const eligible = cards.filter(c => c.hasLessons && c.messageId && c.date >= today).sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
   const todayCard = eligible.find(c => c.date === today);
   const future = eligible.find(c => c.date > today);
-  const desired = time >= "16:30" ? future ?? (!current?.messageId ? todayCard : undefined)
+  const scheduled = time >= "16:30" ? future ?? (!current?.messageId ? todayCard : undefined)
     : todayCard ?? (!current?.messageId ? future : undefined);
-  return desired && (!current?.date || desired.date >= current.date) && desired.messageId !== current?.messageId ? desired : null;
+  const desired = scheduled ?? (verify ? eligible.find(c => c.messageId === current?.messageId) : null);
+  return desired && (!current?.date || desired.date >= current.date) && (verify || desired.messageId !== current?.messageId) ? desired : null;
 }
 export function initialDates(schedules, now = new Date()) {
   const today = dateInTimezone(now, "Europe/Minsk");

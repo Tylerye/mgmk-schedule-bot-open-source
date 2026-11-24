@@ -339,6 +339,17 @@ test('/start verifies and restores a missing pin without requeueing a current se
   assert.equal((await f.store.card(f.user,f.tomorrow.date)).parts[0].id,98);
 });
 
+test('/start repairs a removed Telegram pin for an existing card without resending it', async t => {
+  const f = await fixture(t), now = local('08:59');
+  await enqueuePersonalUpdate(f.store, {update_id:1,userId:100,action:'start'});
+  await processPersonalInbox(f.store,await f.store.first('SELECT * FROM inbox WHERE update_id=1'),now);
+  const client = f.client.call.bind(f.client);
+  f.client.call = (method, body) => method === 'getChat' ? { id:100 } : client(method,body);
+  await drain(f,now,'saving');
+  assert.deepEqual(f.calls.filter(c=>c.method==='pinChatMessage').map(c=>c.body.message_id),[88]);
+  assert.equal(f.calls.filter(c=>c.method==='sendMessage' && c.body.text.includes('МАТЕМАТИКА')).length,0);
+});
+
 test('multiple jobs in one batch consume one revision-counter write and keep ordered distinct revisions', async t => {
   const f = await fixture(t);
   f.sqlite.exec('CREATE TABLE revision_writes(n INTEGER); CREATE TRIGGER test_revision_write AFTER UPDATE ON job_revision_sequence BEGIN INSERT INTO revision_writes VALUES(1); END;');

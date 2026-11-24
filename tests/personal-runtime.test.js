@@ -52,7 +52,7 @@ test("onboarding, duplicate webhook, repeat start, language/group change, suppor
   await f.store.run("UPDATE jobs SET status='done' WHERE kind<>'card'");
   for (let i = 0; i < 3; i++) await deliverUser(f.store, client, 100, { now });
   assert.equal((await f.store.all("SELECT * FROM operations")).length, 0);
-  assert.equal(collectPersonalUpdate(message(100, "private conversation")), null);
+  assert.equal(await enqueuePersonalUpdate(f.store, collectPersonalUpdate(message(100, "private conversation"))), false);
 });
 
 test("durable send intent: timeout/restart is uncertain, 429 waits, 403 blocks, safe edit retry", async t => {

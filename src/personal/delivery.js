@@ -299,8 +299,21 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       if (user.paused || user.auto_pin === false || user.auto_pin === 0) { await finishJob(store, job, "cancelled"); return; }
       const cards = await store.all("SELECT date,parts,mode,schedule_payload FROM cards WHERE user_id=? AND group_id=? ORDER BY date", id, user.group_id);
       const eligible = cards.map(c => ({ date: c.date, messageId: JSON.parse(c.parts)[0]?.id, hasLessons: Boolean(c.schedule_payload && JSON.parse(c.schedule_payload).lessons.length) }));
-      const desired = choosePersonalPin(eligible, { messageId: user.pin_message_id, date: user.pin_date }, now);
+      const desired = choosePersonalPin(eligible, currentPin(user), now, payload.verify === true);
       if (!desired) { await finishJob(store, job); return; }
+      const samePin = desired.messageId === user.pin_message_id && desired.date === user.pin_date;
+      if (samePin && payload.verify) {
+        let chat;
+        try {
+          chat = await client.call("getChat", { chat_id: id });
+        } catch (error) {
+          if (!error.apiRejected || error.errorCode === 429) {
+            await applyOutcome(store, job, { retryAt: now.getTime() + Math.max(5, Number(error.parameters?.retry_after) || 0) * 1000 });
+          } else await finishJob(store, job, "failed");
+          return;
+        }
+        if (chat?.pinned_message?.message_id === desired.messageId) { await finishJob(store, job); return; }
+      }
       const result = await op(`pin:${user.epoch}:${job.revision}:${desired.messageId}`, "pinChatMessage", { chat_id: id, message_id: desired.messageId, disable_notification: true });
       if (result.missingPin) {
         // Only a definite missing-message response permits replacement. Preserve
@@ -317,6 +330,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       }
       if (await applyOutcome(store, job, result)) {
         // Pin announcements removed: the automatic pin itself is sufficient
+        if (samePin) { await finishJob(store, job); return; }
         const decoded = cards.map(c => ({ ...c, parts: JSON.parse(c.parts), schedule: c.schedule_payload ? JSON.parse(c.schedule_payload) : null }));
         const schedules = await store.schedulesForDates(user.group_id, cards.map(c => c.date));
         const next = nextDue({ ...user, pin_message_id: desired.messageId, pin_date: desired.date }, schedules, decoded, now);

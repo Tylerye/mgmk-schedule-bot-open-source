@@ -65,7 +65,12 @@ test("private homework follows its dated lesson, stays scoped to the owner, and 
   } });
   assert.equal(collectPersonalUpdate({ update_id: 89, ...answer(promptId, text) }, 41), null);
   assert.match((await update(answer(promptId + 1, "old prompt"), 100)).body.text, /устарел/u);
-  const dates = await update(answer(promptId, text), 100);
+  const plain = (content, id = 100) => ({ message: { message_id: 800, from: { id }, chat: { type: "private", id }, text: content } });
+  assert.equal(await enqueuePersonalUpdate(f.store, collectPersonalUpdate({ update_id: 999, ...plain("чужой текст", 200) }, 42), ms), false);
+  const dates = await update(plain(text), 100);
+  assert.equal(await enqueuePersonalUpdate(f.store, collectPersonalUpdate({ update_id: 998, ...plain("лишнее сообщение") }, 42), ms), false);
+  assert.equal(await enqueuePersonalUpdate(f.store, collectPersonalUpdate({ update_id: 997, ...answer(promptId, "лишний ответ") }, 42), ms), false);
+  assert.equal((await readHomework(f.store, 100)).draft.text, text);
   assert.match(dates.body.text, /&lt;пример&gt; https:\/\/example.org/u);
   assert.deepEqual(buttons(dates).filter(b => b.callback_data.startsWith("personal:hw:save:")).map(b => b.callback_data.slice(-10)),
     ["2026-11-24", "2026-12-01"]);
@@ -103,7 +108,7 @@ test("private homework follows its dated lesson, stays scoped to the owner, and 
   assert.equal((await readHomework(f.store, 100)).draft, null);
   const stale = answer(abandonedId, "personal message");
   stale.message.reply_to_message.text = abandoned.body.text;
-  assert.match((await update(stale, 100)).body.text, /устарел/u);
+  assert.equal(await enqueuePersonalUpdate(f.store, collectPersonalUpdate({ update_id: 996, ...stale }, 42), ms), false);
   const edit = await tap("hw:edit:" + saved.items[0].id);
   assert.equal(edit.body.reply_markup.force_reply, undefined);
   assert.match(edit.body.text, /^Замени текст ДЗ/u);

@@ -4,7 +4,8 @@ import { releasePage } from "./releases.js";
 import { findGroups } from "./catalog.js";
 import { screenHash, isTimetableMessage, richScreen } from './screen-state.js';
 import { hasLessonSummary, lessonDetailsChanges } from "./lesson-summary.js";
-import { discardHomeworkDraft, homeworkOnCard, homeworkScreen, readCardHomework } from "./homework.js";
+import { discardHomeworkDraft, homeworkOnCard, homeworkScreen, readCardHomework, readHomework } from "./homework.js";
+import { groupSearch } from "./update.js";
 import { t, menu, button, backToMenu, screenText, supportKeyboard, settingsKeyboard, groupsKeyboard, initialDates, selectedDate, renderPersonal, informationText, informationKeyboard, widgetGroup, widgetLabel } from "./view.js";
 
 export { collectPersonalUpdate } from "./update.js";
@@ -16,12 +17,18 @@ function titledUpdate(user, branded) {
 }
 
 export async function enqueuePersonalUpdate(store, update, now = Date.now()) {
+  const awaitingText = update.action === "hw:text" || (update.action === "hw:plain" && !groupSearch(update.homeworkText));
+  const expiry = update.action === "hw:text" ? "$.draft.until" : "$.draft.plainUntil";
+  const activeDraft = awaitingText ? " AND EXISTS(SELECT 1 FROM settings s JOIN users u ON u.user_id=? "
+    + "WHERE s.key=? AND json_extract(s.value,'$.draft.group')=u.group_id "
+    + "AND json_extract(s.value,?)>? AND json_extract(s.value,'$.draft.text') IS NULL)" : "";
   const inserted = await store.run("INSERT OR IGNORE INTO inbox(update_id,user_id,payload,received_at) SELECT ?,?,?,? "
     + "WHERE NOT EXISTS(SELECT 1 FROM inbox WHERE update_id=?) "
     + "AND NOT EXISTS(SELECT 1 FROM inbox WHERE status='pending' LIMIT 1 OFFSET 499) "
     + "AND NOT EXISTS(SELECT 1 FROM inbox WHERE user_id=? AND status='pending' LIMIT 1 OFFSET 4) "
-    + "AND (SELECT rows FROM security_storage_counts WHERE name='inbox')<100000",
-  update.update_id, update.userId, JSON.stringify(update), now, update.update_id, update.userId);
+    + "AND (SELECT rows FROM security_storage_counts WHERE name='inbox')<100000" + activeDraft,
+  update.update_id, update.userId, JSON.stringify(update), now, update.update_id, update.userId,
+  ...(awaitingText ? [update.userId, `homework:${update.userId}`, expiry, now] : []));
   // D1 includes the storage-counter trigger in changes (normally 2).
   // A duplicate changes no rows; trigger writes must not defer a new tap.
   return Number(inserted.meta?.changes ?? 0) > 0;
@@ -39,6 +46,16 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     if (!user) {
       await store.run("INSERT OR IGNORE INTO users(user_id) VALUES(?)", row.user_id);
       user = await store.user(row.user_id);
+    }
+    let homeworkState;
+    if (update.action === "hw:plain" || update.action === "hw:text") {
+      homeworkState = await readHomework(store, user.user_id);
+      const draft = homeworkState.draft;
+      if (update.action === "hw:plain" && !(draft?.plainUntil > now.getTime() && draft.group === user.group_id)) update.action = groupSearch(update.homeworkText);
+      if (!update.action || (update.action.startsWith("hw:") && (!draft || draft.text))) {
+        await store.run("UPDATE inbox SET status='done',payload='{}',completed_at=COALESCE(completed_at,unixepoch()*1000) WHERE update_id=?", row.update_id);
+        return;
+      }
     }
     const rating = /^rating:(?:(update-20261123):)?([1-5]|later)$/u.exec(update.action);
     if (rating && !(rating[1] && rating[2] === "later")) {
@@ -95,7 +112,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     if (action === "start") action = user.group_id ? "menu" : "language";
     if ((action === "menu" || update.action === "start") && user.has_homework) jobs.push(discardHomeworkDraft(user.user_id));
     if (action === "hw" || action.startsWith("hw:")) {
-      const view = await homeworkScreen(store, user, update, now, brandedMenu, jobs);
+      const view = await homeworkScreen(store, user, update, now, brandedMenu, jobs, homeworkState);
       reply(view.text, view.keyboard, view.editId);
     } else if (action === "language") {
       const en = user.language === "en";
@@ -239,7 +256,11 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
       }
     }
     const starting = update.action === "start" && user.group_id;
-    if (starting) initialCards = await initial(user.group_id);
+    if (starting) {
+      initialCards = await initial(user.group_id);
+      if (user.auto_pin && !user.paused && user.pin_message_id && initialCards.some(s => s.date === user.pin_date))
+        jobs.push(job(user, "pin", "", { priority: 1, payload: { manual: true, verify: true } }));
+    }
     if (initialCards.length) {
       for (const s of initialCards) {
         // An explicit /start can repair a deleted pin or a card overwritten by
