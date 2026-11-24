@@ -13,7 +13,9 @@ const updateSurvey = "rating-update-20261123-v1";
 const surveyFormatJob = "format-" + updateSurvey;
 const homeworkCampaign = "updates-20261124-v14";
 const homeworkThemeJob = "theme-" + homeworkCampaign;
-const brandHomeworkNotice = text => text.startsWith("<tg-emoji ") ? text : themeIcon("homework", true) + " " + text;
+const homeworkIcon = themeIcon("homework", true);
+const homeworkEmojiId = /^<tg-emoji emoji-id="(\d+)"/u.exec(homeworkIcon)?.[1];
+const brandHomeworkNotice = text => text.includes(homeworkIcon) ? text : text.replaceAll("📝", homeworkIcon);
 
 function formatUpdateSurvey(text) {
   // The D1 console stripped newlines from the original campaign payload.
@@ -65,7 +67,10 @@ export async function telegramOperation(store, client, user, key, method, body, 
       : await sendWithThemeFallback((text, markup) => client.call(method, {
         ...body, text, ...(markup ? { reply_markup: markup } : {}),
       }), body.text, body.reply_markup);
-    const stable = sendsMessage ? { message_id: result?.message_id } : true;
+    const themedReceipt = strictTheme && {
+      custom_emoji: Boolean(result?.entities?.some(entity => entity.type === "custom_emoji" && entity.custom_emoji_id === homeworkEmojiId)),
+    };
+    const stable = sendsMessage ? { message_id: result?.message_id, ...themedReceipt } : themedReceipt || true;
     if (sendsMessage && !Number.isSafeInteger(stable.message_id)) throw new Error("Missing Telegram receipt");
     if (method === "sendMessage") stable.content_hash = digest([body.text, body.reply_markup ?? { inline_keyboard: [] }]);
     if (journal) await store.run("UPDATE operations SET status='succeeded',result=? WHERE id=?", JSON.stringify(stable), id);
@@ -207,7 +212,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       const notice = JSON.parse(original.payload);
       const text = brandHomeworkNotice(notice.text);
       if (JSON.parse(receipt.result).content_hash === hashScreen(text, notice.keyboard)) { await finishJob(store, job); return; }
-      const result = await op(homeworkThemeJob, "editMessageText", {
+      const result = await op(homeworkThemeJob + ":v2", "editMessageText", {
         ...sendBody(text, notice.keyboard), message_id: messageId,
       });
       if (await applyOutcome(store, job, result)) await finishJob(store, job);

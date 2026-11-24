@@ -8,7 +8,7 @@ test('homework announcement survives a subscription change and repairs only conf
   const f = await personalFixture(); t.after(() => f.close());
   const now = Date.now(), campaign = 'updates-20261124-v14';
   await f.store.run('INSERT INTO users(user_id,paused) VALUES(100,1),(101,0),(102,0),(103,0)');
-  const payload = { manual: true, text: '<b>ДЗ в расписании</b>' };
+  const payload = { manual: true, text: '<b>ДЗ в расписании</b>\n\n📝 Домашнее задание' };
   for (const id of [100,101,102,103]) {
     const user = await f.store.user(id);
     await f.store.enqueue(user, 'alert', campaign, { due: now, payload });
@@ -25,15 +25,16 @@ test('homework announcement survives a subscription change and repairs only conf
   const calls = [];
   const client = { async call(method, body) {
     calls.push([method, body.chat_id, body.message_id]);
-    assert.match(body.text, /<tg-emoji emoji-id="5197713793202829678">/u);
+    assert.equal(body.text, '<b>ДЗ в расписании</b>\n\n<tg-emoji emoji-id="5197713793202829678">📝</tg-emoji> Домашнее задание');
     if (body.chat_id === 103) throw Object.assign(Error('rejected'), { apiRejected:true, errorCode:400, description:'invalid custom emoji' });
-    return { message_id: 111 };
+    return { message_id: 111, entities: [{ type: 'custom_emoji', custom_emoji_id: '5197713793202829678' }] };
   } };
   for (const [offset,id] of [100,101,102,103].entries())
     await deliverUser(f.store, client, id, { now:new Date(now+offset*2000), mode:'saving' });
   assert.deepEqual(calls, [['sendMessage',100,undefined],['editMessageText',101,42],['editMessageText',103,42]]);
   assert.equal((await f.store.first("SELECT status FROM jobs WHERE id=?", '102:alert:theme-' + campaign)).status, 'cancelled');
   assert.equal((await f.store.first("SELECT status FROM jobs WHERE id=?", '103:alert:theme-' + campaign)).status, 'failed');
+  assert.deepEqual(JSON.parse((await f.store.first("SELECT result FROM operations WHERE id=?", '101:theme-' + campaign + ':v2')).result), { custom_emoji: true });
 });
 
 test('survey binds to its Telegram receipt and saves only one decision', async t => {
