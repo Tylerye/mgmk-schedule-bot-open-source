@@ -4,6 +4,23 @@ import { backToMenu, button, screenText, t } from "./view.js";
 // Add new releases at the top. Keep the version IDs stable for old buttons.
 const releases = [
   {
+    version: "V1.5", date: "25.11.2026",
+    ru: ["ДЗ, закреп и расписание на неделю", [
+      "После выбора предмета можно написать ДЗ прямо в чат или ответить на подсказку",
+      "Домашнее задание появляется в опубликованной карточке и сверяется с уроками из дневного PDF",
+      "При открытии закреплённого дня бот обновляет старую карточку на месте",
+      "В расписании на неделю все дни свёрнуты, воскресенье убрано",
+      "У коротких перемен появился свой значок",
+    ]],
+    en: ["Homework, pins and the weekly timetable", [
+      "After choosing a subject, type in the chat or reply to the prompt",
+      "Homework appears on the published card and follows the lessons in the daily PDF",
+      "Opening the pinned day refreshes its existing card",
+      "Weekdays and Saturday start collapsed, and Sunday is omitted",
+      "Short breaks have their own icon",
+    ]],
+  },
+  {
     version: "V1.4", date: "23.11.2026",
     ru: ["Мое ДЗ", [
       "Открой «Мое ДЗ» в меню, выбери предмет и ответь боту текстом или ссылкой",
