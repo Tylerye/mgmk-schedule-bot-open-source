@@ -1,4 +1,4 @@
-import { sendWithThemeFallback } from "../chat-theme.js";
+import { sendWithThemeFallback, themeIcon } from "../chat-theme.js";
 import { createHash } from "node:crypto";
 import { renderPersonal, t, button, subjectChanges, choosePersonalPin, nextRenderAt, nextPersonalPinAt, noticeParts, supportDetailsText, widgetGroup, screenText } from "./view.js";
 import { buildScheduleWidget } from "./widget.js";
@@ -11,6 +11,9 @@ import { homeworkOnCard, readCardHomework } from "./homework.js";
 
 const updateSurvey = "rating-update-20261123-v1";
 const surveyFormatJob = "format-" + updateSurvey;
+const homeworkCampaign = "updates-20261124-v14";
+const homeworkThemeJob = "theme-" + homeworkCampaign;
+const brandHomeworkNotice = text => text.startsWith("<tg-emoji ") ? text : themeIcon("homework", true) + " " + text;
 
 function formatUpdateSurvey(text) {
   // The D1 console stripped newlines from the original campaign payload.
@@ -24,7 +27,7 @@ const digest = value => createHash("sha256").update(JSON.stringify(value)).diges
 
 // One Telegram operation per user invocation. Every send has a durable intent
 // first. A process dying between intent and receipt leaves it uncertain.
-export async function telegramOperation(store, client, user, key, method, body, now = Date.now(), { queuedEdit = false, clock } = {}) {
+export async function telegramOperation(store, client, user, key, method, body, now = Date.now(), { queuedEdit = false, strictTheme = false, clock } = {}) {
   const id = `${user.user_id}:${key}`;
   const sendsMessage = ["sendMessage", "sendRichMessage", "sendWidget"].includes(method);
   // For queued cards and manual screens the job is already durable intent.
@@ -58,7 +61,7 @@ export async function telegramOperation(store, client, user, key, method, body, 
     ["UPDATE users SET last_api_at=? WHERE user_id=?", claimedAt, user.user_id],
   ]);
   try {
-    const result = body.text === undefined ? await client.call(method, body)
+    const result = body.text === undefined || strictTheme ? await client.call(method, body)
       : await sendWithThemeFallback((text, markup) => client.call(method, {
         ...body, text, ...(markup ? { reply_markup: markup } : {}),
       }), body.text, body.reply_markup);
@@ -163,9 +166,10 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
     const job = await store.first("SELECT * FROM jobs WHERE user_id=? AND status='pending' AND due<=?" + manualJobsOnly(mode) + " ORDER BY priority,due,id LIMIT 1", id, now.getTime());
     if (!job) return;
     const payload = JSON.parse(job.payload);
-    if ((job.epoch !== user.epoch && job.kind !== "rating-response" && !(job.kind === "alert" && ["rating-20261120-v1", updateSurvey, surveyFormatJob].includes(job.date))) || (user.paused && !payload.manual)) { await finishJob(store, job, "cancelled"); return; }
+    const homeworkNotice = job.kind === "alert" && payload.manual === true && [homeworkCampaign, homeworkThemeJob].includes(job.date);
+    if ((job.epoch !== user.epoch && job.kind !== "rating-response" && !homeworkNotice && !(job.kind === "alert" && ["rating-20261120-v1", updateSurvey, surveyFormatJob].includes(job.date))) || (user.paused && !payload.manual)) { await finishJob(store, job, "cancelled"); return; }
     if (mode === "stopped" || (mode !== "normal" && !payload.manual)) return;
-    const op = (key, method, body) => telegramOperation(store, client, user, key, method, body, now.getTime(), { queuedEdit: job.kind === 'card' || job.kind === 'reply' || job.kind === 'rating-response' || job.date === surveyFormatJob, clock });
+    const op = (key, method, body) => telegramOperation(store, client, user, key, method, body, now.getTime(), { queuedEdit: job.kind === 'card' || job.kind === 'reply' || job.kind === 'rating-response' || job.date === surveyFormatJob, strictTheme: homeworkNotice, clock });
     const sendBody = (text, keyboard, silent = true) => ({ chat_id: id, text, parse_mode: "HTML", disable_web_page_preview: true,
       disable_notification: silent, ...(keyboard ? { reply_markup: keyboard } : {}) });
     if (job.kind === "commands") {
@@ -195,6 +199,18 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
         ...sendBody(text, survey.keyboard), message_id: accepted.message_id,
       });
       if (result.replaceable || await applyOutcome(store, job, result)) await finishJob(store, job);
+    } else if (homeworkNotice && job.date === homeworkThemeJob) {
+      const original = await store.first("SELECT payload FROM jobs WHERE id=? AND status='done'", `${id}:alert:${homeworkCampaign}`);
+      const receipt = original && await store.campaignReceipt(id, homeworkCampaign);
+      const messageId = receipt && JSON.parse(receipt.result).message_id;
+      if (!Number.isSafeInteger(messageId)) { await finishJob(store, job, "cancelled"); return; }
+      const notice = JSON.parse(original.payload);
+      const text = brandHomeworkNotice(notice.text);
+      if (JSON.parse(receipt.result).content_hash === hashScreen(text, notice.keyboard)) { await finishJob(store, job); return; }
+      const result = await op(homeworkThemeJob, "editMessageText", {
+        ...sendBody(text, notice.keyboard), message_id: messageId,
+      });
+      if (await applyOutcome(store, job, result)) await finishJob(store, job);
     } else if (job.kind === "rating-response") {
       const target = { chat_id: id, message_id: payload.messageId };
       const result = await op("rating-response:" + job.date, payload.remove ? "deleteMessage" : "editMessageText",
@@ -251,7 +267,8 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       const screenHash = hashScreen(rich ?? text, payload.keyboard);
       const unchanged = standalone && await store.setting(screenKey) === screenHash;
       // Keep the original operation key for any send attempted before the format fix.
-      const outgoing = job.kind === "alert" && job.date === updateSurvey ? { ...body, text: formatUpdateSurvey(body.text) } : body;
+      const outgoing = job.kind === "alert" && job.date === updateSurvey ? { ...body, text: formatUpdateSurvey(body.text) }
+        : homeworkNotice && job.date === homeworkCampaign ? { ...body, text: brandHomeworkNotice(body.text) } : body;
       const result = unchanged ? { done: true } : await op(`${job.kind}:${job.date}:${job.revision}:${partIndex}:${details ? "support-details" : digest(body)}`, method, outgoing);
       if (rich && result.failed && !result.replaceable) {
         // A definitive Rich Message rejection can fall back to text at the

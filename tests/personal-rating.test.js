@@ -4,6 +4,38 @@ import { personalFixture } from './helpers/personal-fixture.js';
 import { enqueuePersonalUpdate, processPersonalInbox } from '../src/personal/inbox.js';
 import { deliverUser, diagnosticText } from '../src/personal/delivery.js';
 
+test('homework announcement survives a subscription change and repairs only confirmed sends', async t => {
+  const f = await personalFixture(); t.after(() => f.close());
+  const now = Date.now(), campaign = 'updates-20261124-v14';
+  await f.store.run('INSERT INTO users(user_id,paused) VALUES(100,1),(101,0),(102,0),(103,0)');
+  const payload = { manual: true, text: '<b>ДЗ в расписании</b>' };
+  for (const id of [100,101,102,103]) {
+    const user = await f.store.user(id);
+    await f.store.enqueue(user, 'alert', campaign, { due: now, payload });
+    if (id !== 100) {
+      await f.store.run("UPDATE jobs SET status='done' WHERE user_id=?", id);
+      await f.store.enqueue(user, 'alert', 'theme-' + campaign, { due: now, payload: { manual: true } });
+    }
+  }
+  for (const id of [101,103]) {
+    await f.store.run("INSERT INTO operations(id,user_id,method,status,result,started_at) VALUES(?,?,'sendMessage','succeeded',?,?)",
+      id + ':alert:' + campaign + ':1:0:receipt', id, JSON.stringify({ message_id: 42 }), now);
+  }
+  await f.store.run('UPDATE users SET epoch=epoch+1');
+  const calls = [];
+  const client = { async call(method, body) {
+    calls.push([method, body.chat_id, body.message_id]);
+    assert.match(body.text, /<tg-emoji emoji-id="5197713793202829678">/u);
+    if (body.chat_id === 103) throw Object.assign(Error('rejected'), { apiRejected:true, errorCode:400, description:'invalid custom emoji' });
+    return { message_id: 111 };
+  } };
+  for (const [offset,id] of [100,101,102,103].entries())
+    await deliverUser(f.store, client, id, { now:new Date(now+offset*2000), mode:'saving' });
+  assert.deepEqual(calls, [['sendMessage',100,undefined],['editMessageText',101,42],['editMessageText',103,42]]);
+  assert.equal((await f.store.first("SELECT status FROM jobs WHERE id=?", '102:alert:theme-' + campaign)).status, 'cancelled');
+  assert.equal((await f.store.first("SELECT status FROM jobs WHERE id=?", '103:alert:theme-' + campaign)).status, 'failed');
+});
+
 test('survey binds to its Telegram receipt and saves only one decision', async t => {
   const f = await personalFixture();
   t.after(() => f.close());
