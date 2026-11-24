@@ -92,14 +92,15 @@ export class PersonalStore {
   }
   async weekSchedules(group, start, end) {
     const rows = await this.all("SELECT a.date, s.payload, NULL AS effective_from "
-      + "FROM active_versions a JOIN snapshots s ON s.dataset_id=a.dataset_id "
-      + "WHERE a.date BETWEEN ? AND ? AND s.group_id=? UNION ALL "
+      + "FROM active_versions a LEFT JOIN snapshots s ON s.dataset_id=a.dataset_id AND s.group_id=? "
+      + "WHERE a.date BETWEEN ? AND ? UNION ALL "
       + "SELECT NULL, p.value, json_extract(m.value,'$.effectiveFrom') FROM settings m JOIN settings p ON p.key=? "
       + "WHERE m.key='weekly:manifest' AND json_extract(m.value,'$.effectiveFrom')<=? "
       + "AND EXISTS (SELECT 1 FROM json_each(m.value,'$.groups') WHERE value=?) ORDER BY 1",
-    start, end, group, "weekly:" + group, end, group);
+    group, start, end, "weekly:" + group, end, group);
     const plan = rows.find(row => row.effective_from);
-    return { schedules: rows.filter(row => row.date).map(row => JSON.parse(row.payload)),
+    return { schedules: rows.filter(row => row.date && row.payload).map(row => JSON.parse(row.payload)),
+      publishedDates: rows.filter(row => row.date).map(row => row.date),
       plan: plan ? { ...JSON.parse(plan.payload), effectiveFrom: plan.effective_from } : null };
   }
   async card(user, date) {

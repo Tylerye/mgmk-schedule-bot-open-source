@@ -7,7 +7,7 @@ import { escapeHtml } from "../schedule/format.js";
 import { manualJobsOnly } from './quota.js';
 import { backgroundPolicy } from '../background-policy.js';
 import { isTimetableMessage, screenHash as hashScreen, richScreen } from './screen-state.js';
-import { homeworkOnCard, readCardHomework } from "./homework.js";
+import { affectedHomeworkCards, homeworkOnCard, readCardHomework } from "./homework.js";
 
 const updateSurvey = "rating-update-20261123-v1";
 const surveyFormatJob = "format-" + updateSurvey;
@@ -15,7 +15,7 @@ const homeworkCampaign = "updates-20261124-v14";
 const homeworkThemeJob = "theme-" + homeworkCampaign;
 const homeworkIcon = themeIcon("homework", true);
 const homeworkEmojiId = /^<tg-emoji emoji-id="(\d+)"/u.exec(homeworkIcon)?.[1];
-const brandHomeworkNotice = text => text.includes(homeworkIcon) ? text : text.replaceAll("📝", homeworkIcon);
+const brandHomeworkNotice = text => text.replace(/<tg-emoji emoji-id="\d+">📝<\/tg-emoji>|📝/gu, match => match === "📝" ? homeworkIcon : match);
 
 function formatUpdateSurvey(text) {
   // The D1 console stripped newlines from the original campaign payload.
@@ -352,7 +352,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       const card = await store.card(user, job.date) ?? { parts: [], mode: "compact", schedule: null };
       const lessonChanges = lessonDetailsChanges(schedule, card);
       const base = renderPersonal(schedule, user, { mode: card.mode, now, branded: brandedMenu, lessonChanges });
-      const rendered = homeworkOnCard(base, schedule, user, await readCardHomework(store, user), brandedMenu);
+      const rendered = homeworkOnCard(base, schedule, user, await readCardHomework(store, user, now, schedule.date), brandedMenu);
       const parts = [...card.parts];
       const count = Math.max(parts.length, rendered.parts.length);
       let changed = false;
@@ -362,6 +362,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
         const hash = digest([text, keyboard]);
         const verify = index === 0 && Boolean(payload.verifyMessageId) && parts[index]?.id === payload.verifyMessageId;
         if (parts[index]?.hash === hash && !verify) continue;
+        if (payload.existingOnly && !parts[index]?.id) { await finishJob(store, job, "cancelled"); return; }
         if (changed) {
           // One API operation per lane; persist progress before continuing.
           await store.run("INSERT INTO cards(user_id,group_id,date,parts) VALUES(?,?,?,?) ON CONFLICT(user_id,group_id,date) DO UPDATE SET parts=excluded.parts WHERE cards.parts IS NOT excluded.parts",
@@ -373,7 +374,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
         const key = method === "sendMessage" ? `send-card:${user.group_id}:${job.date}:${index}${parts[index]?.replacementFor ? ":replace:"+parts[index].replacementFor : ""}`
           : `edit-card:${user.epoch}:${job.revision}:${user.group_id}:${job.date}:${index}:${parts[index].id}:${hash}`;
         const result = await op(key, method, body);
-        if (result.failed && result.replaceable && parts[index]?.id) {
+        if (result.failed && result.replaceable && parts[index]?.id && !payload.existingOnly) {
           parts[index]={...parts[index],id:null,hash:null,replacementFor:parts[index].id};
           await store.run("UPDATE cards SET parts=? WHERE user_id=? AND group_id=? AND date=?", JSON.stringify(parts),id,user.group_id,job.date);
           return;
@@ -412,8 +413,14 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
         statements.push(store.jobStatement(user, "alert", `change:${job.date}`, { priority: 1, due: now.getTime(),
           payload: { texts: noticeParts(`${t(user).changed} · ${job.date}`, changes), scheduleHash: schedule.hash, date: job.date } }));
       }
-      if (!user.paused && !payload.history) {
+      if (!user.paused && !payload.history && !payload.existingOnly) {
         const { cards, schedules } = await loadCards(store, user, job.date);
+        if (card.schedule_hash !== schedule.hash) {
+          for (const date of await affectedHomeworkCards(store, user, now, schedule.date, card.schedule, cards)) {
+            if (!await store.first("SELECT 1 FROM jobs WHERE id=? AND status='pending' AND epoch=?", `${id}:card:${date}`, user.epoch))
+              statements.push(store.jobStatement(user, "card", date, { priority: 3, due: now.getTime(), payload: { existingOnly: true } }));
+          }
+        }
         cards.push({ ...card, date: job.date, parts, schedule });
         statements.push(...await pinStatement(store, user, cards, now, payload.manual === true));
         schedules.push(schedule);
@@ -475,7 +482,8 @@ async function editDueCard(store, user, candidate, next, date, { client, clock, 
 
 async function enqueueDueLocked(store, fresh, date, brandedMenu, direct) {
   const now = date.getTime(), { schedules, cards } = await loadCards(store, fresh);
-  const homework = schedules.length ? await readCardHomework(store, fresh) : null;
+  const through = schedules.at(-1)?.date;
+  const homework = through ? await readCardHomework(store, fresh, date, through) : null;
   const statements = [];
   let candidate;
   for (const schedule of schedules) {

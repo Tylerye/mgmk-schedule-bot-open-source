@@ -3,7 +3,8 @@ import test from "node:test";
 import { personalFixture, sampleSchedule, installSchedules } from "./helpers/personal-fixture.js";
 import { collectPersonalUpdate, enqueuePersonalUpdate, processPersonalInbox } from "../src/personal/inbox.js";
 import { deliverUser } from "../src/personal/delivery.js";
-import { readHomework } from "../src/personal/homework.js";
+import { homeworkScreen, readHomework } from "../src/personal/homework.js";
+import { sendWithThemeFallback } from "../src/chat-theme.js";
 
 test("private homework follows its dated lesson, stays scoped to the owner, and is saved once", async t => {
   const f = await personalFixture();
@@ -119,4 +120,104 @@ test("private homework follows its dated lesson, stays scoped to the owner, and 
   const editAnswer = answer(editId, "Новый текст");
   editAnswer.message.reply_to_message.text = edit.body.text;
   assert.match((await update(editAnswer, 100)).body.text, /Сохранить новый текст/u);
+});
+
+test("saving during a lesson edits the pinned card and both dated views follow the daily PDF", async t => {
+  const f = await personalFixture();
+  t.after(() => f.close());
+  const day = await sampleSchedule("8Са", "2026-11-25");
+  const next = await sampleSchedule("8Са", "2026-12-02");
+  await f.store.setSetting("weekly:manifest", { effectiveFrom: "2026-11-23", groups: ["8СА"] });
+  await f.store.setSetting("weekly:8СА", { days: { wednesday: { lessons: [[8, "Электротехника", "210"]], hours: [] } } });
+  next.lessons[1].variants[0].subject = "ЭЛТЕХНИКА";
+  next.timeline.find(event => event.type === "lesson" && event.number === 8).variants[0].subject = "ЭЛТЕХНИКА";
+  await installSchedules(f.store, [day]);
+  await installSchedules(f.store, [next], { id: "b".repeat(64) });
+  await f.store.run("INSERT INTO users(user_id,group_id) VALUES(100,'8СА')");
+  const item = { id: 900, group: "8СА", subject: "Электротехника", date: day.date, text: "Закон Ома", done: false };
+  await f.store.setSetting("homework:100", { items: [item], draft: null });
+  const lesson = day.timeline.find(event => event.type === "lesson" && event.number === 1);
+  let ms = Date.parse(day.date + "T" + lesson.start + ":30+03:00");
+  const calls = [];
+  const client = { async call(method, body) { calls.push({ method, body }); return { message_id: 500 + calls.length }; } };
+  const deliver = () => deliverUser(f.store, client, 100, { now: new Date(ms += 2000), brandedMenu: true, mode: "saving" });
+  await f.store.enqueue(await f.store.user(100), "card", day.date, { due: ms, payload: { manual: true, history: true } });
+  await deliver();
+  const pinned = (await f.store.card(await f.store.user(100), day.date)).parts[0].id;
+  await f.store.run("UPDATE users SET pin_message_id=?,pin_date=? WHERE user_id=100", pinned, day.date);
+  assert.doesNotMatch(calls[0].body.text, /Закон Ома/u);
+  assert.match(calls[0].body.text, /<tg-emoji/u);
+
+  let id = 1;
+  const tap = async action => {
+    const update = { update_id: id++, userId: 100, action, messageId: 42, acknowledged: true };
+    assert.equal(await enqueuePersonalUpdate(f.store, update, ms), true);
+    const row = await f.store.first("SELECT * FROM inbox WHERE update_id=?", update.update_id);
+    await processPersonalInbox(f.store, row, new Date(ms), { brandedMenu: true });
+    await deliver();
+    return calls.at(-1);
+  };
+  await f.store.setSetting("homework:100", { items: [item], draft: {
+    group: "8СА", subject: "Математика", id: 901, text: "Решить пример", until: ms + 60_000,
+  } });
+  assert.match((await tap("hw:save:901:" + day.date)).body.text, /Сохранено/u);
+  await deliver();
+  const edited = calls.at(-1);
+  assert.equal(edited.method, "editMessageText");
+  assert.equal(edited.body.message_id, pinned);
+  assert.match(edited.body.text, /<tg-emoji[\s\S]*Решить пример/u);
+  assert.ok(edited.body.reply_markup.inline_keyboard.every(row => row.every(button => button.icon_custom_emoji_id)));
+  assert.equal((await f.store.user(100)).pin_message_id, pinned);
+  assert.doesNotMatch(edited.body.text, /Закон Ома/u);
+  assert.doesNotMatch((await tap("hw:day:" + day.date)).body.text, /Закон Ома/u);
+  assert.match((await tap("hw:day:" + next.date)).body.text, /Закон Ома/u);
+  assert.match((await tap("preview:" + next.date + ":compact")).body.text, /Закон Ома/u);
+  await tap("hw:done:901");
+  await deliver();
+  assert.equal(calls.at(-1).body.message_id, pinned);
+  assert.doesNotMatch(calls.at(-1).body.text, /Решить пример/u);
+
+  ms = Date.parse(day.date + "T" + lesson.end + ":15+03:00");
+  const saved = await readHomework(f.store, 100);
+  await f.store.setSetting("homework:100", { items: saved.items, draft: { group: "8СА", subject: "Математика", id: 902, text: "Поздно", until: ms + 60_000 } });
+  assert.match((await tap("hw:save:902:" + day.date)).body.text, /Дата поменялась/u);
+  assert.ok(!(await readHomework(f.store, 100)).items.some(entry => entry.id === 902));
+});
+
+test("Telegram timer rejection preserves the timetable's custom emoji", async () => {
+  const calls = [];
+  const send = async (text, keyboard) => {
+    calls.push({ text, keyboard });
+    if (text.includes("<tg-time")) throw Object.assign(new Error("format"), {
+      apiRejected: true, errorCode: 400, description: "Bad Request: can't parse entities",
+    });
+  };
+  const emoji = '<tg-emoji emoji-id="123">📚</tg-emoji>';
+  const keyboard = { inline_keyboard: [[{ text: "Меню", icon_custom_emoji_id: "123" }]] };
+  await sendWithThemeFallback(send, emoji + ' <tg-time unix="12" format="r">08:00</tg-time>', keyboard, { customEmojiOnly: true });
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[1], { text: emoji + " 08:00", keyboard });
+});
+
+test("a weekly forecast stores the selected occurrence and recalculates it from daily publications", async t => {
+  const f = await personalFixture();
+  t.after(() => f.close());
+  const group = "8СА", monday = new Date("2026-11-23T19:00:00+03:00");
+  await f.store.run("INSERT INTO users(user_id,group_id) VALUES(100,?)", group);
+  await f.store.setSetting("weekly:manifest", { effectiveFrom: "2026-11-23", groups: [group] });
+  await f.store.setSetting("weekly:" + group, { days: { wednesday: { lessons: [[1, "Математика", "210"]], hours: [] } } });
+  await f.store.setSetting("homework:100", { items: [], draft: { group, subject: "Математика", id: 1, text: "Второе занятие", until: +monday + 60000 } });
+  const show = async action => {
+    const statements = [];
+    const screen = await homeworkScreen(f.store, await f.store.user(100), { action }, monday, true, statements);
+    await f.store.batch(statements);
+    return screen;
+  };
+  assert.match((await show("hw:save:1:2026-12-02")).text, /Урок после ближайшего/u);
+  assert.equal((await readHomework(f.store, 100)).items[0].relative.number, 2);
+  await installSchedules(f.store, [await sampleSchedule("8Са", "2026-11-24")]);
+  await installSchedules(f.store, [await sampleSchedule("8Са", "2026-11-25")], { id: "b".repeat(64) });
+  assert.doesNotMatch((await show("hw:day:2026-11-24")).text, /Второе занятие/u);
+  assert.match((await show("hw:day:2026-11-25")).text, /Второе занятие/u);
+  assert.match((await show("hw:show:1")).text, /25 ноября/u);
 });

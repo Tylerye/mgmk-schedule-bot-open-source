@@ -9,7 +9,7 @@ export function weekRange(now) {
   const today = dateInTimezone(now, "Europe/Minsk");
   const weekday = new Date(today + "T12:00:00Z").getUTCDay();
   const start = addDays(today, -((weekday + 6) % 7));
-  return { today, start, end: addDays(start, 6) };
+  return { today, start, end: addDays(start, 5) };
 }
 
 export function plannedDay(plan, date) {
@@ -40,10 +40,11 @@ function dayBlocks(schedule, user, branded) {
 const textLength = html => html.replace(/<[^>]*>/gu, "").length;
 const richDay = day => day.blocks.map(block => "<p>" + block.join("<br>") + "</p>").join("");
 
-export function weekPage({ schedules, plan }, user, range, branded, focus) {
+export function weekPage({ schedules, plan, publishedDates }, user, range, branded, focus) {
   const en = user.language === "en";
   const w = t(user);
   const byDate = new Map(schedules.map(schedule => [schedule.date, schedule]));
+  const published = new Set(publishedDates ?? byDate.keys());
   const heading = w.week + " · " + escapeHtml(schedules[0]?.displayGroup ?? plan?.label ?? user.group_id);
   const shortDate = date => date.slice(5).split("-").reverse().join(".");
   const span = shortDate(range.start) + "–" + shortDate(range.end);
@@ -54,9 +55,9 @@ export function weekPage({ schedules, plan }, user, range, branded, focus) {
       "Дневной PDF всегда в приоритете · Если строишь планы, сверься с сайтом колледжа"];
   const alert = en ? "The bot can still tell you about changes if alerts are on"
     : "Если включены «Замены», бот напишет, когда поменяются пары";
-  const days = Array.from({ length: 7 }, (_, index) => {
+  const days = Array.from({ length: 6 }, (_, index) => {
     const date = addDays(range.start, index);
-    const schedule = byDate.get(date) ?? plannedDay(plan, date);
+    const schedule = published.has(date) ? byDate.get(date) : plannedDay(plan, date);
     const label = personalDateLabel({ date }, user);
     const origin = schedule?.preliminary ? (en ? "Weekly plan" : "По плану")
       : schedule ? (en ? "Daily PDF" : "Дневной PDF") : "";
@@ -85,7 +86,7 @@ export function weekPage({ schedules, plan }, user, range, branded, focus) {
   const rows = days.reduce((count, day) => count + day.blocks.length + 1, 0);
   const richHtml = "<h2>" + title + "</h2><p>" + span + "</p><p>" + [...intro, alert].join("<br>") + "</p>"
     + days.map(day => day.schedule
-      ? "<details" + (day.date === range.today ? " open" : "") + "><summary>" + day.label + " · " + day.origin + "</summary>"
+      ? "<details><summary>" + day.label + " · " + day.origin + "</summary>"
         + richDay(day) + "</details>"
       : "<p>" + dayTitle(day) + "<br>" + day.blocks[0][0] + "</p>").join("");
   const available = days.filter(day => day.schedule);

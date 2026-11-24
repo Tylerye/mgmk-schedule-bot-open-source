@@ -275,8 +275,8 @@ export function renderPersonal(schedule, user, { mode = "compact", now = new Dat
   bodies.push(body);
   const parts = bodies.map((body, index) => `${title}${bodies.length > 1 ? ` · ${w.part} ${index + 1}/${bodies.length}` : ""}\n\n${body}`);
   const keyboard = { inline_keyboard: [
-    [button(mode === "full" ? w.compact : w.full, `view:${schedule.date}:${mode === "full" ? "compact" : "full"}`, { plain: true, style: "primary" })],
-    [button(w.main, "menu", { plain: true })],
+    [button(mode === "full" ? w.compact : w.full, `view:${schedule.date}:${mode === "full" ? "compact" : "full"}`, { branded, plain: true, style: "primary" })],
+    [button(w.main, "menu", { branded, plain: true })],
   ] };
   const hashes = parts.map((text, i) => createHash("sha256").update(JSON.stringify([text, i ? null : keyboard])).digest("hex"));
   const result = { parts, keyboard, hashes };

@@ -65,21 +65,31 @@ function plainKeyboard(markup, textOnly = false) {
   })) };
 }
 
-// Retry once after a definitive format rejection. A timeout may already
+// Retry only after a definitive format rejection. A timeout may already
 // have delivered the original message, so it must go to the caller unchanged.
+const formatRejected = error => error.apiRejected && error.errorCode === 400
+  && /emoji|entities|reply markup|button.type.invalid/iu.test(error.description ?? "");
 export async function sendWithThemeFallback(send, text, keyboard, { customEmojiOnly = false } = {}) {
   try { return await send(text, keyboard); }
   catch (error) {
-    if (!error.apiRejected || error.errorCode !== 400 || !/emoji|entities|reply markup|button.type.invalid/iu.test(error.description ?? "")) throw error;
-    const plain = text?.replace(/<tg-emoji emoji-id="\d+">([^<]*)<\/tg-emoji> ?/gu, customEmojiOnly ? "" : "$1")
-      .replace(/<tg-time unix="\d+" format="r">([^<]*)<\/tg-time>/gu, "$1");
+    if (!formatRejected(error)) throw error;
+    const withoutTimer = text?.replace(/<tg-time unix="\d+" format="r">([^<]*)<\/tg-time>/gu, "$1");
+    if (withoutTimer !== text && !/button/iu.test(error.description ?? "")) {
+      try {
+        return await send(withoutTimer, keyboard);
+      } catch (retry) {
+        if (!formatRejected(retry) || !withoutTimer.includes("<tg-emoji") && plainKeyboard(keyboard, customEmojiOnly) === keyboard) throw retry;
+        error = retry;
+      }
+    }
+    const plain = withoutTimer?.replace(/<tg-emoji emoji-id="\d+">([^<]*)<\/tg-emoji> ?/gu, customEmojiOnly ? "" : "$1");
     const markup = plainKeyboard(keyboard, customEmojiOnly);
     if (customEmojiOnly && plain !== text && markup !== keyboard) {
       const buttonRejected = /button[^\n]*emoji/iu.test(error.description ?? "");
       try {
         return buttonRejected ? await send(text, markup) : await send(plain, keyboard);
       } catch (retry) {
-        if (!retry.apiRejected || retry.errorCode !== 400 || !/emoji|entities|reply markup|button.type.invalid/iu.test(retry.description ?? "")) throw retry;
+        if (!formatRejected(retry)) throw retry;
       }
     }
     if (plain === text && markup === keyboard) throw error;

@@ -100,7 +100,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     const missingText = () => titled("view", t(user).missing);
     let initialCards = [];
     let homework;
-    const cardHomework = async () => homework === undefined ? (homework = await readCardHomework(store, user)) : homework;
+    const cardHomework = async through => homework === undefined ? (homework = await readCardHomework(store, user, now, through)) : homework;
     let repeatedSelection = false;
     let action = update.action;
     if (action.startsWith("table:")) action = "preview:" + action.slice("table:".length) + ":full";
@@ -112,7 +112,19 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
     if (action === "start") action = user.group_id ? "menu" : "language";
     if ((action === "menu" || update.action === "start") && user.has_homework) jobs.push(discardHomeworkDraft(user.user_id));
     if (action === "hw" || action.startsWith("hw:")) {
-      const view = await homeworkScreen(store, user, update, now, brandedMenu, jobs, homeworkState);
+      const refreshDates = new Set();
+      const view = await homeworkScreen(store, user, update, now, brandedMenu, jobs, homeworkState, refreshDates);
+      if (refreshDates.size) {
+        const cards = await store.all("SELECT c.date,j.id AS pending,json_extract(j.payload,'$.manual') AS manual "
+          + "FROM json_each(?) d CROSS JOIN cards c ON c.user_id=? AND c.group_id=? AND c.date=d.value "
+          + "LEFT JOIN jobs j ON j.id=?||c.date AND j.epoch=? AND j.status='pending' "
+          + "WHERE json_extract(c.parts,'$[0].id') IS NOT NULL",
+        JSON.stringify([...refreshDates]), user.user_id, user.group_id, `${user.user_id}:card:`, user.epoch);
+        for (const card of cards) {
+          if (!card.pending) jobs.push(job(user, "card", card.date, { priority: 0, payload: { manual: true, existingOnly: true } }));
+          else if (!card.manual) jobs.push(["UPDATE jobs SET priority=MIN(priority,0),payload=json_set(payload,'$.manual',json('true')) WHERE id=?", card.pending]);
+        }
+      }
       reply(view.text, view.keyboard, view.editId);
     } else if (action === "language") {
       const en = user.language === "en";
@@ -223,7 +235,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
           const card = hasLessonSummary(schedule) ? await store.card(user, date) : null;
           const base = renderPersonal(schedule, user, { now, branded: brandedMenu, previewTimer: true, lessonChanges: lessonDetailsChanges(schedule, card),
             mode: action.startsWith("preview:") ? action.split(":")[2] : "compact" });
-          const rendered = homeworkOnCard(base, schedule, user, await cardHomework(), brandedMenu);
+          const rendered = homeworkOnCard(base, schedule, user, await cardHomework(schedule.date), brandedMenu);
           const keyboard = structuredClone(rendered.keyboard);
           for (const row of keyboard.inline_keyboard) for (const item of row) {
             const target = item.callback_data.slice("personal:".length).replace(/^view:/u, "preview:");
@@ -273,7 +285,7 @@ export async function processPersonalInbox(store, row, now = new Date(), { owner
           const card = await store.card(user, s.date);
           if (card?.schedule_hash === s.hash && card.schedule_payload === JSON.stringify(s)) {
             const base = renderPersonal(s, user, { now, branded: brandedMenu, mode: card.mode, lessonChanges: lessonDetailsChanges(s, card) });
-            const rendered = homeworkOnCard(base, s, user, await cardHomework(), brandedMenu);
+            const rendered = homeworkOnCard(base, s, user, await cardHomework(initialCards.at(-1).date), brandedMenu);
             const count = Math.max(rendered.parts.length, card.parts.length);
             const current = Array.from({ length: count }, (_, index) => card.parts[index]?.id
               && card.parts[index].hash === screenHash(rendered.parts[index] ?? t(user).emptyPart, index ? undefined : rendered.keyboard));
