@@ -14,7 +14,7 @@ export async function uploadPersonalResult({ result, source, contentHash, genera
   const historical = () => JSON.parse(seed).flatMap(g => g.dates.map(date => ({ group: g.label, date })));
   if (!result.publishable) {
     await uploadObservations([...historical(), ...result.observations], seedVersion);
-    await post("source-error", { date: result.date, coverage: result.coverage,
+    await post("source-error", { date: result.date, generation, coverage: result.coverage,
       groups: result.errors.map(e => e.id), structuralErrors: result.structuralErrors.length });
     throw new Error(`Personal parser coverage failed: ${result.coverage.parsed}/${result.coverage.discovered}`);
   }

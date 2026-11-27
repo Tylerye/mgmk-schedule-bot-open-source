@@ -3,9 +3,17 @@ import { dateInTimezone } from '../dates.js';
 const stoppedDays = new WeakMap();
 const idleReadEstimate = new WeakMap();
 const replaceJob = "payload=excluded.payload,revision=excluded.revision,status='pending',completed_at=NULL";
-export const JOB_CONFLICT_UPDATE = "ON CONFLICT(id) DO UPDATE SET epoch=excluded.epoch,priority=CASE WHEN jobs.status='pending' AND jobs.epoch=excluded.epoch THEN MIN(jobs.priority,excluded.priority) ELSE excluded.priority END,"
-  + "due=CASE WHEN jobs.status='pending' AND jobs.epoch=excluded.epoch THEN MIN(jobs.due,excluded.due) ELSE excluded.due END,"
-  + replaceJob;
+const samePendingJob = "jobs.status='pending' AND jobs.epoch=excluded.epoch";
+export function jobConflictUpdate({ publication = false } = {}) {
+  // An automatic refresh can also satisfy a pending manual request. Keep its
+  // priority and verification, while allowing a publication to create a card.
+  const payload = publication
+    ? `CASE WHEN ${samePendingJob} AND json_extract(jobs.payload,'$.manual')=1 THEN json_remove(jobs.payload,'$.existingOnly','$.history') ELSE excluded.payload END`
+    : "excluded.payload";
+  return `ON CONFLICT(id) DO UPDATE SET epoch=excluded.epoch,priority=CASE WHEN ${samePendingJob} THEN MIN(jobs.priority,excluded.priority) ELSE excluded.priority END,`
+    + `due=CASE WHEN ${samePendingJob} THEN MIN(jobs.due,excluded.due) ELSE excluded.due END,`
+    + `payload=${payload},revision=excluded.revision,status='pending',completed_at=NULL`;
+}
 // D1 and the future SQLite runtime share this small async SQL interface.
 // All mutable data below belongs to the separate personal database.
 export class PersonalStore {
@@ -111,7 +119,7 @@ export class PersonalStore {
     const id = `${user.user_id}:${kind}:${date}`;
     const conflict = replacePending
       ? "ON CONFLICT(id) DO UPDATE SET epoch=excluded.epoch,priority=excluded.priority,due=excluded.due," + replaceJob
-      : JOB_CONFLICT_UPDATE;
+      : jobConflictUpdate();
     return ["INSERT INTO jobs(id,user_id,epoch,kind,date,priority,due,payload) VALUES(?,?,?,?,?,?,?,?) "
       + conflict.replace('revision=excluded.revision', 'revision=jobs.revision+1'), id, user.user_id, user.epoch, kind, date, priority, due, JSON.stringify(payload)];
   }

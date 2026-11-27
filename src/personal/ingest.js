@@ -1,5 +1,5 @@
 import { mergeCatalog, groupKey } from "./catalog.js";
-import { JOB_CONFLICT_UPDATE } from './store.js';
+import { jobConflictUpdate } from './store.js';
 
 const validDate = v => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(v) && new Date(`${v}T00:00:00Z`).toISOString().slice(0, 10) === v;
 export const MAX_STAGE_SCHEDULES = 12;
@@ -79,6 +79,14 @@ export async function stageSchedules(store, id, schedules) {
     + "ON CONFLICT(dataset_id,group_id) DO UPDATE SET hash=excluded.hash,payload=excluded.payload WHERE snapshots.payload<>excluded.payload", id, s.canonicalGroup, s.hash, JSON.stringify(s)]));
 }
 
+export async function activeSourceStatus(store, sourceId, date = null) {
+  const active = await store.first("SELECT a.date,a.generation,d.source_id,d.fingerprint FROM active_versions a "
+    + "JOIN datasets d ON d.id=a.dataset_id WHERE a.date=COALESCE(?,(SELECT json_extract(value,'$.date') FROM settings WHERE key=?))",
+    date, `source:${sourceId}`);
+  const known = active?.source_id === sourceId ? { date: active.date, generation: active.generation, fingerprint: active.fingerprint } : null;
+  return { enabled: true, known, activeGeneration: active?.generation ?? null };
+}
+
 export async function finishDataset(store, id) {
   const dataset = await store.first("SELECT * FROM datasets WHERE id=?", id);
   if (!dataset) throw new Error("Unknown dataset");
@@ -91,15 +99,26 @@ export async function finishDataset(store, id) {
   const results = await store.batch([
     ["UPDATE datasets SET status='ready' WHERE id=?", id],
     ["UPDATE datasets SET status='superseded' WHERE date=? AND generation<? AND status='staging'", dataset.date, dataset.generation],
-    ["INSERT OR IGNORE INTO fanout(dataset_id,group_id) SELECT s.dataset_id,s.group_id FROM snapshots s WHERE s.dataset_id=? "
-      + "AND EXISTS(SELECT 1 FROM users u WHERE u.group_id=s.group_id AND u.paused=0 AND u.blocked=0) "
-      + "AND NOT EXISTS(SELECT 1 FROM active_versions a WHERE a.date=? AND a.generation>=?) "
-      + "AND NOT EXISTS(SELECT 1 FROM snapshots old JOIN active_versions a ON old.dataset_id=a.dataset_id WHERE a.date=? AND old.group_id=s.group_id AND old.hash=s.hash)",
-      id, dataset.date, dataset.generation, dataset.date],
+    // Unchanged groups keep any unfinished cursor; a changed group starts over.
+    ["INSERT OR IGNORE INTO fanout(dataset_id,group_id,cursor) "
+      + "SELECT s.dataset_id,s.group_id,COALESCE(pending.cursor,0) FROM snapshots s "
+      + "LEFT JOIN active_versions a ON a.date=? "
+      + "LEFT JOIN snapshots old ON old.dataset_id=a.dataset_id AND old.group_id=s.group_id AND old.hash=s.hash "
+      + "LEFT JOIN fanout pending ON pending.dataset_id=old.dataset_id AND pending.group_id=old.group_id AND pending.status='pending' "
+      + "WHERE s.dataset_id=? AND (a.generation IS NULL OR a.generation<?) "
+      + "AND (old.group_id IS NULL OR pending.group_id IS NOT NULL) "
+      + "AND EXISTS(SELECT 1 FROM users u WHERE u.group_id=s.group_id AND u.paused=0 AND u.blocked=0 AND u.user_id>COALESCE(pending.cursor,0))",
+      dataset.date, id, dataset.generation],
     ["INSERT INTO active_versions(date,dataset_id,generation) VALUES(?,?,?) ON CONFLICT(date) DO UPDATE SET dataset_id=excluded.dataset_id,generation=excluded.generation "
       + "WHERE active_versions.generation<excluded.generation", dataset.date, id, dataset.generation],
-    ...(dataset.source_id ? [["INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-      `source:${dataset.source_id}`, JSON.stringify({ fingerprint: dataset.fingerprint, date: dataset.date })]] : []),
+    ...(dataset.source_id ? [["INSERT INTO settings(key,value) SELECT ?,? "
+      + "WHERE EXISTS(SELECT 1 FROM active_versions WHERE date=? AND dataset_id=?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+      `source:${dataset.source_id}`, JSON.stringify({ fingerprint: dataset.fingerprint, date: dataset.date, generation: dataset.generation }), dataset.date, id]] : []),
+    ["UPDATE settings SET value='null' WHERE key='source-error' AND value<>'null' "
+      + "AND (json_extract(value,'$.date') IS NULL OR json_extract(value,'$.date')=?) "
+      + "AND COALESCE(json_extract(value,'$.generation'),0)<=? "
+      + "AND EXISTS(SELECT 1 FROM active_versions WHERE date=? AND dataset_id=?)",
+      dataset.date, dataset.generation, dataset.date, id],
   ]);
   return Number(results[3]?.meta?.changes) > 0;
 }
@@ -134,7 +153,7 @@ export async function fanoutBatch(store, now = Date.now()) {
     ["INSERT INTO jobs(id,user_id,epoch,kind,date,priority,due,payload,revision) "
       + "SELECT CAST(u.user_id AS TEXT)||':card:'||?,u.user_id,u.epoch,'card',?,1,?,'{}',"
       + "(SELECT value FROM job_revision_sequence WHERE id=1)-?+ROW_NUMBER() OVER (ORDER BY u.group_id,u.user_id) "
-      + "FROM (" + recipients + ") u WHERE 1 " + JOB_CONFLICT_UPDATE,
+      + "FROM (" + recipients + ") u WHERE 1 " + jobConflictUpdate({ publication: true }),
       event.date, event.date, now, limit, event.dataset_id, event.date, limit],
     ["WITH progress AS MATERIALIZED (SELECT group_id,MAX(user_id) next_cursor FROM (" + recipients + ") GROUP BY group_id) "
       + "UPDATE fanout SET cursor=COALESCE((SELECT next_cursor FROM progress WHERE group_id=fanout.group_id),cursor),"

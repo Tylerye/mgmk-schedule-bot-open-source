@@ -1,6 +1,6 @@
 import { PersonalStore } from "../src/personal/store.js";
 import { enqueuePersonalUpdate, processPersonalInbox } from "../src/personal/inbox.js";
-import { beginDataset, stageSchedules, finishDataset, fanoutBatch, mergeCatalogObservations, MAX_STAGE_BYTES, MAX_STAGE_SCHEDULES } from "../src/personal/ingest.js";
+import { activeSourceStatus, beginDataset, stageSchedules, finishDataset, fanoutBatch, mergeCatalogObservations, MAX_STAGE_BYTES, MAX_STAGE_SCHEDULES } from "../src/personal/ingest.js";
 import { deliverUser, diagnosticText } from "../src/personal/delivery.js";
 import { TelegramClient } from "../src/telegram.js";
 import { activateWeeklyPlan, weeklySourceStatus } from "../src/personal/weekly-plan.js";
@@ -196,7 +196,7 @@ export default {
         return json(await activateWeeklyPlan(store, await readJson(request, 320_000)));
       } else if (path === "/source-status") {
         const body = await readJson(request, 4096);
-        return json({ enabled: true, known: await store.setting(`source:${String(body.id).slice(0, 100)}`) });
+        return json(await activeSourceStatus(store, String(body.id).slice(0, 100), typeof body.date === "string" ? body.date : null));
       } else if (path === "/catalog") {
         const body = await readJson(request, 8192);
         await mergeCatalogObservations(store, body.observations, body.seedVersion);
@@ -210,18 +210,25 @@ export default {
       } else if (path === "/finish") {
         const body = await readJson(request, 4096);
         const activated = await finishDataset(store, body.id);
-        await store.setSetting("source-error", null);
         // Start delivery as soon as a new source is durable. Cron still recovers
         // interrupted pumps; repeated finish calls never replay a publication.
         if (activated && !paused && budget.mode === 'normal')
           context.waitUntil(kick(env, { inbox: false, delivery: true, fanout: true }).catch(() => {}));
       } else if (path === "/source-error") {
         const body = await readJson(request, 4096);
-        const previous = await store.setting("source-error", {});
-        await store.setSetting("source-error", { ...(previous ?? {}), at: now.toISOString(),
-          ...(body.date && /^\d{4}-\d{2}-\d{2}$/u.test(body.date) ? { date: body.date } : {}),
+        const date = typeof body.date === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(body.date) ? body.date : null;
+        const generation = Number.isSafeInteger(body.generation) && body.generation > 0 ? body.generation : null;
+        const error = { at: now.toISOString(),
+          ...(date ? { date } : {}), ...(generation ? { generation } : {}),
           ...(Array.isArray(body.groups) ? { groups: body.groups.filter(g => /^\d{1,3}[\p{L}]{1,6}$/u.test(g)).slice(0, 200) } : {}),
-          ...(Number.isSafeInteger(body.structuralErrors) ? { structuralErrors: body.structuralErrors } : {}) });
+          ...(Number.isSafeInteger(body.structuralErrors) ? { structuralErrors: body.structuralErrors } : {}) };
+        await store.run("INSERT INTO settings(key,value) SELECT 'source-error',? "
+          + "WHERE NOT EXISTS(SELECT 1 FROM active_versions WHERE date=? AND generation>=?) "
+          + "ON CONFLICT(key) DO UPDATE SET value=CASE WHEN json_extract(settings.value,'$.date') IS ? "
+          + "THEN json_patch(settings.value,excluded.value) ELSE excluded.value END "
+          + "WHERE json_extract(settings.value,'$.date') IS NOT ? OR ? IS NULL "
+          + "OR COALESCE(json_extract(settings.value,'$.generation'),0)<=?",
+          JSON.stringify(error), date, generation, date, date, generation, generation);
       } else if (path === "/tick/recover") {
         const old = await store.setting("recovery", {}), day = now.toISOString().slice(0, 10);
         if (env.LEGACY && (old.day !== day || old.count < 3) && (!old.at || now.getTime() - old.at >= 20 * 60000)) {
@@ -267,9 +274,9 @@ export default {
         const prefix = publication ? "" : pendingPriorities;
         const range = publication ? "" : priorityRange;
         const rows = await store.all(prefix + "SELECT user_id FROM (SELECT j.user_id,j.priority,j.due,u.last_api_at FROM jobs j "
-          + "JOIN users u ON u.user_id=j.user_id WHERE j.status='pending' AND j.due<=?"
+          + "JOIN users u ON u.user_id=j.user_id WHERE j.status='pending' AND j.due<=? AND u.last_api_at<=?"
           + range + manualJobsOnly(budget.mode) + " AND u.blocked=0 ORDER BY j.priority,j.due LIMIT 128) "
-          + "WHERE last_api_at<=? GROUP BY user_id ORDER BY MIN(priority),MIN(due),MIN(last_api_at) LIMIT 8", now.getTime(), now.getTime() - 1050);
+          + "GROUP BY user_id ORDER BY MIN(priority),MIN(due),MIN(last_api_at) LIMIT 8", now.getTime(), now.getTime() - 1050);
         await runUserLanes(env, rows, id => `/delivery/${id}?background=1`, now.getTime());
         // Skip still-cooling users without allocating their locks, intents and
         // HTTP lanes. Other subscribers can advance immediately; only a wave
@@ -301,10 +308,13 @@ export default {
   async scheduled(controller, env, context) {
     if (!backgroundPolicy(new Date(controller.scheduledTime ?? Date.now())).run) return;
     context.waitUntil(internal(env, "/tick").then(async work => {
-      if (work.recover) await internal(env, "/tick/recover").catch(() => {
+      const recovery = work.recover ? internal(env, "/tick/recover").catch(() => {
         console.warn(JSON.stringify({ event: "personal_source_recovery_lane_error" }));
-      });
-      if (work.inbox || work.delivery || work.due || work.fanout) await kick(env, { inbox: Boolean(work.inbox), delivery: Boolean(work.delivery), due: Boolean(work.due), fanout: Boolean(work.fanout) });
+      }) : null;
+      const delivery = work.inbox || work.delivery || work.due || work.fanout
+        ? kick(env, { inbox: Boolean(work.inbox), delivery: Boolean(work.delivery), due: Boolean(work.due), fanout: Boolean(work.fanout) })
+        : null;
+      await Promise.all([recovery, delivery]);
     }).catch(() => {}));
   },
 };

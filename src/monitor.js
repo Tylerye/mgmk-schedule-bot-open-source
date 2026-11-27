@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { addDays, dateInTimezone } from "./dates.js";
-import { downloadDriveFile, hasSourceChanged, inspectDriveFile, listDriveFiles } from "./source/drive.js";
+import { downloadDriveFile, hasSourceChanged, inspectDriveFile, listDriveFiles, newestDriveFilesByDate } from "./source/drive.js";
 import { extractPdf } from "./pdf/extract.js";
 import { applyBellSchedule, parseGroupSchedule } from "./schedule/parse.js";
 import { formatScheduleMessage } from "./schedule/format.js";
@@ -16,14 +16,7 @@ export async function discoverCandidates(config, now = new Date()) {
     (file) => file.audience === "students" && inWindow(file.scheduleDate, today, end),
   );
   const inspected = await Promise.all(listed.map((file) => inspectDriveFile(file, config)));
-  const byDate = new Map();
-  for (const file of inspected) {
-    const current = byDate.get(file.scheduleDate);
-    const currentTime = Date.parse(current?.lastModified ?? 0);
-    const fileTime = Date.parse(file.lastModified ?? 0);
-    if (!current || fileTime > currentTime || (fileTime === currentTime && file.id > current.id)) byDate.set(file.scheduleDate, file);
-  }
-  return [...byDate.values()].sort((a, b) => a.scheduleDate.localeCompare(b.scheduleDate));
+  return newestDriveFilesByDate(inspected);
 }
 
 export async function checkSchedules({ config, store, logger, now = new Date(), dependencies = {} }) {

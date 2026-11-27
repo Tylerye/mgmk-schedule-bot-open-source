@@ -1,14 +1,15 @@
 import {validGroupResult} from "./result-schema.js";
 import { D1StateStore, withStateLock } from "./d1-store.js";
 
+function validParserPayload(job, payload) {
+  const schedule = payload?.schedule;
+  return validGroupResult(schedule) && (schedule.timeline?.length ?? 0) <= 128
+    && schedule.date === job.schedule_date && payload.document?.id === job.source_id;
+}
+
 // Receiving a parsed PDF must never wait for Telegram or the global state lease.
 export async function queueParserResult(database, job, payload) {
-  if (!validGroupResult(payload?.schedule) || !payload || typeof payload !== "object" || Array.isArray(payload) || !payload.schedule
-    || payload.schedule.date !== job.schedule_date || payload.document?.id !== job.source_id
-    || !Array.isArray(payload.schedule.lessons) || payload.schedule.lessons.length > 64
-    || (payload.schedule.timeline !== undefined && (!Array.isArray(payload.schedule.timeline) || payload.schedule.timeline.length > 128))) {
-    return false;
-  }
+  if (!validParserPayload(job, payload)) return false;
   await database.prepare("INSERT OR IGNORE INTO parser_results (job_id, payload, received_at) VALUES (?, ?, ?)")
     .bind(job.id, JSON.stringify(payload), new Date().toISOString()).run();
   return true;
@@ -29,7 +30,16 @@ export async function drainParserResults(database) {
         + "AND COALESCE(json_extract(source_json,'$.audience'),'students') != 'teachers' LIMIT 1",
       ).bind(job.schedule_date, job.created_at).first();
       if (job.status !== "complete" && !newer) {
-        const payload = JSON.parse(job.payload);
+        let payload;
+        try { payload = JSON.parse(job.payload); } catch {}
+        if (!validParserPayload(job, payload)) {
+          // Keep the diagnostic on the job and let normal source polling retry.
+          // Updating the job first also makes interruption before DELETE safe.
+          await database.prepare("UPDATE parse_jobs SET status='failed',error=?,updated_at=? WHERE id=?")
+            .bind("Invalid stored parser result", new Date().toISOString(), job.job_id).run();
+          await database.prepare("DELETE FROM parser_results WHERE job_id=?").bind(job.job_id).run();
+          continue;
+        }
         store.state.documents[job.source_id] = payload.document;
         store.state.schedules[job.schedule_date] = {
           ...(store.state.schedules[job.schedule_date] ?? {}),

@@ -24,3 +24,16 @@ test('merged-note support still rejects damaged numbered rows, missing borders a
     assert.throws(() => parseGroupSchedule(pdf(line), options), /Malformed table/);
   }
 });
+
+test('a numbered row with the room merged into the subject has the same fields in both parsers', () => {
+  const input = pdf('¦¦3¦ИНФ-Е ТЕХН-ИИ 126¦Пример С С¦');
+  const group = parseGroupSchedule(input, options).lessons[1];
+  assert.deepEqual([group.subject, group.rooms, group.teachers], ['ИНФ-Е ТЕХН-ИИ 126', [], ['Пример С.С.']]);
+  const personal = parseAllGroupSchedules(input, { bells });
+  assert.equal(personal.publishable, true);
+  const { subject, room, teacher } = personal.schedules[0].lessons[1].variants[0];
+  assert.deepEqual([subject, room, teacher], [group.subject, '', group.teachers[0]]);
+  for (const endCell of ['126', '126Пример С С']) {
+    assert.equal(parseAllGroupSchedules(pdf(`¦¦3¦Физика¦${endCell}¦`), { bells }).publishable, false);
+  }
+});

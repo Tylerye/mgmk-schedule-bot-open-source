@@ -67,6 +67,20 @@ test('workerd keeps independent HTTP lanes and skips empty inbox waves while dra
       assert.equal((await db.prepare('SELECT COUNT(*) count FROM users WHERE user_id>=300 AND next_due=0').first()).count,0);
       assert.equal(lanes.filter(p=>/^\/due\/\d+$/u.test(p)).length,55);
       assert.ok(lanes.filter(p=>p==='/tick/due').length<12);
+      // Cooling users with many queued jobs must not fill the candidate window.
+      const coolingUntil = Date.now() + 60_000;
+      for (let id = 400; id < 432; id++) {
+        await db.prepare('INSERT INTO users(user_id,last_api_at) VALUES(?,?)').bind(id,coolingUntil).run();
+        for (let i = 0; i < 4; i++)
+          await db.prepare("INSERT INTO jobs(id,user_id,epoch,kind,priority,due) VALUES(?,?,1,'reply',0,0)").bind(`cool-${id}-${i}`,id).run();
+      }
+      await db.prepare('INSERT INTO users(user_id) VALUES(432)').run();
+      await db.prepare("INSERT INTO jobs(id,user_id,epoch,kind,priority,due,payload) VALUES('ready',432,1,'reply',0,1,?)")
+        .bind(JSON.stringify({text:'ready'})).run();
+      lanes.length=0;
+      assert.equal((await mf.dispatchFetch('http://localhost/tick/delivery?publication=1',{method:'POST',headers:{authorization:'Bearer local-test'}})).status,200);
+      assert.deepEqual(lanes,['/delivery/432']);
+      assert.equal((await db.prepare("SELECT status FROM jobs WHERE id='ready'").first()).status,'done');
     }
   } finally {await mf.dispose();}
 });

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { dayKey, parseScheduleDate } from "../dates.js";
 import { isExactGroup, looksLikeGroup, normalizeGroupName } from "../group.js";
 import { buildScheduleTimeline } from "./timeline.js";
+import { hasMergedStudentRoom } from "./student-table.js";
 
 function cleanCell(value) {
   return String(value ?? "").replace(/[|¦]/g, "").replace(/\s+/g, " ").trim();
@@ -10,14 +11,14 @@ function cleanCell(value) {
 function parseTableLine(line) {
   if (!/[|¦]/.test(line)) return null;
   const cells = line.split(/[|¦]/).map(cleanCell);
-  if (cells.length < 6 && !(cells.length === 5 && !cells[2])) return null;
+  const mergedRoom = hasMergedStudentRoom(cells);
   return {
     group: cells[1] ?? "",
     lesson: cells[2] ?? "",
     subject: cells[3] ?? "",
-    room: cells.length === 5 ? "" : cells[4] ?? "",
-    teacher: cells.slice(5).join(" ").trim(),
-    rawLine: line,
+    room: cells.length === 7 ? cells[4] : "",
+    teacher: cells.length === 7 ? cells[5] : mergedRoom ? cells[4] : "",
+    valid: !cells[0] && !cells.at(-1) && (cells.length === 7 || mergedRoom || (cells.length === 5 && !cells[2])),
   };
 }
 
@@ -68,12 +69,7 @@ export function parseGroupSchedule(parsedPdf, { targetGroup, expectedDate, bells
   outer: for (const page of parsedPdf.pages) {
     for (const pdfRow of page.rows) {
       const row = parseTableLine(pdfRow.line);
-      if (!row) {
-        if (insideTarget && /[|¦]/.test(pdfRow.line)) {
-          throw new Error(`Malformed table row in ${targetGroup}: ${pdfRow.line}`);
-        }
-        continue;
-      }
+      if (!row) continue;
       const groupCell = cleanCell(row.group);
       if (groupCell && looksLikeGroup(groupCell)) {
         if (isExactGroup(groupCell, targetGroup)) {
@@ -85,14 +81,11 @@ export function parseGroupSchedule(parsedPdf, { targetGroup, expectedDate, bells
       }
       if (!insideTarget) continue;
 
-      const cells = pdfRow.line.split(/[|¦]/).map(cleanCell);
-      // Merged text-only continuations are valid; numbered rows must retain
-      // all columns so a damaged lesson cannot be accepted as missing fields.
-      if ((cells.length !== 7 && !(cells.length === 5 && !cells[2])) || cells[0] || cells.at(-1)) {
+      if (!row.valid) {
         throw new Error(`Malformed table columns in ${targetGroup}: ${pdfRow.line}`);
       }
 
-      const numberMatch = cleanCell(row.lesson).match(/^(\d{1,2})/);
+      const numberMatch = row.lesson.match(/^(\d{1,2})$/u);
       if (!numberMatch) {
         if (cleanCell(row.lesson)) throw new Error(`Invalid lesson number in ${targetGroup}: ${row.lesson}`);
         if (!groupCell) appendContinuation(lessons.at(-1), row);

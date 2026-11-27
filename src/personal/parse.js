@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { parseScheduleDate, dayKey } from "../dates.js";
 import { buildScheduleTimeline } from "../schedule/timeline.js";
+import { hasMergedStudentRoom } from "../schedule/student-table.js";
 import { groupKey, displayGroup, isGroupLabel, mergeCatalog } from "./catalog.js";
 
 const clean = value => String(value ?? "").replace(/\s+/gu, " ").trim();
@@ -80,8 +81,10 @@ export function parseAllGroupSchedules(pdf, { expectedDate, bells, previousCatal
     dataRows++;
     if (!current) { structuralErrors.push({ message: "Orphan table row", ...ref }); continue; }
     current.rows.push(ref);
-    // Normal 5-column rows, or explicitly merged subject/room/teacher cells.
-    if (![5, 7].includes(cells.length) || cells[0] || cells.at(-1)) {
+    // Five-column rows omit a teacher; six-column rows merge subject and room;
+    // seven-column rows keep subject, room, and teacher in separate cells.
+    const mergedRoomWithSubject = hasMergedStudentRoom(cells);
+    if ((![5, 7].includes(cells.length) && !mergedRoomWithSubject) || cells[0] || cells.at(-1)) {
       structuralErrors.push({ message: "Malformed table columns", ...ref });
       error("Malformed table columns", ref);
       continue;
@@ -89,7 +92,7 @@ export function parseAllGroupSchedules(pdf, { expectedDate, bells, previousCatal
     const numberText = cells[2];
     const subject = cells[3];
     const room = cells.length === 7 ? cells[4] : "";
-    const teacher = cells.length === 7 ? teacherName(cells[5]) : "";
+    const teacher = cells.length === 7 ? teacherName(cells[5]) : mergedRoomWithSubject ? teacherName(cells[4]) : "";
     accountedRows++;
     if (!numberText) {
       if (!subject && !room && !teacher) continue;

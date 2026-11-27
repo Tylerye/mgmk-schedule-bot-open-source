@@ -56,6 +56,35 @@ export async function inspectDriveFile(file, config) {
   };
 }
 
+export function newestDriveFilesByDate(files) {
+  const byDate = new Map();
+  const modified = file => {
+    const time = Date.parse(file.lastModified ?? "");
+    return Number.isFinite(time) ? time : Number.NEGATIVE_INFINITY;
+  };
+  for (const file of files) {
+    const current = byDate.get(file.scheduleDate);
+    if (!current || modified(file) > modified(current)
+      || (modified(file) === modified(current) && file.id > current.id)) {
+      byDate.set(file.scheduleDate, file);
+    }
+  }
+  return [...byDate.values()].sort((a, b) => a.scheduleDate < b.scheduleDate ? -1 : a.scheduleDate > b.scheduleDate ? 1 : 0);
+}
+
+export async function inspectNewestDriveFiles(files, config) {
+  const results = await Promise.allSettled(files.map(file => inspectDriveFile(file, config)));
+  const inspected = [];
+  const failures = [];
+  for (const [index, result] of results.entries()) {
+    if (result.status === "fulfilled") inspected.push(result.value);
+    else failures.push({ file: files[index], error: result.reason });
+  }
+  // Failed metadata may belong to the newest PDF for its date.
+  const deferredDates = new Set(failures.map(({ file }) => file.scheduleDate));
+  return { sources: newestDriveFilesByDate(inspected.filter(file => !deferredDates.has(file.scheduleDate))), failures };
+}
+
 export async function downloadDriveFile(file, config) {
   const response = await fetchWithRetry(file.downloadUrl, {}, config);
   if (!response.ok) throw new Error(`Drive download failed for ${file.id}: HTTP ${response.status}`);

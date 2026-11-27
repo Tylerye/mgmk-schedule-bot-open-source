@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { personalFixture, sampleSchedule, installSchedules } from './helpers/personal-fixture.js';
-import { fanoutBatch, beginDataset, stageSchedules, finishDataset } from '../src/personal/ingest.js';
+import { activeSourceStatus, fanoutBatch, beginDataset, stageSchedules, finishDataset } from '../src/personal/ingest.js';
 
 test('publication spans groups, bounds recipients and resumes without requeuing completed users', async t => {
   const f = await personalFixture(); t.after(() => f.close());
@@ -54,6 +54,55 @@ test('publication enqueue and cursor progress roll back together on failure', as
   await fanoutBatch(f.store, 2000);
   assert.equal((await f.store.first('SELECT COUNT(*) n FROM jobs')).n, 1);
   assert.equal((await f.store.first('SELECT status FROM fanout')).status, 'done');
+});
+
+test('a correction transfers unfinished fanout for unchanged groups and keeps their existing revisions', async t => {
+  const f = await personalFixture(); t.after(() => f.close());
+  const [unchanged, revised] = await Promise.all(['8Са', '9ТС'].map(g => sampleSchedule(g)));
+  for (let id = 1; id <= 27; id++)
+    await f.store.run('INSERT INTO users(user_id,group_id) VALUES(?,?)', id, id === 27 ? revised.canonicalGroup : unchanged.canonicalGroup);
+  const manual = await f.store.user(25);
+  await f.store.enqueue(manual, 'card', unchanged.date, { priority: 0, due: 1001, payload: { manual: true, verifyMessageId: 55 } });
+  await installSchedules(f.store, [unchanged, revised]);
+  await fanoutBatch(f.store, 1000);
+  const first = await f.store.first('SELECT revision FROM jobs WHERE user_id=1');
+  const corrected = { ...revised, hash: 'c'.repeat(64) };
+  await installSchedules(f.store, [unchanged, corrected], { id: 'b'.repeat(64), generation: 2 });
+  const cursors = await f.store.all("SELECT group_id,cursor FROM fanout WHERE dataset_id=? ORDER BY group_id", 'b'.repeat(64));
+  assert.deepEqual(cursors.map(({ group_id, cursor }) => [group_id, cursor]), [[unchanged.canonicalGroup, 24], [revised.canonicalGroup, 0]]);
+  for (let i = 0; i < 3; i++) await fanoutBatch(f.store, 2000 + i);
+  assert.equal((await f.store.first('SELECT COUNT(*) n FROM jobs')).n, 27);
+  assert.deepEqual(await f.store.first('SELECT revision FROM jobs WHERE user_id=1'), first);
+  const manualJob = await f.store.first('SELECT priority,payload FROM jobs WHERE user_id=25');
+  assert.equal(manualJob.priority, 0);
+  assert.deepEqual(JSON.parse(manualJob.payload), { manual: true, verifyMessageId: 55 });
+});
+
+test('obsolete or unrelated uploads preserve the current source fingerprint and pending recovery', async t => {
+  const f = await personalFixture(); t.after(() => f.close());
+  const s = await sampleSchedule();
+  const other = await sampleSchedule('8Са', '2026-11-13');
+  const publish = async (schedule, marker, generation, sourceId = 'source') => {
+    const id = marker.repeat(64);
+    await beginDataset(f.store, { id, date: schedule.date, generation, sourceId, fingerprint: marker,
+      manifest: { [schedule.canonicalGroup]: schedule.hash }, observations: [] });
+    await stageSchedules(f.store, id, [schedule]);
+    return finishDataset(f.store, id);
+  };
+  await publish(s, 'a', 2);
+  const error = { date: s.date, generation: 4 };
+  await f.store.setSetting('source-error', error);
+  assert.equal(await publish(s, 'b', 1), false);
+  assert.equal((await f.store.setting('source:source')).fingerprint, 'a');
+  await publish(other, 'c', 5, 'other');
+  await publish(s, 'd', 3);
+  assert.deepEqual(await f.store.setting('source-error'), error);
+  await publish(s, 'e', 4);
+  assert.equal(await f.store.setting('source-error'), null);
+  assert.equal((await activeSourceStatus(f.store, 'source')).known.fingerprint, 'e');
+  await publish(s, 'f', 6, 'replacement');
+  assert.deepEqual(await activeSourceStatus(f.store, 'source', s.date), { enabled: true, known: null, activeGeneration: 6 });
+  assert.equal((await activeSourceStatus(f.store, 'replacement', s.date)).known.fingerprint, 'f');
 });
 
 test('finish signals only a newly activated generation; unchanged and obsolete sources do not wake delivery', async t => {

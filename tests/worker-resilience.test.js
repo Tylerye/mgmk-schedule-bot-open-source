@@ -115,10 +115,13 @@ test("a corrupt parser result cannot prevent the remaining minute phases", async
       .bind(today, new Date().toISOString(), new Date().toISOString()).run();
     await f.db.prepare("INSERT INTO parser_results VALUES ('bad', '{broken', ?)").bind(new Date().toISOString()).run();
     const result = await f.cron();
-    assert.equal(result[0].status, "rejected", "the phase failure must remain visible");
+    assert.equal(result[0].status, "fulfilled");
     assert.ok(f.calls.some(call => call.url.endsWith("editMessageText")));
     assert.equal((await f.db.prepare("SELECT status FROM parse_jobs WHERE source_id=?").bind(fileId).first())?.status, "dispatched");
-    assert.equal((await new D1StateStore(f.db).load()).health.lastError.event, "parser_results");
+    const bad = await f.db.prepare("SELECT status,error FROM parse_jobs WHERE id='bad'").first();
+    assert.equal(bad.status, "failed");
+    assert.equal(bad.error, "Invalid stored parser result");
+    assert.equal((await f.db.prepare("SELECT COUNT(*) AS n FROM parser_results").first()).n, 0);
   } finally { f.cleanup(); }
 });
 

@@ -6,7 +6,7 @@ import { addDays, dateInTimezone } from "../src/dates.js";
 import { createLogger } from "../src/logger.js";
 import { ensureDesiredState } from "../src/reconcile.js";
 import { reapplyFutureBellSchedule } from "../src/schedule/reapply-bells.js";
-import { hasSourceChanged, inspectDriveFile, listDriveFiles } from "../src/source/drive.js";
+import { hasSourceChanged, inspectNewestDriveFiles, listDriveFiles } from "../src/source/drive.js";
 import { acknowledgeScheduleCallbacks, isReadOnlyTelegramUpdate, processTelegramUpdates, TelegramClient } from "../src/telegram.js";
 import { D1StateStore, patchHealth, withStateLock } from "./d1-store.js";
 import { drainParserResults, queueParserResult } from "./parser-results.js";
@@ -55,19 +55,10 @@ async function discoverCandidates(config, now, logger = createLogger("info")) {
   const listed = (await listDriveFiles(config)).filter(
     (file) => file.audience === "students" && file.scheduleDate >= today && file.scheduleDate <= end,
   );
-  const results = await Promise.allSettled(listed.map((file) => inspectDriveFile(file, config)));
-  const inspected = [];
-  for (const [index, result] of results.entries()) {
-    if (result.status === "fulfilled") inspected.push(result.value);
-    else logger.warn("source_file_inspection_failed", { sourceId: listed[index].id, error: result.reason.message });
-  }
-  if (listed.length && !inspected.length) throw new Error("All Drive file inspections failed");
-  const byDate = new Map();
-  for (const file of inspected) {
-    const current = byDate.get(file.scheduleDate);
-    if (!current || Date.parse(file.lastModified ?? 0) >= Date.parse(current.lastModified ?? 0)) byDate.set(file.scheduleDate, file);
-  }
-  return [...byDate.values()].sort((a, b) => a.scheduleDate < b.scheduleDate ? -1 : a.scheduleDate > b.scheduleDate ? 1 : 0);
+  const { sources, failures } = await inspectNewestDriveFiles(listed, config);
+  for (const { file, error } of failures) logger.warn("source_file_inspection_failed", { sourceId: file.id, error: error.message });
+  if (!sources.length && failures.length) throw new Error("No student source date could be confirmed");
+  return sources;
 }
 
 function sourceFingerprint(source) {
