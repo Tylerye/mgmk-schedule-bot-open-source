@@ -122,6 +122,27 @@ test('a real D1 trigger admits a tap and delivers its timetable without Cron or 
     assert.equal(switches.find(button=>button.callback_data==='personal:toggle:sound').style,'danger');
     assert.match(switches.find(button=>button.callback_data==='personal:toggle:auto_pin').text,/🟢 вкл/u);
     assert.match(switches.find(button=>button.callback_data==='personal:toggle:sound').text,/🔴 выкл/u);
+    // A menu tap uses the admitted inbox invocation and leaves automatic
+    // work to the background router, even when that work has higher priority.
+    const menuLanes = lanes.length;
+    const budgetRow = await db.prepare("SELECT day,rows_written FROM budgets ORDER BY day DESC LIMIT 1").first();
+    await db.prepare("UPDATE budgets SET rows_written=29000 WHERE day=?").bind(budgetRow.day).run();
+    await db.prepare("UPDATE users SET last_api_at=0 WHERE user_id=100").run();
+    await db.prepare("UPDATE rate_gate SET next_at=0 WHERE key='telegram'").run();
+    const fastMenu = await post({update_id:1000,userId:100,action:'menu',messageId:77,acknowledged:true});
+    assert.equal(fastMenu.status,200);
+    for(let i=0;i<60 && calls.length<12;i++) await new Promise(resolve=>setTimeout(resolve,50));
+    assert.equal(calls.length,12);
+    assert.match(calls[11].body.text,/Привет!/u);
+    assert.deepEqual(lanes.slice(menuLanes),['/delivery/100']);
+    assert.equal((await db.prepare("SELECT status FROM jobs WHERE id='auto-owner'").first()).status,'pending');
+    await db.prepare("UPDATE locks SET expires_at=? WHERE user_id=100").bind(Date.now()+240).run();
+    assert.equal((await post({update_id:1001,userId:100,action:'settings',messageId:77,acknowledged:true})).status,200);
+    for(let i=0;i<60 && calls.length<13;i++) await new Promise(resolve=>setTimeout(resolve,50));
+    assert.equal(calls.length,13,'a brief busy lease must recover without Cron');
+    assert.equal((await db.prepare("SELECT status FROM inbox WHERE update_id=1001").first()).status,'done');
+    await db.prepare("UPDATE budgets SET rows_written=? WHERE day=?").bind(budgetRow.rows_written,budgetRow.day).run();
+    calls.splice(11);
     const monday = weekRange(new Date()).start;
     const planDate = date === monday ? addDays(monday, 1) : monday;
     const baseline = { effectiveFrom:'2020-01-01', fingerprint:'a'.repeat(64), previous:null,

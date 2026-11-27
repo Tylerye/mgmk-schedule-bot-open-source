@@ -177,6 +177,21 @@ test('workerd immediately delivers a new publication across 22 groups without Cr
       console.log(JSON.stringify({scenario:'six-repeat-taps', d1: difference(await d1(), tapBefore),
         p50Ms: sorted[2], p95Ms: sorted.at(-1), elapsedMs: tapTimes.reduce((sum, ms) => sum + ms, 0)}));
 
+      const menuSamples = [];
+      for (let id=20; id<26; id++) {
+        await route('test-inbox',{update_id:id*2,userId:8888,action:'settings',messageId:77,acknowledged:true});
+        await db.prepare("UPDATE users SET last_api_at=0 WHERE user_id=8888").run();
+        await db.prepare("UPDATE rate_gate SET next_at=0 WHERE key='telegram'").run();
+        const beforeMenu = await d1(), startMenu = performance.now(), editsBefore = edits.length;
+        const menu = await route('test-inbox',{update_id:id*2+1,userId:8888,action:'menu',messageId:77,acknowledged:true});
+        assert.equal(menu.status,200);
+        assert.equal(edits.length,editsBefore+1);
+        menuSamples.push({ ...difference(await d1(),beforeMenu), ms: performance.now()-startMenu });
+      }
+      console.log(JSON.stringify({scenario:'six-menu-edits',
+        rowsWritten:menuSamples.reduce((sum,x)=>sum+x.writes,0),
+        medianMs:menuSamples.map(x=>x.ms).sort((a,b)=>a-b)[2]}));
+
       const far = Date.now() + 3600000;
       await db.batch(Array.from({ length: 350 }, (_, i) => db.prepare(
         "INSERT INTO jobs(id,user_id,epoch,kind,priority,due) VALUES(?,8888,1,'card',?,?)"
@@ -196,6 +211,19 @@ test('workerd immediately delivers a new publication across 22 groups without Cr
       console.log(JSON.stringify({ scenario: 'blocked-only-cron', d1: difference(await d1(), blockedBefore),
         httpInvocations: lanes.length - blockedOffset }));
       await db.prepare("DELETE FROM jobs WHERE id='blocked-probe'").run();
+
+      for (let i=0; i<8; i++) {
+        await db.prepare("INSERT INTO users(user_id) VALUES(?)").bind(9000+i).run();
+        await db.prepare("INSERT INTO jobs(id,user_id,epoch,kind,priority,due,payload) VALUES(?,?,1,'reply',0,0,?)")
+          .bind("cooldown-"+i,9000+i,JSON.stringify({text:"queued", manual:true})).run();
+      }
+      await db.prepare("UPDATE rate_gate SET next_at=? WHERE key='telegram'").bind(Date.now()+30000).run();
+      const cooldownBefore = await d1(), cooldownLanes = lanes.length, cooldownSends = sends.length;
+      assert.equal((await route('tick/delivery')).status,200);
+      assert.equal(sends.length,cooldownSends);
+      console.log(JSON.stringify({ scenario:'eight-recipients-during-telegram-cooldown',
+        d1:difference(await d1(),cooldownBefore), userLanes:lanes.length-cooldownLanes }));
+      await db.prepare("DELETE FROM jobs WHERE id GLOB 'cooldown-*'").run();
     }
     // Concurrent fanout pumps are serialized in D1, including revision allocation.
     await db.prepare("UPDATE fanout SET status='pending',cursor=0").run();

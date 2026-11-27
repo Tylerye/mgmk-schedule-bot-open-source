@@ -53,6 +53,7 @@ async function kick(env, { inbox = true, delivery = true, due = false, fanout = 
   while (calls <= 44 && Date.now() < deadline) {
     let nextDue = null;
     let dueAdvanced = false;
+    let deliverAgain = false;
     if (fanout) { fanout = Boolean((await run('/fanout')).pending); delivery = true; }
     if (due) {
       const wave = await run('/tick/due');
@@ -68,8 +69,17 @@ async function kick(env, { inbox = true, delivery = true, due = false, fanout = 
     if (delivery) {
       const result = await run(deliveryPath);
       delivery = Boolean(result.pending); nextDue = result.nextDue ?? null;
+      deliverAgain = delivery && result.ready === true;
+      // A short Telegram-wide cooldown can clear during this pump. Waiting
+      // once avoids retry writes and a whole extra Cron interval at night.
+      if (result.cooldown && !inbox && !due && !fanout && nextDue < deadline) {
+        await wait(Math.max(20, nextDue - Date.now()));
+        delivery = true;
+        continue;
+      }
     }
     if (!inbox && !delivery && !due && !fanout) break;
+    if (deliverAgain) continue;
     if (nextDue !== null) await wait(Math.max(100, Math.min(1100, nextDue - Date.now())));
     else if (!dueAdvanced) await wait(1100);
   }
@@ -97,12 +107,17 @@ async function runUserLanes(env, users, path, startedAt) {
 async function deliverInteractive(env, id) {
   // Keep CPU-isolated delivery invocations, but service the person who tapped
   // immediately instead of putting them behind four other users and a Cron.
+  let busyRetries = 0;
   for (let round = 0; round < 6; round++) {
     const result = await internal(env, `/delivery/${id}`);
     if (!result.pending || result.stopped || result.paused) return;
+    if (result.busy) {
+      if (busyRetries >= 2) return;
+      await wait(busyRetries++ === 0 ? 140 : 320);
+      continue;
+    }
     const delay = Math.max(100, (result.nextDue ?? Date.now()) - Date.now());
-    // Long Telegram retry_after and held leases belong to the durable retry.
-    if (delay > 1500 || result.busy) return;
+    if (delay > 1500) return;
     await wait(delay);
   }
 }
@@ -116,6 +131,24 @@ async function processInboxRow(store, env, row, now) {
   if (acquired?.earlier != null) return { ok:true, busy:true, earlier:acquired.earlier };
   const delivery = acquired !== false && Boolean(await store.first("SELECT 1 FROM jobs WHERE user_id=? AND status='pending' AND json_extract(payload,'$.manual')=1 LIMIT 1", row.user_id));
   return { ok: true, busy: acquired === false, delivery };
+}
+
+async function retryInteractiveInbox(env, update) {
+  const path = `/inbox/${update.update_id}`;
+  for (const delay of [140, 320]) {
+    await wait(delay);
+    let result = await internal(env, path);
+    if (result.earlier != null) {
+      const earlier = await internal(env, `/inbox/${result.earlier}`);
+      if (earlier.busy || earlier.stopped) continue;
+      result = await internal(env, path);
+    }
+    if (result.stopped || result.paused) return;
+    if (!result.busy) {
+      if (result.delivery) await deliverInteractive(env, update.userId);
+      return;
+    }
+  }
 }
 
 export default {
@@ -180,8 +213,8 @@ export default {
         const admitted = await enqueuePersonalUpdate(store, update);
         if (!admitted) return json({ ok: true, queued: false });
         if (!paused) {
-          // A settings screen is bounded; heavier actions keep their own CPU lane.
-          let processed = update.action === 'settings' && update.acknowledged === true
+          // Menu and settings are bounded; heavier actions keep their own CPU lane.
+          let processed = (update.action === 'menu' || update.action === 'settings') && update.acknowledged === true
             ? await processInboxRow(store, env, { update_id: update.update_id, user_id: update.userId, payload: JSON.stringify(update) }, now)
             : await internal(env, `/inbox/${update.update_id}`);
           for (let i=0; processed.earlier != null && i<4; i++) {
@@ -189,7 +222,9 @@ export default {
             if (older.busy || older.stopped) break;
             processed = await internal(env, `/inbox/${update.update_id}`);
           }
-          if (!processed.busy && !processed.stopped && processed.delivery !== false)
+          if (processed.busy)
+            context.waitUntil(retryInteractiveInbox(env, update).catch(() => {}));
+          else if (!processed.stopped && processed.delivery !== false)
             context.waitUntil(deliverInteractive(env, update.userId).catch(() => {}));
         }
       } else if (path === "/week-source") {
@@ -270,6 +305,10 @@ export default {
         }
       }
       else if (path === "/tick/delivery") {
+        const gate = await store.first("SELECT next_at FROM rate_gate WHERE key='telegram'");
+        if (gate?.next_at > now.getTime() + 170) {
+          return json({ ok: true, pending: false, cooldown: true, nextDue: gate.next_at });
+        }
         const publication = url.searchParams.get("publication") === "1";
         const prefix = publication ? "" : pendingPriorities;
         const range = publication ? "" : priorityRange;
@@ -287,16 +326,17 @@ export default {
           + "ELSE (SELECT MIN(MAX(j.due,u.last_api_at+1050)) FROM jobs j JOIN users u ON u.user_id=j.user_id "
           + "WHERE j.status='pending' AND j.due<=? AND u.blocked=0" + range + manualJobsOnly(budget.mode) + ") END due",
           clock, clock - 1050, clock, clock + 1200);
-        return json({ ok: true, pending: next?.due != null && next.due <= Date.now() + 1200, nextDue: next?.due ?? null });
+        return json({ ok: true, pending: next?.due != null && next.due <= Date.now() + 1200,
+          nextDue: next?.due ?? null, ready: rows.length === 8 && next?.due === clock });
       } else if (/^\/delivery\/\d+$/u.test(path)) {
         const id = Number(path.split("/")[2]);
         if (pilotAllowed(env, id)) {
           const background = url.searchParams.get("background") === "1";
           const acquired = await deliverUser(store, new TelegramClient({ token: env.BOT_TOKEN, logger, timeoutMs: 8000 }), id,
             { now, mode: budget.mode, ownerId: env.ADMIN_USER_ID, supportDetails: env.PERSONAL_SUPPORT_DETAILS,
-              clock: background ? Date.now : undefined, widgetEnabled: env.PERSONAL_WIDGET_ENABLED === "true", brandedMenu: env.PERSONAL_BRANDED_MENU === "true" });
+              clock: Date.now, interactive: !background, widgetEnabled: env.PERSONAL_WIDGET_ENABLED === "true", brandedMenu: env.PERSONAL_BRANDED_MENU === "true" });
           if (background) return json({ ok: true });
-          const next = await store.first("SELECT MIN(due) due FROM jobs WHERE user_id=? AND status='pending'" + manualJobsOnly(budget.mode), id);
+          const next = await store.first("SELECT MIN(due) due FROM jobs WHERE user_id=? AND status='pending'" + manualJobsOnly("saving"), id);
           return json({ ok: true, busy: acquired === false, pending: next?.due != null, nextDue: next?.due ?? null });
         }
       } else return json({ ok: false }, 404);

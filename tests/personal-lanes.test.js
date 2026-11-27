@@ -81,6 +81,15 @@ test('workerd keeps independent HTTP lanes and skips empty inbox waves while dra
       assert.equal((await mf.dispatchFetch('http://localhost/tick/delivery?publication=1',{method:'POST',headers:{authorization:'Bearer local-test'}})).status,200);
       assert.deepEqual(lanes,['/delivery/432']);
       assert.equal((await db.prepare("SELECT status FROM jobs WHERE id='ready'").first()).status,'done');
+      // A Telegram-wide cooldown must not churn recipient leases or job due dates.
+      const gate = Date.now() + 60_000;
+      await db.prepare("UPDATE rate_gate SET next_at=? WHERE key='telegram'").bind(gate).run();
+      await db.prepare("UPDATE users SET last_api_at=0 WHERE user_id=400").run();
+      lanes.length=0;
+      const cooled = await mf.dispatchFetch('http://localhost/tick/delivery',{method:'POST',headers:{authorization:'Bearer local-test'}});
+      assert.deepEqual(await cooled.json(),{ok:true,pending:false,cooldown:true,nextDue:gate});
+      assert.deepEqual(lanes,[]);
+      assert.equal((await db.prepare("SELECT due FROM jobs WHERE id='cool-400-0'").first()).due,0);
     }
   } finally {await mf.dispose();}
 });

@@ -155,7 +155,7 @@ async function pinStatement(store, user, cards, now, manual = false) {
   return [store.jobStatement(user, "pin", "", { priority: 1, due: now.getTime(), ...(manual ? { payload: { manual: true } } : {}) })];
 }
 
-export async function deliverUser(store, client, id, { now = new Date(), mode = "normal", ownerId, supportDetails, clock, catchUp = false, widgetEnabled = false, brandedMenu = false } = {}) {
+export async function deliverUser(store, client, id, { now = new Date(), mode = "normal", ownerId, supportDetails, clock, catchUp = false, interactive = false, widgetEnabled = false, brandedMenu = false } = {}) {
   return store.lock(id, now.getTime(), async token => {
     const user = await store.user(id);
     if (!user || user.blocked) return;
@@ -168,7 +168,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
       // remains durable if another pass must deliver it after the cooldown.
       if (user.last_api_at > now.getTime() - 1050) return;
     }
-    const job = await store.first("SELECT * FROM jobs WHERE user_id=? AND status='pending' AND due<=?" + manualJobsOnly(mode) + " ORDER BY priority,due,id LIMIT 1", id, now.getTime());
+    const job = await store.first("SELECT * FROM jobs WHERE user_id=? AND status='pending' AND due<=?" + manualJobsOnly(interactive ? "saving" : mode) + " ORDER BY priority,due,id LIMIT 1", id, now.getTime());
     if (!job) return;
     const payload = JSON.parse(job.payload);
     const homeworkNotice = job.kind === "alert" && payload.manual === true && [homeworkCampaign, homeworkThemeJob].includes(job.date);

@@ -432,7 +432,9 @@ async function handleMaintenance(request, env, pathname, context) {
   try {
     const result = await task;
     if (result?.duplicate) return json({ ok: true, duplicate: true });
-    if (lane.startsWith("teacher-") && (result?.acquired || result?.checked)) await writeTeacherStatus(env.DB, `health:${lane}`, { error: false });
+    if (lane.startsWith("teacher-") && (result?.acquired || result?.checked)) {
+      await writeTeacherStatus(env.DB, `health:${lane}`, { error: false, ...(lane === "teacher-source" ? result.value : {}) });
+    }
     return json({ ok: true });
   }
   catch (error) {
@@ -460,8 +462,8 @@ async function pollTeacherSource(env, config, logger, interval = null) {
         dispatched++;
       }
     }
-    await writeTeacherStatus(env.DB, "source-health", { files: files.length, dispatched });
     logger.info("teacher_source_complete", { files: files.length, dispatched });
+    return { files: files.length, dispatched };
   }, { name: "teacher-source", leaseMs: 180000, interval });
 }
 
