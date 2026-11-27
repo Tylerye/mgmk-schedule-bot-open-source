@@ -33,7 +33,17 @@ test('a numbered row with the room merged into the subject has the same fields i
   assert.equal(personal.publishable, true);
   const { subject, room, teacher } = personal.schedules[0].lessons[1].variants[0];
   assert.deepEqual([subject, room, teacher], [group.subject, '', group.teachers[0]]);
-  for (const endCell of ['126', '126Пример С С']) {
+  for (const endCell of ['126', '126Пример С']) {
     assert.equal(parseAllGroupSchedules(pdf(`¦¦3¦Физика¦${endCell}¦`), { bells }).publishable, false);
   }
+});
+
+test('a numeric room merged with the teacher is restored in both parsers', () => {
+  const input = pdf('¦¦3¦Физика¦2243Пример А Б¦');
+  const group = parseGroupSchedule(input, options).lessons[1];
+  assert.deepEqual([group.subject, group.rooms, group.teachers], ['Физика', ['2243'], ['Пример А.Б.']]);
+  const personal = parseAllGroupSchedules(input, { bells });
+  assert.equal(personal.publishable, true);
+  const { subject, room, teacher } = personal.schedules[0].lessons[1].variants[0];
+  assert.deepEqual([subject, room, teacher], ['Физика', '2243', 'Пример А.Б.']);
 });

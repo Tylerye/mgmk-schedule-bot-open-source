@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { dayKey, parseScheduleDate } from "../dates.js";
 import { isExactGroup, looksLikeGroup, normalizeGroupName } from "../group.js";
 import { buildScheduleTimeline } from "./timeline.js";
-import { hasMergedStudentRoom } from "./student-table.js";
+import { mergedStudentRoom } from "./student-table.js";
 
 function cleanCell(value) {
   return String(value ?? "").replace(/[|¦]/g, "").replace(/\s+/g, " ").trim();
@@ -11,14 +11,14 @@ function cleanCell(value) {
 function parseTableLine(line) {
   if (!/[|¦]/.test(line)) return null;
   const cells = line.split(/[|¦]/).map(cleanCell);
-  const mergedRoom = hasMergedStudentRoom(cells);
+  const merged = mergedStudentRoom(cells);
   return {
     group: cells[1] ?? "",
     lesson: cells[2] ?? "",
     subject: cells[3] ?? "",
-    room: cells.length === 7 ? cells[4] : "",
-    teacher: cells.length === 7 ? cells[5] : mergedRoom ? cells[4] : "",
-    valid: !cells[0] && !cells.at(-1) && (cells.length === 7 || mergedRoom || (cells.length === 5 && !cells[2])),
+    room: cells.length === 7 ? cells[4] : merged?.room ?? "",
+    teacher: cells.length === 7 ? cells[5] : merged?.teacher ?? "",
+    valid: !cells[0] && !cells.at(-1) && (cells.length === 7 || merged !== null || (cells.length === 5 && !cells[2])),
   };
 }
 
