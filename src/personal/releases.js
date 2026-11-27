@@ -4,6 +4,19 @@ import { backToMenu, button, screenText, t } from "./view.js";
 // Add new releases at the top. Keep the version IDs stable for old buttons.
 const releases = [
   {
+    version: "V1.6", date: "27.11.2026",
+    ru: ["Быстрее меню, надежнее расписание", [
+      "«Главное меню» открывается отдельно от фоновых обновлений расписания",
+      "Расписание для группы и лички обновляется параллельно. Если колледж заменит PDF, бот продолжит отправку тем, кто еще ждет",
+      "Поправили разбор PDF, где номер кабинета сливался с предметом или фамилией преподавателя",
+    ]],
+    en: ["Faster menu, more reliable timetables", [
+      "The main menu opens independently of background timetable updates",
+      "Group and personal timetables update in parallel. If the college replaces a PDF, delivery continues for people still waiting",
+      "Fixed PDFs where a room number was merged with the subject or the teacher’s name",
+    ]],
+  },
+  {
     version: "V1.5", date: "25.11.2026",
     ru: ["ДЗ, закреп и расписание на неделю", [
       "После выбора предмета можно написать ДЗ прямо в чат или ответить на подсказку",
