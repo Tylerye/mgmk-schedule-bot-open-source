@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { dayKey, parseScheduleDate } from "../dates.js";
 import { isExactGroup, looksLikeGroup, normalizeGroupName } from "../group.js";
 import { buildScheduleTimeline } from "./timeline.js";
-import { mergedStudentRoom } from "./student-table.js";
+import { mergedStudentRoom, studentTableLine } from "./student-table.js";
 
 function cleanCell(value) {
   return String(value ?? "").replace(/[|¦]/g, "").replace(/\s+/g, " ").trim();
@@ -67,8 +67,8 @@ export function parseGroupSchedule(parsedPdf, { targetGroup, expectedDate, bells
   const lessons = [];
 
   outer: for (const page of parsedPdf.pages) {
-    for (const pdfRow of page.rows) {
-      const row = parseTableLine(pdfRow.line);
+    for (const [index, pdfRow] of page.rows.entries()) {
+      const row = parseTableLine(studentTableLine(page.rows, index));
       if (!row) continue;
       const groupCell = cleanCell(row.group);
       if (groupCell && looksLikeGroup(groupCell)) {

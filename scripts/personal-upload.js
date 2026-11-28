@@ -13,6 +13,10 @@ export async function uploadPersonalResult({ result, source, contentHash, genera
   const seedVersion = createHash("sha256").update(seed).digest("hex");
   const historical = () => JSON.parse(seed).flatMap(g => g.dates.map(date => ({ group: g.label, date })));
   if (!result.publishable) {
+    const grouped = result.errors.find(entry => entry.errors?.length);
+    const issue = grouped?.errors[0] ?? result.structuralErrors[0];
+    if (issue) console.warn(JSON.stringify({ event: "personal_table_error", group: grouped?.id ?? issue.group,
+      page: issue.page, row: issue.row, reason: issue.message }));
     await uploadObservations([...historical(), ...result.observations], seedVersion);
     await post("source-error", { date: result.date, generation, coverage: result.coverage,
       groups: result.errors.map(e => e.id), structuralErrors: result.structuralErrors.length });

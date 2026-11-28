@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { parseScheduleDate, dayKey } from "../dates.js";
 import { buildScheduleTimeline } from "../schedule/timeline.js";
-import { mergedStudentRoom } from "../schedule/student-table.js";
+import { mergedStudentRoom, studentTableLine } from "../schedule/student-table.js";
 import { groupKey, displayGroup, isGroupLabel, mergeCatalog } from "./catalog.js";
 
 const clean = value => String(value ?? "").replace(/\s+/gu, " ").trim();
@@ -48,7 +48,7 @@ export function parseAllGroupSchedules(pdf, { expectedDate, bells, previousCatal
   }
 
   for (const page of pdf.pages) for (const [rowIndex, pdfRow] of page.rows.entries()) {
-    const line = clean(pdfRow.line);
+    const line = clean(studentTableLine(page.rows, rowIndex));
     const ref = { page: page.pageNumber, row: rowIndex + 1, raw: pdfRow.line };
     if (border(line)) continue;
     if (heading(line)) continue;
@@ -81,9 +81,10 @@ export function parseAllGroupSchedules(pdf, { expectedDate, bells, previousCatal
     dataRows++;
     if (!current) { structuralErrors.push({ message: "Orphan table row", ...ref }); continue; }
     current.rows.push(ref);
-    // Five-column rows omit a teacher. The six-column layout joins adjacent fields.
+    // Short text rows are notes/statuses. A numbered lesson needs its columns.
     const merged = mergedStudentRoom(cells);
-    if ((![5, 7].includes(cells.length) && !merged) || cells[0] || cells.at(-1)) {
+    const validColumns = cells.length === 7 || (cells.length === 5 && !cells[2]) || merged;
+    if (!validColumns || cells[0] || cells.at(-1)) {
       structuralErrors.push({ message: "Malformed table columns", ...ref });
       error("Malformed table columns", ref);
       continue;

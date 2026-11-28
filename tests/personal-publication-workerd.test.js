@@ -90,7 +90,7 @@ test('workerd immediately delivers a new publication across 22 groups without Cr
     }
     const store = new PersonalStore(db);
     const date = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
-    const schedules = await Promise.all(Array.from({ length: 22 }, (_, i) => sampleSchedule(`${i + 1}ТМ`, date)));
+    const schedules = await Promise.all(Array.from({ length: 22 }, (_, i) => sampleSchedule(i === 7 ? '8Са' : `${i + 1}ТМ`, date)));
     for (let i = 0; i < recipients; i++) await db.prepare('INSERT INTO users(user_id,group_id) VALUES(?,?)').bind(1000 + i, schedules[i % 22].canonicalGroup).run();
     const input = { id: 'a'.repeat(64), date, generation: 1, observations: [], manifest: Object.fromEntries(schedules.map(s => [s.canonicalGroup, s.hash])) };
     await beginDataset(store, input);
@@ -99,6 +99,7 @@ test('workerd immediately delivers a new publication across 22 groups without Cr
     const started = Date.now();
     assert.equal((await post()).status, 200);
     const activationMs = Date.now() - started;
+    let cronPasses = 0;
     const activationRecipients = new Set(sends).size;
     if (!baseline && recipients === 60) assert.equal(activationRecipients, 60, 'Every card must arrive in the activation pump, without Cron');
     // Include follow-up pin operations in both cost measurements. On a slow
@@ -106,6 +107,10 @@ test('workerd immediately delivers a new publication across 22 groups without Cr
     for (let i = 0; i < 8; i++) {
       const pending = await db.prepare("SELECT (SELECT COUNT(*) FROM jobs WHERE status='pending')+(SELECT COUNT(*) FROM fanout WHERE status='pending') n").first();
       if (!pending.n) break;
+      cronPasses++;
+      if (process.env.PERSONAL_MEASURE_REALTIME_CRON === '1') {
+        await new Promise(resolve => setTimeout(resolve, 60000 - Date.now() % 60000));
+      }
       await mf.dispatchFetch('http://localhost/test-cron');
     }
     assert.equal(new Set(sends).size, recipients);
@@ -123,7 +128,11 @@ test('workerd immediately delivers a new publication across 22 groups without Cr
     const physical = async () => (await mf.dispatchFetch('http://localhost/test-cost')).json();
     const d1 = async () => (await mf.dispatchFetch('http://localhost/test-d1-meta')).json();
     const difference = (after, before) => Object.fromEntries(Object.entries(after).map(([key, n]) => [key, n - before[key]]));
-    console.log(JSON.stringify({ scenario: 'new-publication', recipients, rowsWritten: await physical(), baseline: Boolean(baseline), telegramDelay, activationMs, activationRecipients, elapsedMs: Date.now() - started, httpInvocations: invocations, sends: sends.length,
+    const pilotTimes = sendTimes.filter((_, i) => schedules[(Number(sends[i]) - 1000) % 22].canonicalGroup === '8СА');
+    assert.ok(pilotTimes.length);
+    console.log(JSON.stringify({ scenario: 'new-publication', recipients, rowsWritten: await physical(), baseline: Boolean(baseline), telegramDelay, activationMs, activationRecipients, elapsedMs: Date.now() - started,
+      cronRecipients: recipients - activationRecipients, cronPasses, pilotFirstMs: pilotTimes[0] - started,
+      pilotLastMs: pilotTimes.at(-1) - started, httpInvocations: invocations, sends: sends.length,
       firstCardMs: sendTimes[0] - started, p95CardMs: sendTimes[Math.ceil(recipients * 0.95) - 1] - started,
       lastCardMs: sendTimes.at(-1) - started, sendsBeforeFirstPin,
       d1: await d1(), budget: await db.prepare('SELECT requests,rows_read,rows_written FROM budgets').first() }));
