@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { personalFixture, sampleSchedule } from "./helpers/personal-fixture.js";
-import { beginDataset, finishDataset, mergeCatalogObservations, stageSchedules } from "../src/personal/ingest.js";
+import { beginDataset, finishDataset, MAX_STAGE_BYTES, mergeCatalogObservations, stageSchedules } from "../src/personal/ingest.js";
 import { uploadPersonalResult } from "../scripts/personal-upload.js";
 
 test("an entirely failed timetable still adds its newly discovered group to the production catalog path", async t => {
@@ -23,18 +23,39 @@ test("an entirely failed timetable still adds its newly discovered group to the 
   assert.ok(!calls.some(path => /begin|stage|finish/u.test(path)));
 });
 
-test("published PDFs activate before the catalog and use bounded batches", async () => {
+test("published PDFs activate before the catalog and respect the receiver's batch size", async () => {
   const schedules = await Promise.all(Array.from({ length: 40 }, (_, i) => sampleSchedule(String(i + 1) + "ТМ")));
   const result = { publishable: true, date: schedules[0].date, schedules, observations: schedules.map(s => ({ group: s.group, date: s.date })) };
-  const calls = [];
-  await uploadPersonalResult({ result, source: {}, generation: 1, contentHash: "fixture",
-    async request(path, { body }) {
-      calls.push([path.split("/").at(-1), JSON.parse(body)]);
-      return { maxStageSchedules: 12, catalogSeedKnown: true };
+  for (const [maxStageSchedules, sizes] of [[12, [12, 12, 12, 4]], [24, [24, 16]]]) {
+    const calls = [];
+    await uploadPersonalResult({ result, source: {}, generation: 1, contentHash: "fixture",
+      async request(path, { body }) {
+        calls.push([path.split("/").at(-1), JSON.parse(body)]);
+        return { maxStageSchedules, catalogSeedKnown: true };
+      },
+    });
+    assert.deepEqual(calls.map(([name]) => name),
+      ["begin", ...sizes.map(() => "stage"), "finish", "catalog", "catalog", "catalog", "catalog"]);
+    assert.deepEqual(calls.filter(([name]) => name === "stage").map(([, { schedules }]) => schedules.length), sizes);
+  }
+});
+
+test("large UTF-8 timetables still split at the byte limit", async () => {
+  const schedules = await Promise.all(Array.from({ length: 24 }, (_, i) => sampleSchedule(String(i + 1) + "ТМ")));
+  for (const schedule of schedules) for (const lesson of schedule.lessons)
+    lesson.variants[0].subject = "Я".repeat(2900);
+  const sizes = [];
+  await uploadPersonalResult({ result: { publishable: true, date: schedules[0].date, schedules, observations: [] },
+    source: {}, generation: 1, contentHash: "fixture", async request(path, { body }) {
+      if (path.endsWith("/stage")) {
+        assert.ok(Buffer.byteLength(body) <= MAX_STAGE_BYTES);
+        sizes.push(JSON.parse(body).schedules.length);
+      }
+      return { maxStageSchedules: 24, catalogSeedKnown: true };
     },
   });
-  assert.deepEqual(calls.map(([name]) => name), ["begin", "stage", "stage", "stage", "stage", "finish", "catalog", "catalog", "catalog", "catalog"]);
-  assert.deepEqual(calls.filter(([name]) => name === "stage").map(([, { schedules }]) => schedules.length), [12, 12, 12, 4]);
+  assert.ok(sizes.length > 1);
+  assert.equal(sizes.reduce((a,b) => a+b), schedules.length);
 });
 
 test("overlapping observations preserve both catalog dates and replay writes nothing", async t => {

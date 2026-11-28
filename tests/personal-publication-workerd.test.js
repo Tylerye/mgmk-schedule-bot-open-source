@@ -54,7 +54,8 @@ test('workerd immediately delivers a new publication across 22 groups without Cr
         return { contents: execFileSync('git', ['-c', `safe.directory=${process.cwd()}`, 'show', `${baseline}:${path}`], { encoding: 'utf8' }), loader: 'js' };
       });
     } }] : [] })).outputFiles[0].text;
-  const lanes = [], sends = [], edits = [], editTimes = [];
+  const lanes = [], sends = [], sendTimes = [], edits = [], editTimes = [];
+  let sendsBeforeFirstPin;
   let failFirstDelivery = !baseline && !process.env.PERSONAL_MEASURE_TELEGRAM_MS;
   const telegramDelay = Number(process.env.PERSONAL_MEASURE_TELEGRAM_MS ?? 0);
   const mf = new Miniflare(convertV4MiniflareOptions({ name: 'personal', modules: true, script,
@@ -73,7 +74,8 @@ test('workerd immediately delivers a new publication across 22 groups without Cr
       assert.equal(new URL(request.url).hostname, 'api.telegram.org');
       const body = await request.json();
       if (telegramDelay > 0) await new Promise(resolve => setTimeout(resolve, telegramDelay));
-      if (new URL(request.url).pathname.endsWith('/sendMessage')) sends.push(body.chat_id);
+      if (new URL(request.url).pathname.endsWith('/sendMessage')) { sends.push(body.chat_id); sendTimes.push(Date.now()); }
+      if (new URL(request.url).pathname.endsWith('/pinChatMessage')) sendsBeforeFirstPin ??= sends.length;
       if (new URL(request.url).pathname.endsWith('/editMessageText')) { edits.push(body.chat_id); editTimes.push(Date.now()); }
       return new Response(JSON.stringify({ ok: true, result: { message_id: sends.length } }), { headers: { 'content-type': 'application/json' } });
     } }));
@@ -122,7 +124,27 @@ test('workerd immediately delivers a new publication across 22 groups without Cr
     const d1 = async () => (await mf.dispatchFetch('http://localhost/test-d1-meta')).json();
     const difference = (after, before) => Object.fromEntries(Object.entries(after).map(([key, n]) => [key, n - before[key]]));
     console.log(JSON.stringify({ scenario: 'new-publication', recipients, rowsWritten: await physical(), baseline: Boolean(baseline), telegramDelay, activationMs, activationRecipients, elapsedMs: Date.now() - started, httpInvocations: invocations, sends: sends.length,
+      firstCardMs: sendTimes[0] - started, p95CardMs: sendTimes[Math.ceil(recipients * 0.95) - 1] - started,
+      lastCardMs: sendTimes.at(-1) - started, sendsBeforeFirstPin,
       d1: await d1(), budget: await db.prepare('SELECT requests,rows_read,rows_written FROM budgets').first() }));
+    if (process.env.PERSONAL_MEASURE_STAGE) {
+      const staged = await Promise.all(Array.from({ length: 42 }, (_, i) => sampleSchedule(`${i + 1}ТМ`, date)));
+      const manifest = Object.fromEntries(staged.map(s => [s.canonicalGroup, s.hash]));
+      const id = 'd'.repeat(64);
+      const route = (path, body) => mf.dispatchFetch('http://localhost/'+path,{ method:'POST',
+        headers:{authorization:'Bearer local-test'}, body:JSON.stringify(body) });
+      const begin = await route('begin', { id, date, generation: 3, manifest, observations: [] });
+      assert.equal(begin.status, 200);
+      const { maxStageSchedules } = await begin.json();
+      const beforeStage = await d1();
+      for (let i=0; i<staged.length; i+=maxStageSchedules) {
+        const response = await route('stage', { id, schedules: staged.slice(i, i+maxStageSchedules) });
+        assert.equal(response.status, 200);
+      }
+      assert.equal(await db.prepare("SELECT count(*) n FROM snapshots WHERE dataset_id=?").bind(id).first('n'), 42);
+      console.log(JSON.stringify({ scenario:'42-group-staging', stageCalls: Math.ceil(staged.length/maxStageSchedules),
+        ...difference(await d1(), beforeStage) }));
+    }
     if (process.env.PERSONAL_MEASURE_DUE) {
       // Force one visible edit per user without depending on the host's lesson times.
       await db.prepare("UPDATE cards SET parts=json_set(parts,'$[0].hash','outdated')").run();

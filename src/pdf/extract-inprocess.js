@@ -7,9 +7,9 @@ function renderMonospaceRow(items) {
     .filter((width) => Number.isFinite(width) && width > 0).sort((a, b) => a - b);
   if (!widths.length) throw new Error("PDF row has no measurable character width");
   const pitch = widths[Math.floor(widths.length / 2)];
-  const leftEdge = Math.min(...items.map((item) => item.x));
+  const leftEdge = items[0].x;
   const characters = [];
-  for (const item of [...items].sort((a, b) => a.x - b.x)) {
+  for (const item of items) {
     const start = Math.max(0, Math.round((item.x - leftEdge) / pitch));
     if (!Number.isSafeInteger(start) || start + item.text.length > 20000) throw new Error("PDF row limit exceeded");
     for (let index = 0; index < item.text.length; index += 1) {
@@ -27,18 +27,19 @@ function renderMonospaceRow(items) {
 function groupRows(items) {
   const rows = [];
   for (const item of items.sort((a, b) => b.y - a.y || a.x - b.x)) {
-    let row = rows.find((candidate) => Math.abs(candidate.y - item.y) <= 0.8);
-    if (!row) {
+    // PDF items descend by Y. If the latest row's anchor is already out of
+    // range, all older anchors are farther away.
+    let row = rows.at(-1);
+    if (!row || row.y - item.y > 0.8) {
       row = { y: item.y, items: [] };
       rows.push(row);
     }
     row.items.push(item);
   }
-  return rows.sort((a, b) => b.y - a.y).map((row) => ({
-    y: row.y,
-    line: renderMonospaceRow(row.items),
-    items: row.items.sort((a, b) => a.x - b.x),
-  }));
+  return rows.map(({ y, items }) => {
+    items.sort((a, b) => a.x - b.x);
+    return { y, line: renderMonospaceRow(items), items };
+  });
 }
 
 export async function extractPdf(rawSource) {

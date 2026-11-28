@@ -2,7 +2,7 @@ import { mergeCatalog, groupKey } from "./catalog.js";
 import { jobConflictUpdate } from './store.js';
 
 const validDate = v => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(v) && new Date(`${v}T00:00:00Z`).toISOString().slice(0, 10) === v;
-export const MAX_STAGE_SCHEDULES = 12;
+export const MAX_STAGE_SCHEDULES = 24;
 export const MAX_STAGE_BYTES = 196608;
 
 const validHash = v => typeof v === "string" && /^[a-f0-9]{64}$/u.test(v);

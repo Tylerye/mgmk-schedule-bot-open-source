@@ -152,7 +152,9 @@ async function pinStatement(store, user, cards, now, manual = false) {
     // Keep the same revision and retry deadline, including a Telegram cooldown.
     return [["UPDATE jobs SET payload=json_set(payload,'$.manual',json('true')) WHERE id=?", pending.id]];
   }
-  return [store.jobStatement(user, "pin", "", { priority: 1, due: now.getTime(), ...(manual ? { payload: { manual: true } } : {}) })];
+  // New timetable cards have priority 1. Finish sending them before follow-up
+  // background pins; explicit requests keep their original priority.
+  return [store.jobStatement(user, "pin", "", { priority: manual ? 1 : 2, due: now.getTime(), ...(manual ? { payload: { manual: true } } : {}) })];
 }
 
 export async function deliverUser(store, client, id, { now = new Date(), mode = "normal", ownerId, supportDetails, clock, catchUp = false, interactive = false, widgetEnabled = false, brandedMenu = false } = {}) {
@@ -340,7 +342,7 @@ export async function deliverUser(store, client, id, { now = new Date(), mode = 
           ? ["UPDATE users SET pin_message_id=?,pin_date=? WHERE user_id=?", desired.messageId, desired.date, id]
           : ["UPDATE users SET pin_message_id=?,pin_date=?,next_due=? WHERE user_id=?", desired.messageId, desired.date, next, id];
         const statements = [pin];
-        if (user.pin_message_id && user.pin_message_id !== desired.messageId) statements.push(store.jobStatement(user, "unpin", String(user.pin_message_id), { priority: 1, due: now.getTime(), payload: {
+        if (user.pin_message_id && user.pin_message_id !== desired.messageId) statements.push(store.jobStatement(user, "unpin", String(user.pin_message_id), { priority: payload.manual ? 1 : 2, due: now.getTime(), payload: {
           messageId: user.pin_message_id, ...(payload.manual ? { manual: true } : {}),
         } }));
         statements.push(doneJob(job));

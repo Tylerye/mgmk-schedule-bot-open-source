@@ -16,7 +16,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci --ignore-scripts
+      - run: npm ci --omit=dev --ignore-scripts
       - run: node scripts/sync-personal-source.js
         env:
           WORKER_BASE_URL: ${{ secrets.WORKER_BASE_URL }}

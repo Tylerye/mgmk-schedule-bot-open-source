@@ -25,7 +25,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci --ignore-scripts
+      - run: npm ci --omit=dev --ignore-scripts
       - name: Parse and return schedule
         env:
           JOB_ID: ${{ inputs.job_id }}
